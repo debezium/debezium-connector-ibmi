@@ -1,0 +1,2 @@
+io.debezium.connector.db2as400.As400JdbcConnector
+io.debezium.connector.db2as400.As400RpcConnector
