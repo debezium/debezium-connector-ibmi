@@ -42,32 +42,21 @@ public class As400ConnectorConfig extends RelationalDatabaseConnectorConfig {
     private RelationalTableFilters tableFilters;
 
     /**
-     * A field for the user to connect to the AS400. This field has no default
-     * value.
-     */
-    public static final Field USER = Field.create("user", "Name of the user to be used when connecting to the as400");
-    /**
      * A field for the password to connect to the AS400. This field has no default
      * value.
      */
-    public static final Field PASSWORD = Field.create("password", "Password to be used when connecting to the as400");
-
-    /**
-     * A field for the password to connect to the AS400. This field has no default
-     * value.
-     */
-    public static final Field SCHEMA = Field.create("schema", "schema holding tables to capture");
+    public static final Field SCHEMA = Field.create("database.schema", "schema holding tables to capture");
 
     /**
      * A field for the size of buffer for fetching journal entries default 65535 (should not be smaller)
      */
-    public static final Field BUFFER_SIZE = Field.create("buffer_size", "journal buffer size",
+    public static final Field BUFFER_SIZE = Field.create("buffer.size", "journal buffer size",
             "size of buffer for fetching journal entries default 131072 (should not be smaller)", "131072");
 
     /**
      * keep alive flag, should the driver send keep alive packets default true
      */
-    public static final Field KEEP_ALIVE = Field.create("keep alive", "keep alive",
+    public static final Field KEEP_ALIVE = Field.create("keep.alive", "keep alive",
             "keep alive", true);
 
     /**
@@ -78,33 +67,33 @@ public class As400ConnectorConfig extends RelationalDatabaseConnectorConfig {
     /**
      * threads should be used in communication with the host servers - timeouts might not work as expected when true - default false
      */
-    public static final Field THREAD_USED = Field.create("thread used", "thread used - timeouts might not work as expected when true",
+    public static final Field THREAD_USED = Field.create("thread.used", "thread used - timeouts might not work as expected when true",
             "thread used", false);
 
     /**
      * The timeout to use for sockets
      */
-    public static final Field SOCKET_TIMEOUT = Field.create("socket timeout", "socket timeout in milliseconds", "socket timeout", 0);
+    public static final Field SOCKET_TIMEOUT = Field.create("socket.timeout", "socket timeout in milliseconds", "socket timeout", 0);
 
     /**
      * If the ccsid is wrong on your tables and that is the least of your problems - just correct the CCSID before using this or as a last resort...
      * This applies to all tables - everything
      * mapping from_ccsid and to_ccsid must *both* be specified
      */
-    public static final Field FROM_CCSID = Field.create("from_ccsid", "from ccsid", "when the table indicates this from_ccsid translate to the to_ccsid setting", -1);
+    public static final Field FROM_CCSID = Field.create("from.ccsid", "from ccsid", "when the table indicates this from_ccsid translate to the to_ccsid setting", -1);
 
-    public static final Field TO_CCSID = Field.create("to_ccsid", "to ccsid", "when the table indicates the from_ccsid translate to this to_ccsid setting", -1);
+    public static final Field TO_CCSID = Field.create("to.ccsid", "to ccsid", "when the table indicates the from_ccsid translate to this to_ccsid setting", -1);
 
-    public static final Field DIAGNOSTICS_FOLDER = Field.create("diagnostics_folder",
+    public static final Field DIAGNOSTICS_FOLDER = Field.create("diagnostics.folder",
             "folder to dump failed decodings to", "used when there is a decoding failure to aid diagnostics");
 
     /**
      * Maximum number of journal entries to process server side
      */
-    public static final Field MAX_SERVER_SIDE_ENTRIES = Field.create("max_entries", "max server side entries",
+    public static final Field MAX_SERVER_SIDE_ENTRIES = Field.create("max.entries", "max server side entries",
             "Maximum number of journal entries to process server side when filtering", RetrieveConfig.DEFAULT_MAX_SERVER_SIDE_ENTRIES);
 
-    public static final Field DATE_FORMAT = Field.create("date format", "date format",
+    public static final Field DATE_FORMAT = Field.create("date.format", "date format",
             "default date format is 2 digit date 1940->2039 set this to 'iso' or make sure you only have dates in this range, performance is ambysmal if you don't not to mention lots of missing data",
             "iso");
 
@@ -114,7 +103,7 @@ public class As400ConnectorConfig extends RelationalDatabaseConnectorConfig {
     /**
      * Maximum number of journal entries to process server side
      */
-    public static final Field MAX_RETRIEVAL_TIMEOUT = Field.create("max_journal_timeout", "max time to fetch the journal entries",
+    public static final Field MAX_RETRIEVAL_TIMEOUT = Field.create("max.journal.timeout", "max time to fetch the journal entries",
             "Maximum time to fetch the journal entries in ms", DEFAULT_MAX_JOURNAL_TIMEOUT);
 
     public static final Field TOPIC_NAMING_STRATEGY = Field.create("topic.naming.strategy")
@@ -146,8 +135,8 @@ public class As400ConnectorConfig extends RelationalDatabaseConnectorConfig {
         return snapshotMode;
     }
 
-    public String getHostName() {
-        return config.getString(JdbcConfiguration.HOSTNAME);
+    public String getHostname() {
+        return config.getString(HOSTNAME);
     }
 
     public String getUser() {
@@ -241,7 +230,7 @@ public class As400ConnectorConfig extends RelationalDatabaseConnectorConfig {
         final ConfigDef c = RelationalDatabaseConnectorConfig.CONFIG_DEFINITION.edit()
                 .name("ibmi")
                 .type(
-                        JdbcConfiguration.HOSTNAME, USER, PASSWORD, SCHEMA, BUFFER_SIZE,
+                        HOSTNAME, USER, PASSWORD, SCHEMA, BUFFER_SIZE,
                         KEEP_ALIVE, THREAD_USED, SOCKET_TIMEOUT, FROM_CCSID, TO_CCSID, DB_ERRORS, DATE_FORMAT, SECURE,
                         DIAGNOSTICS_FOLDER)
                 .connector()
@@ -354,9 +343,5 @@ public class As400ConnectorConfig extends RelationalDatabaseConnectorConfig {
             return super.getTableFilters();
         }
         return tableFilters;
-    }
-
-    public JdbcConfiguration getJdbcConfiguration() {
-        return JdbcConfiguration.adapt(config);
     }
 }

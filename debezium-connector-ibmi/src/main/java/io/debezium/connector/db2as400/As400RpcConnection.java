@@ -102,11 +102,11 @@ public class As400RpcConnection implements AutoCloseable, Connect<AS400, IOExcep
                 // need to both create a new object and connect
                 close();
                 if (isSecure) {
-                    this.as400 = new SecureAS400(config.getHostName(), config.getUser(),
+                    this.as400 = new SecureAS400(config.getHostname(), config.getUser(),
                             config.getPassword().toCharArray());
                 }
                 else {
-                    this.as400 = new AS400(config.getHostName(), config.getUser(), config.getPassword().toCharArray());
+                    this.as400 = new AS400(config.getHostname(), config.getUser(), config.getPassword().toCharArray());
                 }
                 socketProperties.setSoTimeout(config.getSocketTimeout());
                 as400.setSocketProperties(socketProperties);

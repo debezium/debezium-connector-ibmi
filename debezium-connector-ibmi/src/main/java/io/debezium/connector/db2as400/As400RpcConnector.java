@@ -46,7 +46,6 @@ public class As400RpcConnector extends SourceConnector {
 
     @Override
     public List<Map<String, String>> taskConfigs(int maxTasks) {
-        // TODO Auto-generated method stub
         List<Map<String, String>> l = new ArrayList<>();
         l.add(props);
         return l;
@@ -54,8 +53,6 @@ public class As400RpcConnector extends SourceConnector {
 
     @Override
     public void stop() {
-        // TODO Auto-generated method stub
-
     }
 
     @Override
