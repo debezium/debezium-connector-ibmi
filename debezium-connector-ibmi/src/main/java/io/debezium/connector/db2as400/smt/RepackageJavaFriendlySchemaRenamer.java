@@ -15,6 +15,7 @@ import org.apache.kafka.common.cache.SynchronizedCache;
 import org.apache.kafka.common.config.AbstractConfig;
 import org.apache.kafka.common.config.ConfigDef;
 import org.apache.kafka.common.config.ConfigException;
+import org.apache.kafka.connect.components.Versioned;
 import org.apache.kafka.connect.connector.ConnectRecord;
 import org.apache.kafka.connect.data.Field;
 import org.apache.kafka.connect.data.Schema;
@@ -25,7 +26,9 @@ import org.apache.kafka.connect.transforms.Transformation;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-public class RepackageJavaFriendlySchemaRenamer<R extends ConnectRecord<R>> implements Transformation<R> {
+import io.debezium.connector.db2as400.Module;
+
+public class RepackageJavaFriendlySchemaRenamer<R extends ConnectRecord<R>> implements Transformation<R>, Versioned {
     private static final Logger log = LoggerFactory.getLogger(RepackageJavaFriendlySchemaRenamer.class);
 
     public static final String OVERVIEW_DOC = "<p/>regex schema renamer</p>";
@@ -218,5 +221,10 @@ public class RepackageJavaFriendlySchemaRenamer<R extends ConnectRecord<R>> impl
             return original;
         }
         return original.substring(0, 1).toUpperCase() + original.substring(1).toLowerCase();
+    }
+
+    @Override
+    public String version() {
+        return Module.version();
     }
 }
