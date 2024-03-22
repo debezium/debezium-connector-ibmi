@@ -6,6 +6,7 @@
 package io.debezium.connector.db2as400;
 
 import java.time.Instant;
+import java.util.Optional;
 
 import org.apache.kafka.common.config.ConfigDef;
 import org.apache.kafka.common.config.ConfigDef.Importance;
@@ -133,6 +134,11 @@ public class As400ConnectorConfig extends RelationalDatabaseConnectorConfig {
 
     public SnapshotMode getSnapshotMode() {
         return snapshotMode;
+    }
+
+    @Override
+    public Optional<? extends EnumeratedValue> getSnapshotLockingMode() {
+        return Optional.empty();
     }
 
     public String getHostname() {
