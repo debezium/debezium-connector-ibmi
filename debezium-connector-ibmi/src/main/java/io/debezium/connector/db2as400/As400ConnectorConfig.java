@@ -261,49 +261,63 @@ public class As400ConnectorConfig extends RelationalDatabaseConnectorConfig {
     public enum SnapshotMode implements EnumeratedValue {
 
         /**
+         * Performs a snapshot of data and schema upon each connector start.
+         */
+        ALWAYS("always"),
+
+        /**
+         * Perform a snapshot of data and schema upon initial startup of a connector.
+         */
+        INITIAL("initial"),
+
+        /**
+         * Perform a snapshot of data and schema upon initial startup of a connector but does not transition to streaming.
+         */
+        INITIAL_ONLY("initial_only"),
+
+        /**
+         * Perform a snapshot of the schema but no data upon initial startup of a connector.
+         * @deprecated to be removed in Debezium 3.0, replaced by {{@link #NO_DATA}}
+         */
+        SCHEMA_ONLY("schema_only"),
+
+        /**
+         * Perform a snapshot of the schema but no data upon initial startup of a connector.
+         */
+        NO_DATA("no_data"),
+
+        /**
+         * Perform a snapshot of only the database schemas (without data) and then begin reading the redo log at the current redo log position.
+         * This can be used for recovery only if the connector has existing offsets and the schema.history.internal.kafka.topic does not exist (deleted).
+         * This recovery option should be used with care as it assumes there have been no schema changes since the connector last stopped,
+         * otherwise some events during the gap may be processed with an incorrect schema and corrupted.
+         */
+        RECOVERY("recovery"),
+
+        /**
          * Perform a snapshot when it is needed.
          */
-        WHEN_NEEDED("when_needed", true),
+        WHEN_NEEDED("when_needed"),
 
         /**
-         * Perform a snapshot only upon initial startup of a connector.
+         * Allows over snapshots by setting connectors properties prefixed with 'snapshot.mode.configuration.based'.
          */
-        INITIAL("initial", true),
+        CONFIGURATION_BASED("configuration_based"),
 
         /**
-         * Perform a snapshot of only the database schemas (without data) and then begin
-         * reading the binlog. This should be used with care, but it is very useful when
-         * the change event consumers need only the changes from the point in time the
-         * snapshot is made (and doesn't care about any state or changes prior to this
-         * point).
+         * Inject a custom snapshotter, which allows for more control over snapshots.
          */
-        SCHEMA_ONLY("schema_only", false),
-
-        /**
-         * Never perform a snapshot and only read the binlog. This assumes the binlog
-         * contains all the history of those databases and tables that will be captured.
-         */
-        NEVER("never", false);
+        CUSTOM("custom");
 
         private final String value;
-        private final boolean includeData;
 
-        SnapshotMode(String value, boolean includeData) {
+        SnapshotMode(String value) {
             this.value = value;
-            this.includeData = includeData;
         }
 
         @Override
         public String getValue() {
             return value;
-        }
-
-        /**
-         * Whether this snapshotting mode should include the actual data or just the
-         * schema of captured tables.
-         */
-        public boolean includeData() {
-            return includeData;
         }
 
         /**
