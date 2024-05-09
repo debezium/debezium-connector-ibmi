@@ -33,6 +33,7 @@ import io.debezium.relational.TableId;
 import io.debezium.schema.SchemaChangeEvent;
 import io.debezium.schema.SchemaChangeEvent.SchemaChangeEventType;
 import io.debezium.snapshot.SnapshotterService;
+import io.debezium.spi.snapshot.Snapshotter;
 import io.debezium.util.Clock;
 
 public class As400SnapshotChangeEventSource
@@ -123,7 +124,7 @@ public class As400SnapshotChangeEventSource
     protected void lockTablesForSchemaSnapshot(ChangeEventSourceContext sourceContext,
                                                RelationalSnapshotContext<As400Partition, As400OffsetContext> snapshotContext)
             throws Exception {
-        // TODO lock tables
+        // TODO lock tables snapshotterService.getSnapshotLock().tableLockingStatement
     }
 
     @Override
@@ -203,36 +204,48 @@ public class As400SnapshotChangeEventSource
     protected Optional<String> getSnapshotSelect(
                                                  RelationalSnapshotContext<As400Partition, As400OffsetContext> snapshotContext, TableId tableId,
                                                  List<String> columns) {
-        return Optional.of(String.format("SELECT * FROM %s.%s", tableId.schema(), tableId.table()));
+
+        String fullTableName = String.format("%s.%s", tableId.schema(), tableId.table());
+        return snapshotterService.getSnapshotQuery().snapshotQuery(fullTableName, columns);
     }
 
     @Override
     public SnapshottingTask getSnapshottingTask(As400Partition partition, As400OffsetContext previousOffset) {
+
+        final Snapshotter snapshotter = snapshotterService.getSnapshotter();
         final List<String> dataCollectionsToBeSnapshotted = connectorConfig.getDataCollectionsToBeSnapshotted();
         final Map<String, String> snapshotSelectOverridesByTable = connectorConfig.getSnapshotSelectOverridesByTable()
                 .entrySet().stream().collect(Collectors.toMap(e -> e.getKey().identifier(), Map.Entry::getValue));
 
-        // found a previous offset and the earlier snapshot has completed
-        if (previousOffset != null && previousOffset.isSnapshotCompplete()) {
-            // when control tables in place
-            if (!previousOffset.hasNewTables()) {
+        boolean offsetExists = previousOffset != null;
+        boolean snapshotInProgress = false;
+
+        if (offsetExists) {
+            snapshotInProgress = previousOffset.isSnapshotRunning();
+        }
+
+        if (offsetExists && !previousOffset.isSnapshotRunning()) {
+            if (!previousOffset.hasNewTables()) { // This is a special case for IBMi
                 log.info(
                         "A previous offset indicating a completed snapshot has been found. Neither schema nor data will be snapshotted.");
                 return new SnapshottingTask(false, false, dataCollectionsToBeSnapshotted,
                         snapshotSelectOverridesByTable, false);
             }
+            log.info("A previous offset indicating a completed snapshot has been found.");
         }
 
-        log.info("No previous offset has been found");
-        if (this.connectorConfig.getSnapshotMode().includeData()) {
-            log.info("According to the connector configuration both schema and data will be snapshotted");
+        boolean shouldSnapshotSchema = snapshotter.shouldSnapshotSchema(offsetExists, snapshotInProgress);
+        boolean shouldSnapshotData = snapshotter.shouldSnapshotData(offsetExists, snapshotInProgress);
+
+        if (shouldSnapshotData && shouldSnapshotSchema) {
+            log.info("According to the connector configuration both schema and data will be snapshot.");
         }
-        else {
-            log.info("According to the connector configuration only schema will be snapshotted");
+        else if (shouldSnapshotSchema) {
+            log.info("According to the connector configuration only schema will be snapshot.");
         }
 
-        return new SnapshottingTask(this.connectorConfig.getSnapshotMode().includeData(),
-                this.connectorConfig.getSnapshotMode().includeData(), dataCollectionsToBeSnapshotted,
+        return new SnapshottingTask(shouldSnapshotSchema,
+                shouldSnapshotData, dataCollectionsToBeSnapshotted,
                 snapshotSelectOverridesByTable, false);
     }
 

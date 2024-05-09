@@ -19,6 +19,7 @@ import com.ibm.as400.access.AS400;
 import com.ibm.as400.access.SecureAS400;
 import com.ibm.as400.access.SocketProperties;
 
+import io.debezium.config.CommonConnectorConfig;
 import io.debezium.connector.db2as400.metrics.As400StreamingChangeEventSourceMetrics;
 import io.debezium.ibmi.db2.journal.retrieve.Connect;
 import io.debezium.ibmi.db2.journal.retrieve.FileFilter;
@@ -32,6 +33,7 @@ import io.debezium.ibmi.db2.journal.retrieve.RetrieveJournal;
 import io.debezium.ibmi.db2.journal.retrieve.rjne0200.EntryHeader;
 import io.debezium.ibmi.db2.journal.retrieve.rnrn0200.DetailedJournalReceiver;
 import io.debezium.pipeline.source.spi.ChangeEventSource.ChangeEventSourceContext;
+import io.debezium.pipeline.spi.OffsetContext;
 
 public class As400RpcConnection implements AutoCloseable, Connect<AS400, IOException> {
     private static Logger log = LoggerFactory.getLogger(As400RpcConnection.class);
@@ -183,6 +185,12 @@ public class As400RpcConnection implements AutoCloseable, Connect<AS400, IOExcep
                             "success", success));
 
         }
+    }
+
+    public boolean validateLogPosition(OffsetContext offset, CommonConnectorConfig config) {
+
+        return true; // TODO add check to verify the min available position in the log
+
     }
 
     public interface BlockingReceiverConsumer {
