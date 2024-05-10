@@ -33,6 +33,7 @@ import io.debezium.relational.TableId;
 import io.debezium.schema.SchemaChangeEvent;
 import io.debezium.schema.SchemaChangeEvent.SchemaChangeEventType;
 import io.debezium.snapshot.SnapshotterService;
+import io.debezium.spi.schema.DataCollectionId;
 import io.debezium.util.Clock;
 
 public class As400SnapshotChangeEventSource
@@ -209,8 +210,7 @@ public class As400SnapshotChangeEventSource
     @Override
     public SnapshottingTask getSnapshottingTask(As400Partition partition, As400OffsetContext previousOffset) {
         final List<String> dataCollectionsToBeSnapshotted = connectorConfig.getDataCollectionsToBeSnapshotted();
-        final Map<String, String> snapshotSelectOverridesByTable = connectorConfig.getSnapshotSelectOverridesByTable()
-                .entrySet().stream().collect(Collectors.toMap(e -> e.getKey().identifier(), Map.Entry::getValue));
+        final Map<DataCollectionId, String> snapshotSelectOverridesByTable = connectorConfig.getSnapshotSelectOverridesByTable();
 
         // found a previous offset and the earlier snapshot has completed
         if (previousOffset != null && previousOffset.isSnapshotCompplete()) {

@@ -28,7 +28,7 @@
 
     <properties>
         <!-- Debezium parent -->
-        <version.debezium>2.6.0-SNAPSHOT</version.debezium>
+        <version.debezium>2.7.0-SNAPSHOT</version.debezium>
 
         <!-- Dependencies -->
         <version.jt400>11.1</version.jt400>
