@@ -66,7 +66,7 @@ public class JdbcFileDecoder extends JournalFileEntryDecoder {
     private final BytesPerChar octetLengthCache;
 
     public JdbcFileDecoder(Connect<Connection, SQLException> con, String database, SchemaCacheIF schemaCache,
-                           Integer fromCcsid, Integer toCcsid) {
+                           int fromCcsid, int toCcsid) {
         super();
         this.jdbcConnect = con;
         this.schemaCache = schemaCache;

@@ -112,13 +112,13 @@ file connector-name.json:
   "name": "connector-name",
   "config": {
     "connector.class": "io.debezium.connector.db2as400.As400RpcConnector",
-    "schema": "SCHEMA",
     "sanitize.field.names": "true",
     "tasks.max": "1",
-    "hostname": "ibmiserver",
-    "dbname": "database name",
-    "user": "xxx",
-    "password": "xxx",
+    "database.hostname": "ibmiserver",
+    "database.dbname": "database name",
+    "database.schema": "SCHEMA",
+    "database.user": "xxx",
+    "database.password": "xxx",
     "port": "",
     "secure": true
     "poll.interval.ms": "2000",
@@ -146,9 +146,9 @@ Note the `dbname` can be blank and will be used as part of the jdbc connect stri
 Optional:
 
 ```
-    "socket timeout": "300000",
-    "keep alive": "true",
-    "thread used": "false"
+    "driver.socket timeout": "300000",
+    "driver.keep alive": "true",
+    "driver.thread used": "false"
 ```
 the above help with connections that can be blocked (firewalled) or dropped due to vpn issues
 
@@ -156,7 +156,7 @@ the above help with connections that can be blocked (firewalled) or dropped due 
 
 Unusually we have the incorrect CCSID on all our tables and the data is forced into the tables with the wrong encoding
 
-This issue should really be corrected and the data translated but with thousands of tables and many clients all configured incorrectly this is a huge job with significant risk. Instead we have an additional pair of settings from_ccsid which is the ccsid on the table and to_ccsid which will use this ccsid instead - this is for the entire system and all tables.
+This issue should really be corrected and the data translated but with thousands of tables and many clients all configured incorrectly this is a huge job with significant risk. Instead we have an additional pair of settings from.ccsid which is the ccsid on the table and to.ccsid which will use this ccsid instead - this is for the entire system and all tables.
 
 
 ## The list of connectors
@@ -190,13 +190,12 @@ Notes
 ```
 {
     "connector.class": "io.debezium.connector.db2as400.As400RpcConnector",
-    "schema": "SCHEMA",
     "sanitize.field.names": "true",
-    "tasks.max": "1",
-    "hostname": "ibmiserver",
-    "dbname": "database name",
-    "user": "xxx",
-    "password": "xxx",
+    "database.hostname": "ibmiserver",
+    "database.dbname": "database name",
+    "database.schema": "SCHEMA",
+    "database.user": "xxx",
+    "database.password": "xxx",
     "port": "",
     "poll.interval.ms": "2000",
     "transforms": "unwrap",
@@ -210,6 +209,7 @@ Notes
     "value.converter.schema.registry.url": "http://schema-registry:8081",
     "key.converter": "io.confluent.connect.avro.AvroConverter",
     "value.converter": "io.confluent.connect.avro.AvroConverter",
+    "tasks.max": "1"
 }
 ```
 
@@ -292,6 +292,12 @@ To run in VS Code, configure the following launch.json file, and run from the Ru
 ```
 
 ## Release notes
+
+## debezium v3.0.0
+
+`from_ccsid` is now `from.ccsid` and `to_ccsid` is `now to.ccsid` they stay as top level config
+
+jdbc configuration needs the prefix `driver.<parameter>` e.g. `driver.date format` it now defaults to `iso`
 
 ### 1.10.4
 

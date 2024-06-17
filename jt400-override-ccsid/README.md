@@ -18,8 +18,8 @@ Note the original AS400JDBCDriver has a static block that on class load register
 AS400JDBCDriverRegistration.registerCcsidDriver();
 
 Properties props = new Properties();
-props.setProperty("from_ccsid", 37);
-props.setProperty("to_ccsid", 37);
+props.setProperty("from.ccsid", 37);
+props.setProperty("to.ccsid", 37);
 props.setProperty("user", "user");
 props.setProperty("password", "password");
 try (Connection con = DriverManager.getConnection("jdbc:as400://db/;naming=system;prompt=false;libraries=xxx;errors=full", props)) {
@@ -33,3 +33,7 @@ AS400JDBCPreparedStatementImpl calls commonExecuteBefore which looks up the tabl
 getConverter is where we inject our own implementation that ignores the correct database value and uses the one configured
 
 The annoying thing is injecting in our Connection which looks requires copying the entire AS400JDBCDriver and just replacing the defaultImpl in prepareConnection to use our new instance. We also have to change the registration part which is in a static block so it actually registers our Driver
+
+To force data into a table with ccsid set to 37 but with a data in ccsid of 285: cast the data as the ccsid you really want it to be then cast it as binary/do not encode. 
+To get this back using the connector the from.ccsid would be as set as the table ccsid 37 and the to.ccsid would be the real data ccsid 285
+`insert into demo (id, name) values (1, CAST(CAST('$~£[¯[^~¤' AS VARCHAR(20) CCSID 285) AS VARCHAR(20) CCSID 65535));`
