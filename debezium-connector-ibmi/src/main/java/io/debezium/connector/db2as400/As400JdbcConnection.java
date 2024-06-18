@@ -56,6 +56,15 @@ public class As400JdbcConnection extends JdbcConnection implements Connect<Conne
                   WHERE k.dbklib=? AND k.dbkfil=? ORDER BY k.DBKPOS ASC
                  """;
 
+    private static final String GET_INDEXES_FALLBACK = """
+            WITH sqlstat AS (SELECT d.COLUMN_NAME, d.ORDINAL_POSITION FROM
+             (SELECT s.COLUMN_NAME,s.ORDINAL_POSITION, DENSE_RANK () OVER ( ORDER BY INDEX_NAME asc) AS rn FROM "SYSIBM".SQLSTATISTICS  s
+             WHERE table_schem=? AND TABLE_NAME=?  and non_unique = 0 AND I_INDEXTYPE IN (1,3,4) ORDER BY I_INDEXTYPE asc) d WHERE d.rn=1 ORDER BY d.ORDINAL_POSITION ASC),
+             syscol AS (SELECT COLUMN_NAME , SYSTEM_COLUMN_NAME FROM qsys2.SYSCOLUMNS2 s WHERE SYSTEM_TABLE_SCHEMA=? AND TABLE_NAME=?) SELECT syscol.COLUMN_name
+             FROM sqlstat INNER JOIN syscol ON sqlstat.COLUMN_NAME = syscol.SYSTEM_COLUMN_NAME ORDER BY sqlstat.ORDINAL_POSITION ASC
+                 """;
+
+
     private static final String GET_LONG_COLUMN_NAMES = "select trim(system_column_name), trim(column_name) from qsys2.syscolumns where system_table_schema=? AND system_table_name=?";
     private final Map<String, String> systemToLongTableName = new HashMap<>();
     private final Map<String, Optional<String>> longToSystemTableName = new HashMap<>();
@@ -162,6 +171,10 @@ public class As400JdbcConnection extends JdbcConnection implements Connect<Conne
         if (pkColumnNames.isEmpty()) {
             pkColumnNames = readAs400PrimaryKeys(id);
         }
+        // fall back if primary keys are referenced with system column names
+        if (pkColumnNames.isEmpty()) {
+            pkColumnNames = readAs400PrimaryKeysFallback(id);
+        }
         if (pkColumnNames.isEmpty()) {
             pkColumnNames = readTableUniqueIndices(metadata, id);
         }
@@ -169,19 +182,31 @@ public class As400JdbcConnection extends JdbcConnection implements Connect<Conne
     }
 
     protected List<String> readAs400PrimaryKeys(TableId id) throws SQLException {
-        final List<String> columns = prepareQueryAndMap(GET_INDEXES,
+        return prepareQueryAndMap(GET_INDEXES,
                 call -> {
                     call.setString(1, id.schema());
                     call.setString(2, id.table());
                 },
-                rs -> {
-                    final List<String> indexColumns = new ArrayList<>();
-                    while (rs.next()) {
-                        indexColumns.add(rs.getString(1).trim());
-                    }
-                    return indexColumns;
-                });
-        return columns;
+                this::extractResultSet);
+    }
+
+    protected List<String> readAs400PrimaryKeysFallback(TableId id) throws SQLException {
+        return prepareQueryAndMap(GET_INDEXES_FALLBACK,
+                call -> {
+                    call.setString(1, id.schema());
+                    call.setString(2, id.table());
+                    call.setString(3, id.schema());
+                    call.setString(4, id.table());
+                },
+                this::extractResultSet);
+    }
+
+    private List<String> extractResultSet(ResultSet rs) throws SQLException {
+        final List<String> indexColumns = new ArrayList<>();
+        while (rs.next()) {
+            indexColumns.add(rs.getString(1).trim());
+        }
+        return indexColumns;
     }
 
     @Override
