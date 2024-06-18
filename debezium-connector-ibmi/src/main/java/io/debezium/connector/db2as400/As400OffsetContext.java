@@ -20,9 +20,12 @@ import io.debezium.config.Field;
 import io.debezium.connector.SnapshotRecord;
 import io.debezium.ibmi.db2.journal.retrieve.JournalProcessedPosition;
 import io.debezium.ibmi.db2.journal.retrieve.JournalReceiver;
+import io.debezium.pipeline.source.snapshot.incremental.IncrementalSnapshotContext;
+import io.debezium.pipeline.source.snapshot.incremental.SignalBasedIncrementalSnapshotContext;
 import io.debezium.pipeline.spi.OffsetContext;
 import io.debezium.pipeline.txmetadata.TransactionContext;
 import io.debezium.relational.RelationalDatabaseConnectorConfig;
+import io.debezium.relational.TableId;
 import io.debezium.spi.schema.DataCollectionId;
 
 public class As400OffsetContext implements OffsetContext {
@@ -50,6 +53,7 @@ public class As400OffsetContext implements OffsetContext {
     private final String inclueTables;
     private boolean hasNewTables = false;
     private volatile boolean snapshotComplete = false;
+    private final IncrementalSnapshotContext<TableId> incrementalSnapshotContext = new SignalBasedIncrementalSnapshotContext<>();
 
     public As400OffsetContext(As400ConnectorConfig connectorConfig) {
         super();
@@ -70,7 +74,7 @@ public class As400OffsetContext implements OffsetContext {
     }
 
     public As400OffsetContext(As400ConnectorConfig connectorConfig, JournalProcessedPosition position, String includeTables,
-                              boolean snapshotComplete) {
+                              boolean snapshotComplete, IncrementalSnapshotContext<TableId> incrementalSnapshotContext) {
         super();
         partition = Collections.singletonMap(SERVER_PARTITION_KEY, connectorConfig.getLogicalName());
         this.position = position;
@@ -209,7 +213,7 @@ public class As400OffsetContext implements OffsetContext {
                 Instant time = (TimeStr == null) ? Instant.ofEpochSecond(0) : Instant.ofEpochSecond(Long.parseLong(TimeStr));
                 position = new JournalProcessedPosition(offset, new JournalReceiver(receiver, receiverLibrary), time, processed);
             }
-            return new As400OffsetContext(connectorConfig, position, inclueTables, snapshotComplete);
+            return new As400OffsetContext(connectorConfig, position, inclueTables, snapshotComplete, SignalBasedIncrementalSnapshotContext.load(map));
         }
     }
 
@@ -229,5 +233,10 @@ public class As400OffsetContext implements OffsetContext {
     @Override
     public void markSnapshotRecord(SnapshotRecord record) {
         sourceInfo.setSnapshot(record);
+    }
+
+    @Override
+    public IncrementalSnapshotContext<?> getIncrementalSnapshotContext() {
+        return incrementalSnapshotContext;
     }
 }

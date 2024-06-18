@@ -23,8 +23,6 @@ public class AS400JDBCConnectionForcedCcsid extends AS400JDBCConnectionImpl {
 	@Override
 	public ConvTable getConverter(int ccsid) throws SQLException {
 		if (this.fromCcsid != null && fromCcsid.intValue() == ccsid && toCcsid != null) {
-			log.fine(() -> String.format("requested ccsid %d using replacement ccsid %d\n\t%s", ccsid, toCcsid,
-					getStack()));
 			return super.getConverter(this.toCcsid);
 		}
 		log.fine(() -> String.format("requested ccsid %d using parent converter\n\t%s", ccsid, getStack()));
