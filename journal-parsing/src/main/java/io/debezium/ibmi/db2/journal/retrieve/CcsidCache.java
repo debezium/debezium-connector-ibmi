@@ -23,10 +23,10 @@ public class CcsidCache {
     private final int fromCcsid;
     private final int toCcsid;
 
-    public CcsidCache(final Connect<Connection, SQLException> jdbcConnect, Integer fromCcsid, Integer toCcsid) {
+    public CcsidCache(final Connect<Connection, SQLException> jdbcConnect, int fromCcsid, int toCcsid) {
         this.jdbcConnect = jdbcConnect;
-        this.fromCcsid = (fromCcsid == null) ? -1 : fromCcsid;
-        this.toCcsid = (toCcsid == null) ? -1 : toCcsid;
+        this.fromCcsid = fromCcsid;
+        this.toCcsid = toCcsid;
 
     }
 

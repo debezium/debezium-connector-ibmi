@@ -24,8 +24,8 @@ import org.slf4j.LoggerFactory;
 import com.ibm.as400.access.AS400JDBCDriverForcedCcsid;
 import com.ibm.as400.access.AS400JDBCDriverRegistration;
 
+import io.debezium.config.CommonConnectorConfig;
 import io.debezium.config.Configuration;
-import io.debezium.config.Field;
 import io.debezium.ibmi.db2.journal.retrieve.Connect;
 import io.debezium.ibmi.db2.journal.retrieve.FileFilter;
 import io.debezium.jdbc.JdbcConfiguration;
@@ -64,22 +64,21 @@ public class As400JdbcConnection extends JdbcConnection implements Connect<Conne
 
     private final String realDatabaseName;
 
-    private static Field[] JdbcFields = new Field[]{
-
-            As400ConnectorConfig.FROM_CCSID,
-            As400ConnectorConfig.TO_CCSID,
-            As400ConnectorConfig.DATE_FORMAT,
-            As400ConnectorConfig.DB_ERRORS,
-            As400ConnectorConfig.THREAD_USED,
-            As400ConnectorConfig.KEEP_ALIVE,
-            As400ConnectorConfig.SECURE,
-
-            // don't pop up a GUI prompt
-            Field.create("prompt", "prompt", "do you want a GUI prompt for the password if the password is wrong", false),
-    };
+    /**
+     * threads should be used in communication with the host servers - timeouts might not work as expected when true - default false
+     *
+     * date format the default is 2 digit date 1940->2039 set this to 'iso' or make sure you only have dates in this range, performance is abysmal if you don't not to mention lots of missing data
+     *
+     * prompt = do you want a GUI prompt for the password if the password is wrong
+     */
+    private static Map<String, String> jdbcDefaults = Map.of("thread used", "false",
+            "keep alive", "true",
+            "date format", "iso",
+            "errors", "full",
+            "prompt", "false");
 
     private static final ConnectionFactory FACTORY = JdbcConnection.patternBasedFactory(URL_PATTERN,
-            AS400JDBCDriverForcedCcsid.class.getName(), As400JdbcConnection.class.getClassLoader(), JdbcFields);
+            AS400JDBCDriverForcedCcsid.class.getName(), As400JdbcConnection.class.getClassLoader());
 
     public As400JdbcConnection(JdbcConfiguration config) {
         super(withDefaults(config), FACTORY, "'", "'");
@@ -87,22 +86,20 @@ public class As400JdbcConnection extends JdbcConnection implements Connect<Conne
         this.toCcsid = config.getInteger(As400ConnectorConfig.TO_CCSID);
         this.config = config;
         realDatabaseName = retrieveRealDatabaseName();
-        log.debug("connection:" + this.connectionString(URL_PATTERN));
+        log.debug("connection: {}", this.connectionString(URL_PATTERN));
     }
 
     static JdbcConfiguration withDefaults(JdbcConfiguration config) {
-        final Map<String, String> m = new HashMap<>();
-        for (final Field f : JdbcFields) {
-            if (!config.hasKey(f)) {
-                m.put(f.name(), f.defaultValueAsString());
+        JdbcConfiguration.Builder defaults = JdbcConfiguration.create();
+
+        for (Map.Entry<String, String> e : jdbcDefaults.entrySet()) {
+            if (!config.hasKey(e.getKey())) {
+                defaults.with(e.getKey(), e.getValue());
             }
         }
-        if (m.isEmpty()) {
-            return config;
-        }
 
-        return JdbcConfiguration.adapt(config.merge(JdbcConfiguration.adapt(Configuration.from(m))));
-
+        Configuration driverConfigWithDefaults = config.merge(defaults.build());
+        return JdbcConfiguration.adapt(driverConfigWithDefaults);
     }
 
     public List<FileFilter> shortIncludes(String schema, String includes) {
@@ -135,11 +132,6 @@ public class As400JdbcConnection extends JdbcConnection implements Connect<Conne
             getSystemName(tableSchema, tableName).map(x -> r.add(new FileFilter(tableSchema, x)));
         }
         return r;
-    }
-
-    public static As400JdbcConnection forTestDatabase(String databaseName) {
-        return new As400JdbcConnection(JdbcConfiguration.copy(Configuration.fromSystemProperties("database."))
-                .withDatabase(databaseName).build());
     }
 
     public String getRealDatabaseName() {

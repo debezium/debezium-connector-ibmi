@@ -11,8 +11,8 @@ import java.util.stream.Stream;
 public class AS400JDBCConnectionForcedCcsid extends AS400JDBCConnectionImpl {
 	private static Logger log = Logger.getLogger(AS400JDBCConnectionForcedCcsid.class.toString());
 
-	public static final String FROM_CCSID = "from_ccsid";
-	public static final String TO_CCSID = "to_ccsid";
+	public static final String FROM_CCSID = "from.ccsid";
+	public static final String TO_CCSID = "to.ccsid";
 	private Integer fromCcsid;
 	private Integer toCcsid;
 
@@ -35,14 +35,18 @@ public class AS400JDBCConnectionForcedCcsid extends AS400JDBCConnectionImpl {
 	public void setProperties(JDDataSourceURL dataSourceUrl, JDProperties properties, AS400 as400, Properties info)
 			throws SQLException {
 		super.setProperties(dataSourceUrl, properties, as400, info);
-		fromCcsid = getInteger(info, FROM_CCSID);
-		toCcsid = getInteger(info, TO_CCSID);
+		fromCcsid = getInteger(properties, info, FROM_CCSID);
+		toCcsid = getInteger(properties, info, TO_CCSID);
 	}
 	
-	public Integer getInteger(Properties p, String key) {
-		final String v = p.getProperty(key);
-		if (v != null) {
-			return Integer.parseInt(v);
+	public Integer getInteger(JDProperties urlProperties, Properties info, String key) {
+		final int index = JDProperties.getPropertyIndex(key);
+		if (index > -1) {
+			return urlProperties.getInt(index);
+		}
+		final String jv = info.getProperty(key);
+		if (jv != null) {
+			return Integer.parseInt(jv);
 		}
 		return null;
 	}

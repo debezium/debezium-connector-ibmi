@@ -13,6 +13,7 @@ import org.apache.kafka.common.config.ConfigDef.Importance;
 import org.apache.kafka.common.config.ConfigDef.Type;
 import org.apache.kafka.common.config.ConfigDef.Width;
 
+import io.debezium.config.CommonConnectorConfig;
 import io.debezium.config.Configuration;
 import io.debezium.config.EnumeratedValue;
 import io.debezium.config.Field;
@@ -46,7 +47,7 @@ public class As400ConnectorConfig extends RelationalDatabaseConnectorConfig {
      * A field for the password to connect to the AS400. This field has no default
      * value.
      */
-    public static final Field SCHEMA = Field.create("database.schema", "schema holding tables to capture");
+    public static final Field SCHEMA = Field.create(DATABASE_CONFIG_PREFIX + "schema", "schema holding tables to capture");
 
     /**
      * A field for the size of buffer for fetching journal entries default 65535 (should not be smaller)
@@ -55,35 +56,26 @@ public class As400ConnectorConfig extends RelationalDatabaseConnectorConfig {
             "size of buffer for fetching journal entries default 131072 (should not be smaller)", "131072");
 
     /**
-     * keep alive flag, should the driver send keep alive packets default true
-     */
-    public static final Field KEEP_ALIVE = Field.create("keep.alive", "keep alive",
-            "keep alive", true);
-
-    /**
      * keep alive flag, should the driver use a secure connection defaults to false
      */
     public static final Field SECURE = Field.create("secure", "secure", "use secure connection", true);
 
     /**
-     * threads should be used in communication with the host servers - timeouts might not work as expected when true - default false
-     */
-    public static final Field THREAD_USED = Field.create("thread.used", "thread used - timeouts might not work as expected when true",
-            "thread used", false);
-
-    /**
      * The timeout to use for sockets
      */
-    public static final Field SOCKET_TIMEOUT = Field.create("socket.timeout", "socket timeout in milliseconds", "socket timeout", 0);
+    public static final Field SOCKET_TIMEOUT = Field.create("socket.timeout", "socket timeout in milliseconds",
+            "socket timeout", 0);
 
     /**
      * If the ccsid is wrong on your tables and that is the least of your problems - just correct the CCSID before using this or as a last resort...
      * This applies to all tables - everything
-     * mapping from_ccsid and to_ccsid must *both* be specified
+     * mapping from.ccsid and to.ccsid must *both* be specified
      */
-    public static final Field FROM_CCSID = Field.create("from.ccsid", "from ccsid", "when the table indicates this from_ccsid translate to the to_ccsid setting", -1);
+    public static final Field FROM_CCSID = Field.create("from.ccsid", "from ccsid",
+            "when the table indicates this from_ccsid translate to the to_ccsid setting", -1);
 
-    public static final Field TO_CCSID = Field.create("to.ccsid", "to ccsid", "when the table indicates the from_ccsid translate to this to_ccsid setting", -1);
+    public static final Field TO_CCSID = Field.create("to.ccsid", "to ccsid",
+            "when the table indicates the from_ccsid translate to this to_ccsid setting", -1);
 
     public static final Field DIAGNOSTICS_FOLDER = Field.create("diagnostics.folder",
             "folder to dump failed decodings to", "used when there is a decoding failure to aid diagnostics");
@@ -93,12 +85,6 @@ public class As400ConnectorConfig extends RelationalDatabaseConnectorConfig {
      */
     public static final Field MAX_SERVER_SIDE_ENTRIES = Field.create("max.entries", "max server side entries",
             "Maximum number of journal entries to process server side when filtering", RetrieveConfig.DEFAULT_MAX_SERVER_SIDE_ENTRIES);
-
-    public static final Field DATE_FORMAT = Field.create("date.format", "date format",
-            "default date format is 2 digit date 1940->2039 set this to 'iso' or make sure you only have dates in this range, performance is ambysmal if you don't not to mention lots of missing data",
-            "iso");
-
-    public static final Field DB_ERRORS = Field.create("errors", "full error reporting", "jdbc level of detail to include options are: 'basic', or 'full'", "full");
 
     public static final long DEFAULT_MAX_JOURNAL_TIMEOUT = 60000;
     /**
@@ -162,12 +148,7 @@ public class As400ConnectorConfig extends RelationalDatabaseConnectorConfig {
     }
 
     public Integer getSocketTimeout() {
-        final Integer i = config.getInteger(SOCKET_TIMEOUT);
-        return i;
-    }
-
-    public Integer getKeepAlive() {
-        return config.getInteger(KEEP_ALIVE);
+        return config.getInteger(SOCKET_TIMEOUT);
     }
 
     public Integer getMaxServerSideEntries() {
@@ -228,8 +209,8 @@ public class As400ConnectorConfig extends RelationalDatabaseConnectorConfig {
     }
 
     public static Field.Set ALL_FIELDS = Field.setOf(JdbcConfiguration.HOSTNAME, USER, PASSWORD, SCHEMA, BUFFER_SIZE,
-            RelationalDatabaseConnectorConfig.SNAPSHOT_SELECT_STATEMENT_OVERRIDES_BY_TABLE, KEEP_ALIVE, THREAD_USED, SOCKET_TIMEOUT,
-            MAX_SERVER_SIDE_ENTRIES, TOPIC_NAMING_STRATEGY, FROM_CCSID, TO_CCSID, DB_ERRORS, DATE_FORMAT, SECURE,
+            RelationalDatabaseConnectorConfig.SNAPSHOT_SELECT_STATEMENT_OVERRIDES_BY_TABLE, SOCKET_TIMEOUT,
+            MAX_SERVER_SIDE_ENTRIES, TOPIC_NAMING_STRATEGY, FROM_CCSID, TO_CCSID, SECURE,
             DIAGNOSTICS_FOLDER);
 
     public static ConfigDef configDef() {
@@ -237,7 +218,7 @@ public class As400ConnectorConfig extends RelationalDatabaseConnectorConfig {
                 .name("ibmi")
                 .type(
                         HOSTNAME, USER, PASSWORD, SCHEMA, BUFFER_SIZE,
-                        KEEP_ALIVE, THREAD_USED, SOCKET_TIMEOUT, FROM_CCSID, TO_CCSID, DB_ERRORS, DATE_FORMAT, SECURE,
+                        SOCKET_TIMEOUT, FROM_CCSID, TO_CCSID, SECURE,
                         DIAGNOSTICS_FOLDER)
                 .connector()
                 .events(
@@ -349,5 +330,23 @@ public class As400ConnectorConfig extends RelationalDatabaseConnectorConfig {
             return super.getTableFilters();
         }
         return tableFilters;
+    }
+
+    @Override
+    public JdbcConfiguration getJdbcConfig() {
+        JdbcConfiguration dbConfig = super.getJdbcConfig();
+        JdbcConfiguration.Builder dbFromConfig = JdbcConfiguration.create();
+        dbFromConfig.with("secure", Boolean.toString(isSecure()));
+        int fromCcsid = getFromCcsid();
+        if (fromCcsid != -1) {
+            dbFromConfig.with("from.ccsid", Integer.toString(fromCcsid));
+        }
+        int toCcsid = getToCcsid();
+        if (toCcsid != -1) {
+            dbFromConfig.with("to.ccsid", Integer.toString(toCcsid));
+        }
+
+        Configuration driverConfig = this.config.subset(CommonConnectorConfig.DRIVER_CONFIG_PREFIX, true);
+        return JdbcConfiguration.adapt(dbConfig.merge(dbFromConfig.build()).merge(driverConfig));
     }
 }
