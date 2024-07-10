@@ -24,7 +24,6 @@ import org.slf4j.LoggerFactory;
 import com.ibm.as400.access.AS400JDBCDriverForcedCcsid;
 import com.ibm.as400.access.AS400JDBCDriverRegistration;
 
-import io.debezium.config.CommonConnectorConfig;
 import io.debezium.config.Configuration;
 import io.debezium.ibmi.db2.journal.retrieve.Connect;
 import io.debezium.ibmi.db2.journal.retrieve.FileFilter;
