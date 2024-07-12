@@ -99,7 +99,7 @@ public class RetrieveJournal {
             this.header = new FirstHeader(0, 0, 0, OffsetStatus.NOT_CALLED,
                     new JournalProcessedPosition(range.end(), Instant.EPOCH, true));
 
-            log.debug("start equals end - range {}", range);
+            log.trace("start equals end - range {}", range);
             return true;
         }
 
