@@ -5,10 +5,7 @@
  */
 package io.debezium.connector.db2as400;
 
-import java.sql.Connection;
-import java.sql.DatabaseMetaData;
-import java.sql.ResultSet;
-import java.sql.SQLException;
+import java.sql.*;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -17,6 +14,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -54,13 +52,14 @@ public class As400JdbcConnection extends JdbcConnection implements Connect<Conne
                   INNER JOIN qsys2.SYSCOLUMNS c on c.table_schema=k.dbklib and c.system_table_name=k.dbkfil AND c.system_column_name=k.DBKFLD
                   WHERE k.dbklib=? AND k.dbkfil=? ORDER BY k.DBKPOS ASC
                  """;
+    private static final String GET_LONG_COLUMN_NAMES = """
+            SELECT COLUMN_NAME
+            FROM qsys2.SYSCOLUMNS2 WHERE SYSTEM_TABLE_SCHEMA=? AND TABLE_NAME=?
+            AND INTERNAL_FIELD_NAME IN (%s)
+            """;
 
-    private static final String GET_LONG_COLUMN_NAMES = "select trim(system_column_name), trim(column_name) from qsys2.syscolumns where system_table_schema=? AND system_table_name=?";
     private final Map<String, String> systemToLongTableName = new HashMap<>();
     private final Map<String, Optional<String>> longToSystemTableName = new HashMap<>();
-    private final Map<String, String> systemToLongColumnName = new HashMap<>();
-    private final Map<String, String> longToSystemColumnName = new HashMap<>();
-
     private final String realDatabaseName;
 
     /**
@@ -155,24 +154,46 @@ public class As400JdbcConnection extends JdbcConnection implements Connect<Conne
         }
         if (pkColumnNames.isEmpty()) {
             pkColumnNames = readTableUniqueIndices(metadata, id);
+            if (!pkColumnNames.isEmpty()){
+                pkColumnNames = mapSystemColumnNamesToLongNames(id, pkColumnNames);
+            }
         }
         return pkColumnNames;
     }
 
     protected List<String> readAs400PrimaryKeys(TableId id) throws SQLException {
-        final List<String> columns = prepareQueryAndMap(GET_INDEXES,
+        return prepareQueryAndMap(GET_INDEXES,
                 call -> {
                     call.setString(1, id.schema());
                     call.setString(2, id.table());
                 },
-                rs -> {
-                    final List<String> indexColumns = new ArrayList<>();
-                    while (rs.next()) {
-                        indexColumns.add(rs.getString(1).trim());
+                this::extractResultSet);
+    }
+
+    protected List<String> mapSystemColumnNamesToLongNames(TableId id, List<String> systemColumnNames) throws SQLException {
+        String placeholders = systemColumnNames.stream()
+                .map(s -> "?")
+                .collect(Collectors.joining(", "));
+
+        String sqlStatement = String.format(GET_LONG_COLUMN_NAMES, placeholders);
+
+        return prepareQueryAndMap(sqlStatement,
+                call -> {
+                    call.setString(1, id.schema());
+                    call.setString(2, id.table());
+                    for (int i = 0; i < systemColumnNames.size(); i++) {
+                        call.setString(i + 3, systemColumnNames.get(i));
                     }
-                    return indexColumns;
-                });
-        return columns;
+                },
+                this::extractResultSet);
+    }
+
+    private List<String> extractResultSet(ResultSet rs) throws SQLException {
+        final List<String> indexColumns = new ArrayList<>();
+        while (rs.next()) {
+            indexColumns.add(rs.getString(1).trim());
+        }
+        return indexColumns;
     }
 
     @Override
