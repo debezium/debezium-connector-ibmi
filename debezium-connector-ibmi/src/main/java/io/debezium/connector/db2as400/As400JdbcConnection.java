@@ -5,10 +5,7 @@
  */
 package io.debezium.connector.db2as400;
 
-import java.sql.Connection;
-import java.sql.DatabaseMetaData;
-import java.sql.ResultSet;
-import java.sql.SQLException;
+import java.sql.*;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -17,6 +14,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -55,22 +53,14 @@ public class As400JdbcConnection extends JdbcConnection implements Connect<Conne
                   INNER JOIN qsys2.SYSCOLUMNS c on c.table_schema=k.dbklib and c.system_table_name=k.dbkfil AND c.system_column_name=k.DBKFLD
                   WHERE k.dbklib=? AND k.dbkfil=? ORDER BY k.DBKPOS ASC
                  """;
+    private static final String GET_LONG_COLUMN_NAMES = """
+            SELECT COLUMN_NAME
+            FROM qsys2.SYSCOLUMNS2 WHERE SYSTEM_TABLE_SCHEMA=? AND TABLE_NAME=?
+            AND INTERNAL_FIELD_NAME IN (%s)
+            """;
 
-    private static final String GET_INDEXES_FALLBACK = """
-            WITH sqlstat AS (SELECT d.COLUMN_NAME, d.ORDINAL_POSITION FROM
-             (SELECT s.COLUMN_NAME,s.ORDINAL_POSITION, DENSE_RANK () OVER ( ORDER BY INDEX_NAME asc) AS rn FROM "SYSIBM".SQLSTATISTICS  s
-             WHERE table_schem=? AND TABLE_NAME=?  and non_unique = 0 AND I_INDEXTYPE IN (1,3,4) ORDER BY I_INDEXTYPE asc) d WHERE d.rn=1 ORDER BY d.ORDINAL_POSITION ASC),
-             syscol AS (SELECT COLUMN_NAME , SYSTEM_COLUMN_NAME FROM qsys2.SYSCOLUMNS2 s WHERE SYSTEM_TABLE_SCHEMA=? AND TABLE_NAME=?) SELECT syscol.COLUMN_name
-             FROM sqlstat INNER JOIN syscol ON sqlstat.COLUMN_NAME = syscol.SYSTEM_COLUMN_NAME ORDER BY sqlstat.ORDINAL_POSITION ASC
-                 """;
-
-
-    private static final String GET_LONG_COLUMN_NAMES = "select trim(system_column_name), trim(column_name) from qsys2.syscolumns where system_table_schema=? AND system_table_name=?";
     private final Map<String, String> systemToLongTableName = new HashMap<>();
     private final Map<String, Optional<String>> longToSystemTableName = new HashMap<>();
-    private final Map<String, String> systemToLongColumnName = new HashMap<>();
-    private final Map<String, String> longToSystemColumnName = new HashMap<>();
-
     private final String realDatabaseName;
 
     private static Field[] JdbcFields = new Field[]{
@@ -171,12 +161,11 @@ public class As400JdbcConnection extends JdbcConnection implements Connect<Conne
         if (pkColumnNames.isEmpty()) {
             pkColumnNames = readAs400PrimaryKeys(id);
         }
-        // fall back if primary keys are referenced with system column names
-        if (pkColumnNames.isEmpty()) {
-            pkColumnNames = readAs400PrimaryKeysFallback(id);
-        }
         if (pkColumnNames.isEmpty()) {
             pkColumnNames = readTableUniqueIndices(metadata, id);
+            if (!pkColumnNames.isEmpty()){
+                pkColumnNames = mapSystemColumnNamesToLongNames(id, pkColumnNames);
+            }
         }
         return pkColumnNames;
     }
@@ -190,13 +179,20 @@ public class As400JdbcConnection extends JdbcConnection implements Connect<Conne
                 this::extractResultSet);
     }
 
-    protected List<String> readAs400PrimaryKeysFallback(TableId id) throws SQLException {
-        return prepareQueryAndMap(GET_INDEXES_FALLBACK,
+    protected List<String> mapSystemColumnNamesToLongNames(TableId id, List<String> systemColumnNames) throws SQLException {
+        String placeholders = systemColumnNames.stream()
+                .map(s -> "?")
+                .collect(Collectors.joining(", "));
+
+        String sqlStatement = String.format(GET_LONG_COLUMN_NAMES, placeholders);
+
+        return prepareQueryAndMap(sqlStatement,
                 call -> {
                     call.setString(1, id.schema());
                     call.setString(2, id.table());
-                    call.setString(3, id.schema());
-                    call.setString(4, id.table());
+                    for (int i = 0; i < systemColumnNames.size(); i++) {
+                        call.setString(i + 3, systemColumnNames.get(i));
+                    }
                 },
                 this::extractResultSet);
     }
