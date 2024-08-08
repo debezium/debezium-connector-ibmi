@@ -91,12 +91,14 @@ public class As400ConnectorTask extends BaseSourceTask<As400Partition, As400Offs
 
         final ErrorHandler errorHandler = new ErrorHandler(As400RpcConnector.class, connectorConfig, queue, null);
 
-        final Offsets<As400Partition, As400OffsetContext> previousOffsetPartition = getPreviousOffsets(
+        Offsets<As400Partition, As400OffsetContext> previousOffsetPartition = getPreviousOffsets(
                 new As400Partition.Provider(connectorConfig), new As400OffsetContext.Loader(connectorConfig));
         As400OffsetContext previousOffset = previousOffsetPartition.getTheOnlyOffset();
         if (previousOffset == null) {
             LOGGER.info("previous offsets not found creating from config");
             previousOffset = new As400OffsetContext(connectorConfig);
+            previousOffsetPartition = Offsets.of(new As400Partition(connectorConfig.getHostname()),
+                    previousOffset);
         }
 
         final SnapshotterService snapshotterService = connectorConfig.getServiceRegistry().tryGetService(SnapshotterService.class);
