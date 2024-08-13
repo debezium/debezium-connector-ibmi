@@ -50,7 +50,7 @@ public class As400RpcConnection implements AutoCloseable, Connect<AS400, IOExcep
     public As400RpcConnection(As400ConnectorConfig config, As400StreamingChangeEventSourceMetrics streamingMetrics, List<FileFilter> includes) {
         super();
         this.config = config;
-        this.isSecure = config.isSecure();
+        this.isSecure = config.getJdbcConfig().getBoolean("secure", config.isSecure());
         this.streamingMetrics = streamingMetrics;
         try {
             System.setProperty("com.ibm.as400.access.AS400.guiAvailable", "False");
