@@ -14,7 +14,7 @@ public class As400TaskContext extends CdcSourceTaskContext {
 
     public As400TaskContext(As400ConnectorConfig config, As400DatabaseSchema schema,
                             Map<String, String> customMetricTags) {
-        super(config.getContextName(), config.getLogicalName(), customMetricTags, schema::tableIds);
+        super(config, customMetricTags, schema::tableIds);
         this.config = config;
     }
 
