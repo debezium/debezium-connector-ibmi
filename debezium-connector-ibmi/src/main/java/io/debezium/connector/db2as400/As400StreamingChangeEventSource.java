@@ -198,6 +198,7 @@ public class As400StreamingChangeEventSource implements StreamingChangeEventSour
         return (nextOffset, r, eheader) -> {
             try {
                 final JournalEntryType journalEntryType = eheader.getJournalEntryType();
+                log.debug("Got journal entry type {}", journalEntryType);
 
                 if (journalEntryType == null || ignore(journalEntryType)) {
                     log.debug("excluding table {} entry type {}", eheader.getFile(), eheader.getEntryType());
@@ -223,8 +224,8 @@ public class As400StreamingChangeEventSource implements StreamingChangeEventSour
                     return;
                 }
 
-                log.debug("next event: {} - {} type: {} table: {}", eheader.getTime(), eheader.getSequenceNumber(),
-                        eheader.getEntryType(), tableId.table());
+                log.debug("next event: {} - {} type: {} table: {}, journal entry type: {}", eheader.getTime(), eheader.getSequenceNumber(),
+                        eheader.getEntryType(), tableId.table(), journalEntryType);
                 switch (journalEntryType) {
                     case START_COMMIT: {
                         // start commit
@@ -279,8 +280,14 @@ public class As400StreamingChangeEventSource implements StreamingChangeEventSour
 
                         log.debug("update event id {} tx {} table {}", nextOffset, txId, tableId);
 
-                        dispatcher.dispatchDataChangeEvent(partition, tableId, new As400ChangeRecordEmitter(partition,
-                                offsetContext, Operation.UPDATE, dataBefore, dataNext, clock, connectorConfig));
+                        if ("0".equals(txId)) {
+                            log.debug("update not in transaction, dispatching it");
+                            dispatcher.dispatchDataChangeEvent(partition, tableId, new As400ChangeRecordEmitter(partition,
+                                    offsetContext, Operation.UPDATE, dataBefore, dataNext, clock, connectorConfig));
+                        }
+                        else {
+                            log.debug("update in transaction {}, put it in transaction context", txId);
+                        }
                     }
                         break;
                     case ADD_ROW1, ADD_ROW2: {
@@ -297,8 +304,14 @@ public class As400StreamingChangeEventSource implements StreamingChangeEventSour
 
                         log.debug("insert event id {} tx {} table {}", offsetContext.getPosition(), txId,
                                 tableId);
-                        dispatcher.dispatchDataChangeEvent(partition, tableId, new As400ChangeRecordEmitter(partition,
-                                offsetContext, Operation.CREATE, null, dataNext, clock, connectorConfig));
+                        if ("0".equals(txId)) {
+                            log.debug(" insert not in transaction, dispatching it");
+                            dispatcher.dispatchDataChangeEvent(partition, tableId, new As400ChangeRecordEmitter(partition,
+                                    offsetContext, Operation.CREATE, null, dataNext, clock, connectorConfig));
+                        }
+                        else {
+                            log.debug("insert in transaction {}, put it in transaction context", txId);
+                        }
                     }
                         break;
                     case DELETE_ROW1, DELETE_ROW2: {
@@ -316,10 +329,36 @@ public class As400StreamingChangeEventSource implements StreamingChangeEventSour
 
                         log.debug("delete event id {} tx {} table {}", offsetContext.getPosition(), txId,
                                 tableId);
-                        dispatcher.dispatchDataChangeEvent(partition, tableId, new As400ChangeRecordEmitter(partition,
-                                offsetContext, Operation.DELETE, dataBefore, null, clock, connectorConfig));
+                        if ("0".equals(txId)) {
+                            log.debug("delete not in transaction, dispatching it");
+                            dispatcher.dispatchDataChangeEvent(partition, tableId, new As400ChangeRecordEmitter(partition,
+                                    offsetContext, Operation.DELETE, dataBefore, null, clock, connectorConfig));
+                        }
+                        else {
+                            log.debug("delete in transaction {}, put it in transaction context", txId);
+                        }
                     }
                         break;
+                    case ROLLBACK_DELETE_ROW: {
+                        // delete rollback
+                        final String txId = eheader.getCommitCycle().toString();
+                        log.debug("rollback delete event id {} tx {} table {}", offsetContext.getPosition(), txId,
+                                tableId);
+                    }
+                        break;
+                    case ROLLBACK_AFTER_IMAGE: {
+                        // rollback after image
+                        final String txId = eheader.getCommitCycle().toString();
+                        log.debug("rollback after image event id {} tx {} table {}", offsetContext.getPosition(), txId,
+                                tableId);
+                    }
+                        break;
+                    case ROLLBACK_BEFORE_IMAGE: {
+                        // rollback before image
+                        final String txId = eheader.getCommitCycle().toString();
+                        log.debug("rollback before image event id {} tx {} table {}", offsetContext.getPosition(), txId,
+                                tableId);
+                    }
                     default:
                         break;
                 }

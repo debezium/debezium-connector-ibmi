@@ -16,12 +16,14 @@ import io.debezium.jdbc.JdbcConfiguration;
 
 public class TestHelper {
 
-    private static final String DATABASE_NAME = "DTEST";
+    private static final String DATABASE_NAME = "AZIZACALM2";
 
     public static JdbcConfiguration defaultJdbcConfig() {
         return JdbcConfiguration.copy(Configuration.fromSystemProperties(As400ConnectorConfig.DATABASE_CONFIG_PREFIX))
-                .withDefault(JdbcConfiguration.PORT, "")
-                .withDefault(JdbcConfiguration.USER, "debezium")
+                .withDefault(JdbcConfiguration.HOSTNAME, "PUB400.COM")
+                .withDefault(JdbcConfiguration.PORT, "446")
+                .withDefault(JdbcConfiguration.USER, "azizacalm")
+                .withDefault(JdbcConfiguration.PASSWORD, "******")
                 .withDefault(JdbcConfiguration.DATABASE, DATABASE_NAME)
                 .withDefault("secure", "false")
                 .build();
