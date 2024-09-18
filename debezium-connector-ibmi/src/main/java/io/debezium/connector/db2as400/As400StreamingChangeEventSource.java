@@ -234,7 +234,10 @@ public class As400StreamingChangeEventSource implements StreamingChangeEventSour
                         final TransactionContext txc = new TransactionContext();
                         txc.beginTransaction(txId);
                         txMap.put(txId, txc);
+                        offsetContext.setTransaction(txc);
                         log.debug("start transaction id {} tx {} table {}", nextOffset, txId, tableId);
+                        log.debug("Transaction map: {}", txMap);
+                        log.debug("Offset context: {}", offsetContext);
                         dispatcher.dispatchTransactionStartedEvent(partition, txId, offsetContext,
                                 eheader.getTime());
                     }
@@ -244,8 +247,11 @@ public class As400StreamingChangeEventSource implements StreamingChangeEventSour
                         // TOOD transaction must be provided by the OffsetContext
                         final String txId = eheader.getCommitCycle().toString();
                         final TransactionContext txc = txMap.remove(txId);
+                        offsetContext.setTransaction(txc);
                         log.debug("commit transaction id {} tx {} table {}", nextOffset, txId, tableId);
+                        log.debug("Offset context: {}", offsetContext);
                         if (txc != null) {
+
                             txc.endTransaction();
                             dispatcher.dispatchTransactionCommittedEvent(partition, offsetContext,
                                     eheader.getTime());
@@ -275,8 +281,6 @@ public class As400StreamingChangeEventSource implements StreamingChangeEventSour
                         offsetContext.setSourceTime(eheader.getTime());
 
                         final String txId = eheader.getCommitCycle().toString();
-                        final TransactionContext txc = txMap.get(txId);
-                        offsetContext.setTransaction(txc);
 
                         log.debug("update event id {} tx {} table {}", nextOffset, txId, tableId);
 
@@ -287,6 +291,13 @@ public class As400StreamingChangeEventSource implements StreamingChangeEventSour
                         }
                         else {
                             log.debug("update in transaction {}, put it in transaction context", txId);
+                            final TransactionContext txc = txMap.get(txId);
+                            offsetContext.setTransaction(txc);
+                            if (txc != null) {
+                                txc.event(tableId);
+                            }
+                            log.debug("Transaction context: {}", txc);
+                            log.debug("Offset context: {}", offsetContext);
                         }
                     }
                         break;
@@ -296,11 +307,6 @@ public class As400StreamingChangeEventSource implements StreamingChangeEventSour
                         offsetContext.setSourceTime(eheader.getTime());
 
                         final String txId = eheader.getCommitCycle().toString();
-                        final TransactionContext txc = txMap.get(txId);
-                        offsetContext.setTransaction(txc);
-                        if (txc != null) {
-                            txc.event(tableId);
-                        }
 
                         log.debug("insert event id {} tx {} table {}", offsetContext.getPosition(), txId,
                                 tableId);
@@ -311,6 +317,13 @@ public class As400StreamingChangeEventSource implements StreamingChangeEventSour
                         }
                         else {
                             log.debug("insert in transaction {}, put it in transaction context", txId);
+                            final TransactionContext txc = txMap.get(txId);
+                            offsetContext.setTransaction(txc);
+                            if (txc != null) {
+                                txc.event(tableId);
+                            }
+                            log.debug("Transaction context: {}", txc);
+                            log.debug("Offset context: {}", offsetContext);
                         }
                     }
                         break;
@@ -321,11 +334,6 @@ public class As400StreamingChangeEventSource implements StreamingChangeEventSour
                         offsetContext.setSourceTime(eheader.getTime());
 
                         final String txId = eheader.getCommitCycle().toString();
-                        final TransactionContext txc = txMap.get(txId);
-                        offsetContext.setTransaction(txc);
-                        if (txc != null) {
-                            txc.event(tableId);
-                        }
 
                         log.debug("delete event id {} tx {} table {}", offsetContext.getPosition(), txId,
                                 tableId);
@@ -336,6 +344,13 @@ public class As400StreamingChangeEventSource implements StreamingChangeEventSour
                         }
                         else {
                             log.debug("delete in transaction {}, put it in transaction context", txId);
+                            final TransactionContext txc = txMap.get(txId);
+                            offsetContext.setTransaction(txc);
+                            if (txc != null) {
+                                txc.event(tableId);
+                            }
+                            log.debug("Transaction context: {}", txc);
+                            log.debug("Offset context: {}", offsetContext);
                         }
                     }
                         break;
@@ -357,6 +372,13 @@ public class As400StreamingChangeEventSource implements StreamingChangeEventSour
                         // rollback before image
                         final String txId = eheader.getCommitCycle().toString();
                         log.debug("rollback before image event id {} tx {} table {}", offsetContext.getPosition(), txId,
+                                tableId);
+                    }
+                        break;
+                    case ROLLBACK: {
+                        // rollback
+                        final String txId = eheader.getCommitCycle().toString();
+                        log.debug("rollback event id {} tx {} table {}", offsetContext.getPosition(), txId,
                                 tableId);
                     }
                     default:

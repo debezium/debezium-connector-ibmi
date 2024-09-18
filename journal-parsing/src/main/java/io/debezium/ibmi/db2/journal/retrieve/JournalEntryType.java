@@ -23,6 +23,7 @@ public enum JournalEntryType {
     FILE_CHANGE("D.CG"),
     START_COMMIT("C.SC"),
     END_COMMIT("C.CM"),
+    ROLLBACK("C.RB"),
     OPEN("F.OP"),
     CLOSE("F.CL");
 
