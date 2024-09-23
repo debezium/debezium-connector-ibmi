@@ -166,7 +166,7 @@ public class ReceiverPagination {
 
         public Optional<PositionRange> next(DetailedJournalReceiver nextReceiver) {
             if (found) {
-                // if the next journal has wrapped use just go to the end
+                // if the next journal has wrapped use just go to the end of the previous one
                 if (lastReceiver != null && nextReceiver.start().compareTo(lastReceiver.end()) < 0) {
                     // we're at the end and we've processed it move start on to next receiver
                     if (startEqualsEndAndProcessed(startPosition, lastReceiver)) {
@@ -174,13 +174,6 @@ public class ReceiverPagination {
                     }
                     else {
                         // the only way we can get here is if we have already checked for pagination
-                        // when we found the start so we should never need to paginate
-                        // it is inexpensive and safer to check
-                        final Optional<PositionRange> paginated = rangeWithinCurrentPosition(lastReceiver,
-                                startPosition.getOffset());
-                        if (paginated.isPresent()) {
-                            return paginated;
-                        }
                         return Optional.of(new PositionRange(false, startPosition,
                                 new JournalPosition(lastReceiver.end(), lastReceiver.info().receiver())));
                     }

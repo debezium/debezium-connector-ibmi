@@ -23,6 +23,8 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import com.ibm.as400.access.AS400;
 
@@ -502,5 +504,81 @@ class ReceiverPaginationTest {
                 found.get().start());
         assertEquals(new JournalPosition(BigInteger.valueOf(5l), j2.info().receiver()), found.get().end());
         assertFalse(found.get().startEqualsEnd());
+    }
+
+    private static final Logger log = LoggerFactory.getLogger(ReceiverPaginationTest.class);
+
+    @Test
+    void testStopBeforeJournalResetsPaginateOver() {
+        final ReceiverPagination jreceivers = new ReceiverPagination(journalInfoRetrieval, 20, journalInfo);
+        final DetailedJournalReceiver j1 = new DetailedJournalReceiver(
+                new JournalReceiverInfo(new JournalReceiver("j1", "jlib"), new Date(1),
+                        JournalStatus.OnlineSavedDetached, Optional.of(1)),
+                BigInteger.valueOf(1), BigInteger.valueOf(10), Optional.of(new JournalReceiver("j2", "jlib")), 1, 1);
+        final DetailedJournalReceiver j2 = new DetailedJournalReceiver(
+                new JournalReceiverInfo(new JournalReceiver("j2", "jlib"), new Date(2),
+                        JournalStatus.OnlineSavedDetached, Optional.of(1)),
+                BigInteger.valueOf(11), BigInteger.valueOf(20), Optional.of(new JournalReceiver("j3", "jlib")), 1, 1);
+        final DetailedJournalReceiver j3 = new DetailedJournalReceiver(
+                new JournalReceiverInfo(new JournalReceiver("j3", "jlib"), new Date(4),
+                        JournalStatus.OnlineSavedDetached, Optional.of(1)),
+                BigInteger.valueOf(1), BigInteger.valueOf(100), Optional.empty(), 1, 1);
+        final List<DetailedJournalReceiver> list = List.of(j1, j2, j3);
+        final JournalProcessedPosition start = new JournalProcessedPosition(BigInteger.valueOf(5),
+                j1.info().receiver(), Instant.ofEpochSecond(0), true);
+        final Optional<PositionRange> position = jreceivers.findPosition(start, BigInteger.valueOf(16), list, j1);
+        assertTrue(position.isPresent());
+        assertEquals("j2", position.get().end().getReceiver().name());
+        assertEquals(j2.end(), position.get().end().getOffset());
+
+    }
+
+    @Test
+    void testStopBeforeJournalResetsPaginateExact() {
+        final ReceiverPagination jreceivers = new ReceiverPagination(journalInfoRetrieval, 20, journalInfo);
+        final DetailedJournalReceiver j1 = new DetailedJournalReceiver(
+                new JournalReceiverInfo(new JournalReceiver("j1", "jlib"), new Date(1),
+                        JournalStatus.OnlineSavedDetached, Optional.of(1)),
+                BigInteger.valueOf(1), BigInteger.valueOf(10), Optional.of(new JournalReceiver("j2", "jlib")), 1, 1);
+        final DetailedJournalReceiver j2 = new DetailedJournalReceiver(
+                new JournalReceiverInfo(new JournalReceiver("j2", "jlib"), new Date(2),
+                        JournalStatus.OnlineSavedDetached, Optional.of(1)),
+                BigInteger.valueOf(11), BigInteger.valueOf(20), Optional.of(new JournalReceiver("j3", "jlib")), 1, 1);
+        final DetailedJournalReceiver j3 = new DetailedJournalReceiver(
+                new JournalReceiverInfo(new JournalReceiver("j3", "jlib"), new Date(4),
+                        JournalStatus.OnlineSavedDetached, Optional.of(1)),
+                BigInteger.valueOf(1), BigInteger.valueOf(100), Optional.empty(), 1, 1);
+        final List<DetailedJournalReceiver> list = List.of(j1, j2, j3);
+        final JournalProcessedPosition start = new JournalProcessedPosition(BigInteger.valueOf(5),
+                j1.info().receiver(), Instant.ofEpochSecond(0), true);
+        final Optional<PositionRange> position = jreceivers.findPosition(start, BigInteger.valueOf(15), list, j1);
+        assertTrue(position.isPresent());
+        assertEquals("j2", position.get().end().getReceiver().name());
+        assertEquals(j2.end(), position.get().end().getOffset());
+
+    }
+
+    @Test
+    void testStopOneBeforeJournalResetsPaginate() {
+        final ReceiverPagination jreceivers = new ReceiverPagination(journalInfoRetrieval, 20, journalInfo);
+        final DetailedJournalReceiver j1 = new DetailedJournalReceiver(
+                new JournalReceiverInfo(new JournalReceiver("j1", "jlib"), new Date(1),
+                        JournalStatus.OnlineSavedDetached, Optional.of(1)),
+                BigInteger.valueOf(1), BigInteger.valueOf(10), Optional.of(new JournalReceiver("j2", "jlib")), 1, 1);
+        final DetailedJournalReceiver j2 = new DetailedJournalReceiver(
+                new JournalReceiverInfo(new JournalReceiver("j2", "jlib"), new Date(2),
+                        JournalStatus.OnlineSavedDetached, Optional.of(1)),
+                BigInteger.valueOf(11), BigInteger.valueOf(20), Optional.of(new JournalReceiver("j3", "jlib")), 1, 1);
+        final DetailedJournalReceiver j3 = new DetailedJournalReceiver(
+                new JournalReceiverInfo(new JournalReceiver("j3", "jlib"), new Date(4),
+                        JournalStatus.OnlineSavedDetached, Optional.of(1)),
+                BigInteger.valueOf(1), BigInteger.valueOf(100), Optional.empty(), 1, 1);
+        final List<DetailedJournalReceiver> list = List.of(j1, j2, j3);
+        final JournalProcessedPosition start = new JournalProcessedPosition(BigInteger.valueOf(5),
+                j1.info().receiver(), Instant.ofEpochSecond(0), true);
+        final Optional<PositionRange> position = jreceivers.findPosition(start, BigInteger.valueOf(14), list, j1);
+        assertTrue(position.isPresent());
+        assertEquals("j2", position.get().end().getReceiver().name());
+        assertEquals(j2.end().subtract(BigInteger.ONE), position.get().end().getOffset());
     }
 }

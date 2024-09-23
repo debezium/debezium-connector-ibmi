@@ -83,6 +83,7 @@ public class RetrieveJournal {
     public boolean retrieveJournal(JournalProcessedPosition previousPosition) throws Exception {
 
         final PositionRange range = journalReceivers.findRange(config.as400().connection(), previousPosition);
+        log.debug("retrieve journal start {} end {}", range.start(), range.end());
 
         return retrieveJournal(previousPosition, range);
     }
