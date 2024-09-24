@@ -3,13 +3,13 @@
     <parent>
         <groupId>io.debezium</groupId>
         <artifactId>debezium-parent</artifactId>
-        <version>2.7.0-SNAPSHOT</version>
+        <version>2.7.3.Final</version>
     </parent>
 
     <modelVersion>4.0.0</modelVersion>
 
     <artifactId>debezium-connector-reactor-ibmi</artifactId>
-    <version>2.7.0-SNAPSHOT</version>
+    <version>2.7.3.Final</version>
     <packaging>pom</packaging>
     <name>Debezium Connector Reactor for IBM iSeries Db2</name>
 
@@ -28,7 +28,7 @@
 
     <properties>
         <!-- Debezium parent -->
-        <version.debezium>2.7.0-SNAPSHOT</version.debezium>
+        <version.debezium>2.7.3.Final</version.debezium>
 
         <!-- Dependencies -->
         <version.jt400>11.1</version.jt400>
