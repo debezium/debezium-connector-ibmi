@@ -96,7 +96,7 @@ public class As400ConnectorTask extends BaseSourceTask<As400Partition, As400Offs
         if (previousOffset == null) {
             LOGGER.info("previous offsets not found creating from config");
             previousOffset = new As400OffsetContext(connectorConfig);
-            previousOffsetPartition = Offsets.of(new As400Partition(connectorConfig.getHostname()),
+            previousOffsetPartition = Offsets.of(new As400Partition(connectorConfig.getLogicalName()),
                     previousOffset);
         }
 
