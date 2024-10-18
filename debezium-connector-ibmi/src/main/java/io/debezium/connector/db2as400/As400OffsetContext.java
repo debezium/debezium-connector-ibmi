@@ -20,13 +20,14 @@ import io.debezium.config.Field;
 import io.debezium.connector.SnapshotRecord;
 import io.debezium.ibmi.db2.journal.retrieve.JournalProcessedPosition;
 import io.debezium.ibmi.db2.journal.retrieve.JournalReceiver;
+import io.debezium.pipeline.CommonOffsetContext;
 import io.debezium.pipeline.spi.OffsetContext;
 import io.debezium.pipeline.txmetadata.TransactionContext;
 import io.debezium.relational.RelationalDatabaseConnectorConfig;
 import io.debezium.spi.schema.DataCollectionId;
 
-public class As400OffsetContext implements OffsetContext {
-    private static Logger log = LoggerFactory.getLogger(As400OffsetContext.class);
+public class As400OffsetContext extends CommonOffsetContext<SourceInfo> {
+    private static final Logger log = LoggerFactory.getLogger(As400OffsetContext.class);
     // TODO note believe there is a per journal offset
     private static final String SERVER_PARTITION_KEY = "server";
     public static final String EVENT_SEQUENCE = "offset.event_sequence";
@@ -47,36 +48,36 @@ public class As400OffsetContext implements OffsetContext {
     private final As400ConnectorConfig connectorConfig;
     private final SourceInfo sourceInfo;
     private final JournalProcessedPosition position;
-    private final String inclueTables;
+    private final String includeTables;
     private boolean hasNewTables = false;
     private volatile boolean snapshotComplete = false;
 
     public As400OffsetContext(As400ConnectorConfig connectorConfig) {
-        super();
+        super(new SourceInfo(connectorConfig), false);
         partition = Collections.singletonMap(SERVER_PARTITION_KEY, connectorConfig.getLogicalName());
         this.position = connectorConfig.getOffset();
         this.connectorConfig = connectorConfig;
         sourceInfo = new SourceInfo(connectorConfig);
-        inclueTables = connectorConfig.tableIncludeList();
+        includeTables = connectorConfig.tableIncludeList();
     }
 
     public As400OffsetContext(As400ConnectorConfig connectorConfig, JournalProcessedPosition position) {
-        super();
+        super(new SourceInfo(connectorConfig), false);
         partition = Collections.singletonMap(SERVER_PARTITION_KEY, connectorConfig.getLogicalName());
         this.position = position;
         this.connectorConfig = connectorConfig;
         sourceInfo = new SourceInfo(connectorConfig);
-        inclueTables = connectorConfig.tableIncludeList();
+        includeTables = connectorConfig.tableIncludeList();
     }
 
     public As400OffsetContext(As400ConnectorConfig connectorConfig, JournalProcessedPosition position, String includeTables,
                               boolean snapshotComplete) {
-        super();
+        super(new SourceInfo(connectorConfig), snapshotComplete);
         partition = Collections.singletonMap(SERVER_PARTITION_KEY, connectorConfig.getLogicalName());
         this.position = position;
         this.connectorConfig = connectorConfig;
         sourceInfo = new SourceInfo(connectorConfig);
-        this.inclueTables = includeTables;
+        this.includeTables = includeTables;
         this.snapshotComplete = snapshotComplete;
     }
 
@@ -84,7 +85,7 @@ public class As400OffsetContext implements OffsetContext {
         this.position.setPosition(newPosition);
     }
 
-    public boolean isSnapshotCompplete() {
+    public boolean isSnapshotComplete() {
         return this.snapshotComplete;
     }
 
@@ -92,7 +93,7 @@ public class As400OffsetContext implements OffsetContext {
         return position;
     }
 
-    public boolean isPosisionSet() {
+    public boolean isPositionSet() {
         return position != null && position.isOffsetSet();
     }
 
@@ -124,7 +125,7 @@ public class As400OffsetContext implements OffsetContext {
                 As400OffsetContext.RECEIVER, position.getReceiver().name(),
                 As400OffsetContext.PROCESSED, Boolean.toString(position.processed()),
                 As400OffsetContext.RECEIVER_LIBRARY, position.getReceiver().library(),
-                RelationalDatabaseConnectorConfig.TABLE_INCLUDE_LIST.name(), inclueTables,
+                RelationalDatabaseConnectorConfig.TABLE_INCLUDE_LIST.name(), includeTables,
                 As400OffsetContext.SNAPSHOT_COMPLETED_KEY, Boolean.toString(snapshotComplete)));
     }
 
@@ -143,28 +144,6 @@ public class As400OffsetContext implements OffsetContext {
     }
 
     @Override
-    public boolean isSnapshotRunning() {
-        return sourceInfo.isSnapshot();
-    }
-
-    @Override
-    public void preSnapshotStart() {
-        snapshotComplete = false;
-        sourceInfo.setSnapshot(SnapshotRecord.TRUE);
-    }
-
-    @Override
-    public void preSnapshotCompletion() {
-        snapshotComplete = true;
-    }
-
-    @Override
-    public void postSnapshotCompletion() {
-        sourceInfo.setSnapshot(SnapshotRecord.FALSE);
-        snapshotComplete = true;
-    }
-
-    @Override
     public void event(DataCollectionId collectionId, Instant timestamp) {
         sourceInfo.setSourceTime(timestamp);
         // sourceInfo.tableEvent((TableId) collectionId);
@@ -176,7 +155,7 @@ public class As400OffsetContext implements OffsetContext {
     }
 
     public String getIncludeTables() {
-        return inclueTables;
+        return includeTables;
     }
 
     public static class Loader implements OffsetContext.Loader<As400OffsetContext> {
