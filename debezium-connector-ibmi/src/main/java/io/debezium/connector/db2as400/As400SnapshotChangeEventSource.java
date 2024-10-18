@@ -132,7 +132,7 @@ public class As400SnapshotChangeEventSource
                                            RelationalSnapshotContext<As400Partition, As400OffsetContext> snapshotContext,
                                            As400OffsetContext previousOffset)
             throws Exception {
-        if (previousOffset != null && previousOffset.isPosisionSet()) {
+        if (previousOffset != null && previousOffset.isPositionSet()) {
             snapshotContext.offset = previousOffset;
         }
 
@@ -213,7 +213,7 @@ public class As400SnapshotChangeEventSource
         final Map<DataCollectionId, String> snapshotSelectOverridesByTable = connectorConfig.getSnapshotSelectOverridesByTable();
 
         // found a previous offset and the earlier snapshot has completed
-        if (previousOffset != null && previousOffset.isSnapshotCompplete()) {
+        if (previousOffset != null && previousOffset.isSnapshotComplete()) {
             // when control tables in place
             if (!previousOffset.hasNewTables()) {
                 log.info(
