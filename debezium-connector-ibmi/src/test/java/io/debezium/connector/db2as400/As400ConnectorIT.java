@@ -11,10 +11,10 @@ import org.junit.Before;
 import org.junit.Test;
 
 import io.debezium.connector.db2as400.util.TestHelper;
-import io.debezium.embedded.AbstractConnectorTest;
+import io.debezium.embedded.async.AbstractAsyncEngineConnectorTest;
 import io.debezium.util.Testing;
 
-public class As400ConnectorIT extends AbstractConnectorTest {
+public class As400ConnectorIT extends AbstractAsyncEngineConnectorTest {
 
     private static final String TABLE = "TESTT";
 
