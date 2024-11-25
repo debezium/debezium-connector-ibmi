@@ -301,7 +301,7 @@ public class As400StreamingChangeEventSource implements StreamingChangeEventSour
                                 offsetContext, Operation.CREATE, null, dataNext, clock, connectorConfig));
                     }
                         break;
-                    case DELETE_ROW1, DELETE_ROW2: {
+                    case DELETE_ROW, ROLLBACK_DELETE_ROW: {
                         // record deleted
                         final Object[] dataBefore = r.decode(schema.getFileDecoder());
 
