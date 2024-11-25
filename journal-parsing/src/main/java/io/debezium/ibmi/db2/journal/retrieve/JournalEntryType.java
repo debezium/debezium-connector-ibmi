@@ -10,14 +10,13 @@ import java.util.Map;
 
 public enum JournalEntryType {
 
-    ADD_ROW2("R.PT"),
     ADD_ROW1("R.PX"),
+    ADD_ROW2("R.PT"),
     AFTER_IMAGE("R.UP"),
     ROLLBACK_AFTER_IMAGE("R.UR"),
     BEFORE_IMAGE("R.UB"),
     ROLLBACK_BEFORE_IMAGE("R.BR"),
-    DELETE_ROW1("R.DR"),
-    DELETE_ROW2("R.DL"),
+    DELETE_ROW("R.DL"),
     ROLLBACK_DELETE_ROW("R.DR"),
     FILE_CREATED("D.CT"),
     FILE_CHANGE("D.CG"),
