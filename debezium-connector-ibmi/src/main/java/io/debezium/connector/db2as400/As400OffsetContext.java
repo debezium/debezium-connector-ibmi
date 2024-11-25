@@ -50,7 +50,6 @@ public class As400OffsetContext extends CommonOffsetContext<SourceInfo> {
     private final JournalProcessedPosition position;
     private final String includeTables;
     private boolean hasNewTables = false;
-    private volatile boolean snapshotComplete = false;
 
     public As400OffsetContext(As400ConnectorConfig connectorConfig) {
         super(new SourceInfo(connectorConfig), false);
@@ -78,7 +77,6 @@ public class As400OffsetContext extends CommonOffsetContext<SourceInfo> {
         this.connectorConfig = connectorConfig;
         sourceInfo = new SourceInfo(connectorConfig);
         this.includeTables = includeTables;
-        this.snapshotComplete = snapshotComplete;
     }
 
     public void setPosition(JournalProcessedPosition newPosition) {
@@ -86,7 +84,7 @@ public class As400OffsetContext extends CommonOffsetContext<SourceInfo> {
     }
 
     public boolean isSnapshotComplete() {
-        return this.snapshotComplete;
+        return snapshotCompleted;
     }
 
     public JournalProcessedPosition getPosition() {
@@ -126,7 +124,7 @@ public class As400OffsetContext extends CommonOffsetContext<SourceInfo> {
                 As400OffsetContext.PROCESSED, Boolean.toString(position.processed()),
                 As400OffsetContext.RECEIVER_LIBRARY, position.getReceiver().library(),
                 RelationalDatabaseConnectorConfig.TABLE_INCLUDE_LIST.name(), includeTables,
-                As400OffsetContext.SNAPSHOT_COMPLETED_KEY, Boolean.toString(snapshotComplete)));
+                As400OffsetContext.SNAPSHOT_COMPLETED_KEY, Boolean.toString(snapshotCompleted)));
     }
 
     @Override
