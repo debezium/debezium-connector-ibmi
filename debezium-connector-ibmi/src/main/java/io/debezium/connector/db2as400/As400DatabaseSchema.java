@@ -35,7 +35,8 @@ public class As400DatabaseSchema extends RelationalDatabaseSchema implements Sch
     public As400DatabaseSchema(As400ConnectorConfig config, As400JdbcConnection jdbcConnection,
                                TopicNamingStrategy<TableId> topicSelector, SchemaNameAdjuster schemaNameAdjuster) {
         super(config, topicSelector, config.getTableFilters().dataCollectionFilter(), config.getColumnFilter(),
-                new TableSchemaBuilder(new As400ValueConverters(), new As400DefaultValueConverter(), schemaNameAdjuster,
+                new TableSchemaBuilder(new As400ValueConverters(config.getDecimalMode()),
+                        new As400DefaultValueConverter(), schemaNameAdjuster,
                         config.customConverterRegistry(), config.getSourceInfoStructMaker().schema(),
                         config.getFieldNamer(), false),
                 false, config.getKeyMapper());
