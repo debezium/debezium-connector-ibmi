@@ -12,3 +12,6 @@ structured-logging/.flattened-pom.xml
 debezium-connector-ibmi/src/test/resources/confluent-auth-template.properties
 journal-parsing/archive/
 journal-parsing/logs/
+
+.idea/
+*.iml
