@@ -60,6 +60,14 @@
                     <enableAssertions>true</enableAssertions>
                 </configuration>
             </plugin>
+            <!-- The code in this project comes for another one so it does not conform to Debezium coding standards -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-checkstyle-plugin</artifactId>
+                <configuration>
+                    <skip>true</skip>
+                </configuration>
+            </plugin>
         </plugins>
         <resources>
             <!-- Apply the properties set in the POM to the resource files -->
