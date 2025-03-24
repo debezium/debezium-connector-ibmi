@@ -66,7 +66,7 @@ public record DetailedJournalReceiver(JournalReceiverInfo info, BigInteger start
         }
         if (last >= attached.size()) {
             log.warn("no available receivers");
-            return Collections.<DetailedJournalReceiver>emptyList();
+            return Collections.<DetailedJournalReceiver> emptyList();
         }
         log.info("restricting as receiver is unavailble {}", attached.get(last - 1));
 
@@ -90,8 +90,8 @@ public record DetailedJournalReceiver(JournalReceiverInfo info, BigInteger start
 
     public static boolean isJoined(JournalStatus status) {
         return switch (status) {
-        case Attached, OnlineSavedDetached, SavedDetchedNotFreed -> true;
-        default -> false;
+            case Attached, OnlineSavedDetached, SavedDetchedNotFreed -> true;
+            default -> false;
         };
     }
 }
