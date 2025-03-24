@@ -15,13 +15,17 @@ import java.text.SimpleDateFormat;
 import java.time.Instant;
 import java.util.Arrays;
 import java.util.Date;
+import java.util.concurrent.atomic.AtomicReference;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import com.ibm.as400.access.AS400;
 import com.ibm.as400.access.AS400Message;
+import com.ibm.as400.access.Job;
 import com.ibm.as400.access.MessageFile;
 import com.ibm.as400.access.ProgramParameter;
+import com.ibm.as400.access.SecureAS400;
 import com.ibm.as400.access.ServiceProgramCall;
 
 import io.debezium.ibmi.db2.journal.retrieve.RetrievalCriteria.JournalCode;
@@ -59,6 +63,7 @@ public class RetrieveJournal {
     private int offset = -1;
     private JournalProcessedPosition position;
     private long totalTransferred = 0;
+    private AtomicReference<Job> ibmiJob = new AtomicReference<>();
 
     public RetrieveJournal(RetrieveConfig config, JournalInfoRetrieval journalRetrieval) {
         this.config = config;
@@ -84,6 +89,27 @@ public class RetrieveJournal {
 
         final PositionRange range = journalReceivers.findRange(config.as400().connection(), previousPosition);
         return retrieveJournal(previousPosition, range);
+    }
+
+    public void cancelJob() {
+        Job job = ibmiJob.get();
+        try {
+            AS400 as400 = config.as400().connection();
+            if (job != null) {
+                Job killer; // create a new instance with a new connection as current connection is tied up with this job
+                if (as400 instanceof SecureAS400) {
+                    killer = new Job(new SecureAS400(as400), job.getName(), job.getUser(), job.getNumber());
+                }
+                else {
+                    killer = new Job(new AS400(as400), job.getName(), job.getUser(), job.getNumber());
+                }
+                log.info("Killing job {}/{}/{}", job.getName(), job.getUser(), job.getNumber());
+                killer.end(0);
+            }
+        }
+        catch (Exception e) {
+            log.error("Failed to cancel job name {} user {} number {}", job.getName(), job.getUser(), job.getNumber(), e);
+        }
     }
 
     public boolean retrieveJournal(JournalProcessedPosition previousPosition, final PositionRange range)
@@ -121,7 +147,9 @@ public class RetrieveJournal {
         spc.setProcedureName("QjoRetrieveJournalEntries");
         spc.setAlignOn16Bytes(true);
         spc.setReturnValueFormat(ServiceProgramCall.RETURN_INTEGER);
+        ibmiJob.set(spc.getServerJob()); // capture so we can asynchronously cancel it
         final boolean success = spc.run();
+        ibmiJob.set(null); // job finished
         if (success) {
             outputData = parameters[0].getOutputData();
             header = firstHeaderDecoder.decode(outputData, end);
