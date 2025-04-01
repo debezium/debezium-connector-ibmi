@@ -93,6 +93,10 @@ public class RetrieveJournal {
 
     public void cancelJob() {
         Job job = ibmiJob.get();
+        if (job == null) {
+            log.debug("No job to cancel");
+            return;
+        }
         try {
             AS400 as400 = config.as400().connection();
             if (job != null) {
