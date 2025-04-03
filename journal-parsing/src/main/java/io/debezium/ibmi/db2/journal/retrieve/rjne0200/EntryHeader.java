@@ -46,8 +46,8 @@ public class EntryHeader {
         this.commitCycle = commitCycle;
         this.endOffset = endOffset;
         this.pointerHandle = pointerHandle;
-        this.receiver = receiver;
-        this.receiverLibrary = receiverLibrary;
+        this.receiver = StringHelpers.safeTrim(receiver);
+        this.receiverLibrary = StringHelpers.safeTrim(receiverLibrary);
     }
 
     @Override
