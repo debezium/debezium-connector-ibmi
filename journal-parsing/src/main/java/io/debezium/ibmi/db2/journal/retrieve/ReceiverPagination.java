@@ -6,6 +6,7 @@
 package io.debezium.ibmi.db2.journal.retrieve;
 
 import java.math.BigInteger;
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 
@@ -14,6 +15,7 @@ import org.slf4j.LoggerFactory;
 
 import com.ibm.as400.access.AS400;
 
+import io.debezium.ibmi.db2.journal.retrieve.exception.InvalidPositionException;
 import io.debezium.ibmi.db2.journal.retrieve.rnrn0200.DetailedJournalReceiver;
 
 public class ReceiverPagination {
@@ -37,11 +39,6 @@ public class ReceiverPagination {
 
         final DetailedJournalReceiver endPosition = journalInfoRetrieval.getCurrentDetailedJournalReceiver(as400, journalInfo);
 
-        if (fromBeginning) {
-            return new PositionRange(fromBeginning, startPosition,
-                    new JournalPosition(endPosition.end(), endPosition.info().receiver()));
-        }
-
         if (cachedEndPosition == null) {
             cachedEndPosition = endPosition;
         }
@@ -49,6 +46,12 @@ public class ReceiverPagination {
         if (cachedReceivers == null) {
             cachedReceivers = journalInfoRetrieval.getReceivers(as400, journalInfo);
         }
+
+        if (fromBeginning) {
+            DetailedJournalReceiver first = cachedReceivers.get(0);
+            startPosition = new JournalProcessedPosition(first.start(), first.info().receiver(), Instant.EPOCH, false);
+        }
+
         if (cachedEndPosition.isSameReceiver(endPosition)) {
             // refresh end position in cached list
             updateEndPosition(cachedReceivers, endPosition);
@@ -70,12 +73,16 @@ public class ReceiverPagination {
             log.warn("retrying to find end offset");
             cachedReceivers = journalInfoRetrieval.getReceivers(as400, journalInfo);
             endOpt = findPosition(startPosition, maxServerSideEntriesBI, cachedReceivers, endPosition);
+            if (endOpt.isEmpty()) {
+                throw new InvalidPositionException("unable to find receiver " + startPosition + " in " + cachedReceivers);
+            }
         }
 
         log.debug("end {} journals {}", endPosition, cachedReceivers);
 
+        final JournalProcessedPosition startf = new JournalProcessedPosition(startPosition);
         return endOpt.orElseGet(
-                () -> new PositionRange(fromBeginning, startPosition,
+                () -> new PositionRange(fromBeginning, startf,
                         new JournalPosition(endPosition.end(), endPosition.info().receiver())));
     }
 

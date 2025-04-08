@@ -122,12 +122,10 @@ public class As400StreamingChangeEventSource implements StreamingChangeEventSour
                         retries = 0;
                     }
                     catch (final FatalException e) {
-                        log.error("Unable to process offset {}", offsetContext.getPosition(), e);
                         throw new DebeziumException("Unable to process offset " + offsetContext.getPosition(), e);
                     }
                     catch (final InvalidPositionException e) {
-                        log.error("Invalid position resetting offsets to beginning", e);
-                        offsetContext.setPosition(new JournalProcessedPosition());
+                        throw new DebeziumException("Invalid journal receiver/sequence has the receiver been deleted? position was: " + offsetContext.getPosition(), e);
                     }
                     catch (final InterruptedException e) {
                         if (context.isRunning()) {
