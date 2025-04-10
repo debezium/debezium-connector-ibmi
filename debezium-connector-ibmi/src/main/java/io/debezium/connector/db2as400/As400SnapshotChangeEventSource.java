@@ -67,51 +67,8 @@ public class As400SnapshotChangeEventSource
     public SnapshotResult<As400OffsetContext> execute(ChangeEventSourceContext context, As400Partition partition,
                                                       As400OffsetContext previousOffset, SnapshottingTask snapshottingTask)
             throws InterruptedException {
-        if (snapshottingTask.shouldSkipSnapshot()) {
-            log.info("snapshotting skipped but fetching structure");
-            final RelationalSnapshotContext<As400Partition, As400OffsetContext> ctx;
-            try {
-                ctx = (RelationalSnapshotContext<As400Partition, As400OffsetContext>) prepare(partition, false);
-                determineTables(ctx, snapshottingTask);
-                readTableStructure(context, ctx, previousOffset, snapshottingTask);
-            }
-            catch (final Exception e) {
-                throw new RuntimeException("Failed to initialize snapshot context.", e);
-            }
-            log.info("finished fetching structure");
-        }
+
         return super.execute(context, partition, previousOffset, snapshottingTask);
-    }
-
-    void determineTables(RelationalSnapshotContext<As400Partition, As400OffsetContext> ctx,
-                         SnapshottingTask snapshottingTask)
-            throws Exception {
-        final Set<TableId> allTableIds = getAllTableIds(ctx);
-        final Set<Pattern> dataCollectionsToBeSnapshotted = getDataCollectionPattern(
-                snapshottingTask.getDataCollections());
-
-        final Set<TableId> snapshottedTableIds = determineDataCollectionsToBeSnapshotted(allTableIds,
-                dataCollectionsToBeSnapshotted)
-                .collect(Collectors.toSet());
-
-        final Set<TableId> capturedTables = new HashSet<>();
-        final Set<TableId> capturedSchemaTables = new HashSet<>();
-
-        for (final TableId tableId : allTableIds) {
-            if (connectorConfig.getTableFilters().eligibleForSchemaDataCollectionFilter().isIncluded(tableId)) {
-                capturedSchemaTables.add(tableId);
-            }
-        }
-
-        for (final TableId tableId : snapshottedTableIds) {
-            if (connectorConfig.getTableFilters().dataCollectionFilter().isIncluded(tableId)) {
-                capturedTables.add(tableId);
-            }
-        }
-
-        ctx.capturedTables = capturedTables;
-        ctx.capturedSchemaTables = capturedSchemaTables.stream().sorted()
-                .collect(Collectors.toCollection(LinkedHashSet::new));
     }
 
     @Override
@@ -216,20 +173,19 @@ public class As400SnapshotChangeEventSource
         final Map<DataCollectionId, String> snapshotSelectOverridesByTable = connectorConfig.getSnapshotSelectOverridesByTable();
 
         // found a previous offset and the earlier snapshot has completed
-        boolean offsetsExist = previousOffset != null;
-        boolean snapshotInProgress = previousOffset != null && previousOffset.isSnapshotComplete();
-        if (offsetsExist && snapshotInProgress) {
+        boolean previousOffsetsExist = previousOffset != null;
+        boolean snapshotInProcgres = previousOffset != null && !previousOffset.isSnapshotComplete();
+        if (previousOffset != null && previousOffset.isSnapshotComplete()) {
             // when control tables in place
             if (!previousOffset.hasNewTables()) {
                 log.info(
                         "A previous offset indicating a completed snapshot has been found. Neither schema nor data will be snapshotted.");
-                return new SnapshottingTask(false, false, dataCollectionsToBeSnapshotted,
+                return new SnapshottingTask(true, false, dataCollectionsToBeSnapshotted,
                         snapshotSelectOverridesByTable, false);
             }
         }
 
-        boolean snapshotData = snapshotterService.getSnapshotter().shouldSnapshotData(offsetsExist, snapshotInProgress);
-        log.info("No previous offset has been found");
+        boolean snapshotData = snapshotterService.getSnapshotter().shouldSnapshotData(previousOffsetsExist, snapshotInProcgres);
         if (snapshotData) {
             log.info("According to the connector configuration both schema and data will be snapshotted");
         }
@@ -237,7 +193,7 @@ public class As400SnapshotChangeEventSource
             log.info("According to the connector configuration only schema will be snapshotted");
         }
 
-        return new SnapshottingTask(snapshotData,
+        return new SnapshottingTask(true,
                 snapshotData, dataCollectionsToBeSnapshotted,
                 snapshotSelectOverridesByTable, false);
     }
