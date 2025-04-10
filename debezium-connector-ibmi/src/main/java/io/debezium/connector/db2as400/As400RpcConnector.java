@@ -70,7 +70,7 @@ public class As400RpcConnector extends RelationalBaseSourceConnector {
 
     @Override
     protected void validateConnection(Map<String, ConfigValue> configValues, Configuration config) {
-        As400ConnectorConfig aconfig = (As400ConnectorConfig) config;
+        As400ConnectorConfig aconfig = new As400ConnectorConfig(config);
         JdbcConfiguration jdbcConfig = aconfig.getJdbcConfig();
         As400JdbcConnection jdbcConnection = new As400JdbcConnection(jdbcConfig);
         final ConfigValue hostnameValue = configValues.get(RelationalDatabaseConnectorConfig.HOSTNAME.name());
@@ -92,7 +92,7 @@ public class As400RpcConnector extends RelationalBaseSourceConnector {
     @SuppressWarnings("unchecked")
     @Override
     public List<TableId> getMatchingCollections(Configuration config) {
-        As400ConnectorConfig aconfig = (As400ConnectorConfig) config;
+        As400ConnectorConfig aconfig = new As400ConnectorConfig(config);
         JdbcConfiguration jdbcConfig = aconfig.getJdbcConfig();
         As400JdbcConnection jdbcConnection = new As400JdbcConnection(jdbcConfig);
         try (JdbcConnection connection = jdbcConnection.connect()) {
