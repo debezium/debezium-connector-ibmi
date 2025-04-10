@@ -12,6 +12,8 @@ import org.apache.kafka.common.config.ConfigDef;
 import org.apache.kafka.common.config.ConfigDef.Importance;
 import org.apache.kafka.common.config.ConfigDef.Type;
 import org.apache.kafka.common.config.ConfigDef.Width;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import io.debezium.config.CommonConnectorConfig;
 import io.debezium.config.Configuration;
@@ -31,10 +33,21 @@ import io.debezium.relational.Tables.TableFilter;
 
 //TODO  can we deliver HistorizedRelationalDatabaseConnectorConfig or should it be RelationalDatabaseConnectorConfig
 public class As400ConnectorConfig extends RelationalDatabaseConnectorConfig {
+    private static final Logger LOGGER = LoggerFactory.getLogger(As400ConnectorTask.class);
+    
     private static TableIdToStringMapper tableToString = x -> {
-        final StringBuilder sb = new StringBuilder(x.schema());
-        sb.append(".").append(x.table());
-        return sb.toString();
+        if (x.table() != null) {
+            if (x.schema() != null) {
+                final StringBuilder sb = new StringBuilder(x.schema());
+                sb.append(".").append(x.table());
+                return sb.toString();
+            }
+            LOGGER.error("missing schema name {}, did the function expect the database.schema.table?", x);
+        
+            return x.table();
+        }
+        LOGGER.error("missing table name {}", x);
+        return "";
     };
 
     private final SnapshotMode snapshotMode;
