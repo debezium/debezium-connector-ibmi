@@ -23,9 +23,6 @@ import io.debezium.relational.Column;
 public class As400ValueConverters extends JdbcValueConverters {
     private static final Logger log = LoggerFactory.getLogger(As400ValueConverters.class);
 
-    public As400ValueConverters() {
-    }
-
     public As400ValueConverters(DecimalMode decimalMode) {
         super(decimalMode, TemporalPrecisionMode.ADAPTIVE, ZoneOffset.UTC, null, null, null);
     }
