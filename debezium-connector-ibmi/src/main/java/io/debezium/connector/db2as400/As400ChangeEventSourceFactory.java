@@ -5,17 +5,24 @@
  */
 package io.debezium.connector.db2as400;
 
+import java.util.Optional;
+
 import io.debezium.jdbc.MainConnectionProvidingConnectionFactory;
 import io.debezium.pipeline.ErrorHandler;
 import io.debezium.pipeline.EventDispatcher;
 import io.debezium.pipeline.notification.NotificationService;
+import io.debezium.pipeline.source.snapshot.incremental.IncrementalSnapshotChangeEventSource;
+import io.debezium.pipeline.source.snapshot.incremental.SignalBasedIncrementalSnapshotChangeEventSource;
 import io.debezium.pipeline.source.spi.ChangeEventSourceFactory;
+import io.debezium.pipeline.source.spi.DataChangeEventListener;
 import io.debezium.pipeline.source.spi.SnapshotChangeEventSource;
 import io.debezium.pipeline.source.spi.SnapshotProgressListener;
 import io.debezium.pipeline.source.spi.StreamingChangeEventSource;
 import io.debezium.relational.TableId;
 import io.debezium.snapshot.SnapshotterService;
+import io.debezium.spi.schema.DataCollectionId;
 import io.debezium.util.Clock;
+import io.debezium.util.Strings;
 
 public class As400ChangeEventSourceFactory implements ChangeEventSourceFactory<As400Partition, As400OffsetContext> {
 
@@ -44,6 +51,28 @@ public class As400ChangeEventSourceFactory implements ChangeEventSourceFactory<A
         this.schema = schema;
         this.snapshotConfig = snapshotConfig;
         this.snapshotterService = snapshotterService;
+    }
+
+    @Override
+    public Optional<IncrementalSnapshotChangeEventSource<As400Partition, ? extends DataCollectionId>> getIncrementalSnapshotChangeEventSource(As400OffsetContext offsetContext,
+                                                                                                                                              SnapshotProgressListener<As400Partition> snapshotProgressListener,
+                                                                                                                                              DataChangeEventListener<As400Partition> dataChangeEventListener,
+                                                                                                                                              NotificationService<As400Partition, As400OffsetContext> notificationService) {
+        // If no data collection id is provided, don't return an instance as the implementation requires
+        // that a signal data collection id be provided to work.
+        if (Strings.isNullOrEmpty(configuration.getSignalingDataCollectionId())) {
+            return Optional.empty();
+        }
+        final SignalBasedIncrementalSnapshotChangeEventSource<As400Partition, TableId> incrementalSnapshotChangeEventSource = new SignalBasedIncrementalSnapshotChangeEventSource<>(
+                configuration,
+                jdbcConnectionFactory.mainConnection(),
+                dispatcher,
+                schema,
+                clock,
+                snapshotProgressListener,
+                dataChangeEventListener,
+                notificationService);
+        return Optional.of(incrementalSnapshotChangeEventSource);
     }
 
     @Override
