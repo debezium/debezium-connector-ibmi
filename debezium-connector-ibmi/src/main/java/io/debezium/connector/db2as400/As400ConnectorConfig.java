@@ -34,14 +34,14 @@ import io.debezium.relational.Tables.TableFilter;
 //TODO  can we deliver HistorizedRelationalDatabaseConnectorConfig or should it be RelationalDatabaseConnectorConfig
 public class As400ConnectorConfig extends RelationalDatabaseConnectorConfig {
     private static final Logger LOGGER = LoggerFactory.getLogger(As400ConnectorTask.class);
-    
+
     public static TableIdToStringMapper tableToString = x -> {
         if (x.table() != null) {
             if (x.schema() != null) {
                 return String.format("%s.%s", x.schema(), x.table());
             }
             LOGGER.error("missing schema name {}, did the function expect the database.schema.table?", x);
-        
+
             return x.table();
         }
         LOGGER.error("missing table name {}", x);
