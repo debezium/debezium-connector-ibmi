@@ -11,6 +11,7 @@ import java.sql.SQLNonTransientConnectionException;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -19,7 +20,9 @@ import com.ibm.as400.access.AS400;
 import com.ibm.as400.access.SecureAS400;
 import com.ibm.as400.access.SocketProperties;
 
+import io.debezium.config.CommonConnectorConfig;
 import io.debezium.connector.db2as400.metrics.As400StreamingChangeEventSourceMetrics;
+import io.debezium.function.LogPositionValidator;
 import io.debezium.ibmi.db2.journal.retrieve.Connect;
 import io.debezium.ibmi.db2.journal.retrieve.FileFilter;
 import io.debezium.ibmi.db2.journal.retrieve.JournalInfo;
@@ -31,7 +34,10 @@ import io.debezium.ibmi.db2.journal.retrieve.RetrieveConfigBuilder;
 import io.debezium.ibmi.db2.journal.retrieve.RetrieveJournal;
 import io.debezium.ibmi.db2.journal.retrieve.rjne0200.EntryHeader;
 import io.debezium.ibmi.db2.journal.retrieve.rnrn0200.DetailedJournalReceiver;
+import io.debezium.ibmi.db2.journal.retrieve.rnrn0200.JournalReceiverInfo;
 import io.debezium.pipeline.source.spi.ChangeEventSource.ChangeEventSourceContext;
+import io.debezium.pipeline.spi.OffsetContext;
+import io.debezium.pipeline.spi.Partition;
 
 public class As400RpcConnection implements AutoCloseable, Connect<AS400, IOException> {
     private static Logger log = LoggerFactory.getLogger(As400RpcConnection.class);
@@ -93,6 +99,20 @@ public class As400RpcConnection implements AutoCloseable, Connect<AS400, IOExcep
     public boolean isValid() {
         return (as400 != null && as400.isConnectionAlive(AS400.COMMAND));
 
+    }
+    
+    public boolean validateLogPosition(Partition partition, OffsetContext offsetContext, CommonConnectorConfig config) {
+        try {
+            if (offsetContext instanceof As400OffsetContext offset) {
+                JournalReceiverInfo receiver = new JournalReceiverInfo(offset.getPosition().getReceiver(), null, null, Optional.empty()); 
+                
+                DetailedJournalReceiver dr = new JournalInfoRetrieval().getReceiverDetails(as400, receiver);
+                return dr != null;
+            }
+        } catch (Exception e) {
+            log.warn("unable to find journal poisition {}", offsetContext, e);
+        }
+        return false;
     }
 
     @Override
