@@ -19,6 +19,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import io.debezium.bean.StandardBeanNames;
+import io.debezium.config.CommonConnectorConfig;
 import io.debezium.config.Configuration;
 import io.debezium.config.Field;
 import io.debezium.connector.base.ChangeEventQueue;
@@ -31,6 +32,7 @@ import io.debezium.connector.db2as400.metrics.As400ChangeEventSourceMetricsFacto
 import io.debezium.connector.db2as400.metrics.As400StreamingChangeEventSourceMetrics;
 import io.debezium.converters.custom.CustomConverterServiceProvider;
 import io.debezium.document.DocumentReader;
+import io.debezium.function.LogPositionValidator;
 import io.debezium.ibmi.db2.journal.retrieve.FileFilter;
 import io.debezium.jdbc.DefaultMainConnectionProvidingConnectionFactory;
 import io.debezium.jdbc.MainConnectionProvidingConnectionFactory;
@@ -44,6 +46,7 @@ import io.debezium.pipeline.spi.Offsets;
 import io.debezium.processors.PostProcessorRegistryServiceProvider;
 import io.debezium.relational.CustomConverterRegistry;
 import io.debezium.relational.TableId;
+import io.debezium.schema.DatabaseSchema;
 import io.debezium.schema.SchemaFactory;
 import io.debezium.schema.SchemaNameAdjuster;
 import io.debezium.service.spi.ServiceRegistry;
@@ -51,6 +54,7 @@ import io.debezium.snapshot.SnapshotLockProvider;
 import io.debezium.snapshot.SnapshotQueryProvider;
 import io.debezium.snapshot.SnapshotterService;
 import io.debezium.snapshot.SnapshotterServiceProvider;
+import io.debezium.spi.snapshot.Snapshotter;
 import io.debezium.spi.topic.TopicNamingStrategy;
 import io.debezium.util.Clock;
 
@@ -90,6 +94,12 @@ public class As400ConnectorTask extends BaseSourceTask<As400Partition, As400Offs
         Offsets<As400Partition, As400OffsetContext> previousOffsetPartition = getPreviousOffsets(
                 new As400Partition.Provider(connectorConfig), new As400OffsetContext.Loader(connectorConfig));
         As400OffsetContext previousOffset = previousOffsetPartition.getTheOnlyOffset();
+        if (previousOffset == null) {
+            LOGGER.info("previous offsets not found creating from config");
+            previousOffset = new As400OffsetContext(connectorConfig);
+            previousOffsetPartition = Offsets.of(new As400Partition(connectorConfig.getLogicalName()),
+                    previousOffset);
+        }        
 
         // Manual Bean Registration
         connectorConfig.getBeanRegistry().add(StandardBeanNames.CONFIGURATION, config);
@@ -97,6 +107,7 @@ public class As400ConnectorTask extends BaseSourceTask<As400Partition, As400Offs
         connectorConfig.getBeanRegistry().add(StandardBeanNames.DATABASE_SCHEMA, schema);
         connectorConfig.getBeanRegistry().add(StandardBeanNames.CDC_SOURCE_TASK_CONTEXT, ctx);
         connectorConfig.getBeanRegistry().add(StandardBeanNames.JDBC_CONNECTION, jdbcConnection);
+        connectorConfig.getBeanRegistry().add(StandardBeanNames.OFFSETS, previousOffsetPartition);
 
         // Service providers
 
@@ -110,12 +121,7 @@ public class As400ConnectorTask extends BaseSourceTask<As400Partition, As400Offs
 
         errorHandler = new ErrorHandler(As400RpcConnector.class, connectorConfig, queue, null);
 
-        if (previousOffset == null) {
-            LOGGER.info("previous offsets not found creating from config");
-            previousOffset = new As400OffsetContext(connectorConfig);
-            previousOffsetPartition = Offsets.of(new As400Partition(connectorConfig.getLogicalName()),
-                    previousOffset);
-        }
+
 
         final SnapshotterService snapshotterService = connectorConfig.getServiceRegistry().tryGetService(SnapshotterService.class);
 
@@ -135,8 +141,12 @@ public class As400ConnectorTask extends BaseSourceTask<As400Partition, As400Offs
         final As400RpcConnection rpcConnection = new As400RpcConnection(connectorConfig, streamingMetrics,
                 shortIncludes);
 
+
+        validateAndLoadSchemaHistory(connectorConfig, rpcConnection::validateLogPosition, previousOffsetPartition, schema,
+                snapshotterService.getSnapshotter());
+
         As400ConnectorConfig snapshotConnectorConfig = connectorConfig;
-        final Set<String> additionalTables = additionalTablesInConfigTables(connectorConfig, previousOffset, newConfig);
+        final Set<String> additionalTables = additionalTablesInConfigTables(previousOffset, newConfig);
         if (!additionalTables.isEmpty()) {
             final String newIncludes = String.join(",", additionalTables);
             LOGGER.info("found new tables to stream {}", newIncludes);
@@ -186,8 +196,7 @@ public class As400ConnectorTask extends BaseSourceTask<As400Partition, As400Offs
         return Module.name();
     }
 
-    private Set<String> additionalTablesInConfigTables(final As400ConnectorConfig connectorConfig,
-                                                       As400OffsetContext previousOffset, As400ConnectorConfig newConfig) {
+    private Set<String> additionalTablesInConfigTables(As400OffsetContext previousOffset, As400ConnectorConfig newConfig) {
         final String newInclude = newConfig.tableIncludeList();
         final String oldInclude = previousOffset.getIncludeTables();
         LOGGER.info("previous includes {} , new includes {}", oldInclude, newInclude);
