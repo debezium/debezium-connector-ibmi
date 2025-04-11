@@ -31,7 +31,8 @@ public class SelectAllSnapshotQuery implements SnapshotQuery {
     @Override
     public Optional<String> snapshotQuery(String tableId, List<String> snapshotSelectColumns) {
 
-        return Optional.of(snapshotSelectColumns.stream()
+        // if we include single quotes the column names turn into 00001,00002,... which we then can't map to the table
+        return Optional.of(snapshotSelectColumns.stream().map(x -> x.replace("'", "\""))
                 .collect(Collectors.joining(", ", "SELECT ", " FROM " + tableId)));
     }
 }
