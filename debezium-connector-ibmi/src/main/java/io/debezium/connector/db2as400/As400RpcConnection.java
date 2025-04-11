@@ -95,16 +95,19 @@ public class As400RpcConnection implements AutoCloseable, Connect<AS400, IOExcep
         return (as400 != null && as400.isConnectionAlive(AS400.COMMAND));
 
     }
-    
+
     public boolean validateLogPosition(Partition partition, OffsetContext offsetContext, CommonConnectorConfig config) {
         try {
             if (offsetContext instanceof As400OffsetContext offset) {
-                JournalReceiverInfo receiver = new JournalReceiverInfo(offset.getPosition().getReceiver(), null, null, Optional.empty()); 
-                
-                DetailedJournalReceiver dr = new JournalInfoRetrieval().getReceiverDetails(as400, receiver);
-                return dr != null;
+                if (offset.isPositionSet()) {
+                    JournalReceiverInfo receiver = new JournalReceiverInfo(offset.getPosition().getReceiver(), null, null, Optional.empty());
+
+                    DetailedJournalReceiver dr = new JournalInfoRetrieval().getReceiverDetails(as400, receiver);
+                    return dr != null;
+                }
             }
-        } catch (Exception e) {
+        }
+        catch (Exception e) {
             log.warn("unable to find journal poisition {}", offsetContext, e);
         }
         return false;

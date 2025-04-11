@@ -219,7 +219,7 @@ public class As400SnapshotChangeEventSource
             log.info("According to the connector configuration both schema and data will be snapshot.");
         }
         else {
-            log.info("According to the connector configuration only schema will be snapshot (this should always be done).");  
+            log.info("According to the connector configuration only schema will be snapshot (this should always be done).");
         }
 
         return new SnapshottingTask(true,
