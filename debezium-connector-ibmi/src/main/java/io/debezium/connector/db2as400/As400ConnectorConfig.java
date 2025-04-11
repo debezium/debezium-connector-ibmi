@@ -34,12 +34,10 @@ import io.debezium.relational.Tables.TableFilter;
 public class As400ConnectorConfig extends RelationalDatabaseConnectorConfig {
     private static final Logger LOGGER = LoggerFactory.getLogger(As400ConnectorTask.class);
     
-    private static TableIdToStringMapper tableToString = x -> {
+    public static TableIdToStringMapper tableToString = x -> {
         if (x.table() != null) {
             if (x.schema() != null) {
-                final StringBuilder sb = new StringBuilder(x.schema());
-                sb.append(".").append(x.table());
-                return sb.toString();
+                return String.format("%s.%s", x.schema(), x.table());
             }
             LOGGER.error("missing schema name {}, did the function expect the database.schema.table?", x);
         

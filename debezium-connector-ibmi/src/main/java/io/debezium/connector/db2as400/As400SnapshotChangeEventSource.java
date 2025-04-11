@@ -5,14 +5,12 @@
  */
 package io.debezium.connector.db2as400;
 
+import java.time.Duration;
 import java.time.Instant;
-import java.util.HashSet;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
-import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 import org.slf4j.Logger;
@@ -34,6 +32,7 @@ import io.debezium.schema.SchemaChangeEvent;
 import io.debezium.schema.SchemaChangeEvent.SchemaChangeEventType;
 import io.debezium.snapshot.SnapshotterService;
 import io.debezium.spi.schema.DataCollectionId;
+import io.debezium.spi.snapshot.Snapshotter;
 import io.debezium.util.Clock;
 
 public class As400SnapshotChangeEventSource
@@ -83,7 +82,28 @@ public class As400SnapshotChangeEventSource
     protected void lockTablesForSchemaSnapshot(ChangeEventSourceContext sourceContext,
                                                RelationalSnapshotContext<As400Partition, As400OffsetContext> snapshotContext)
             throws Exception {
-        // TODO lock tables
+        final Duration lockTimeout = connectorConfig.snapshotLockTimeout();
+        final Set<String> capturedTablesNames = snapshotContext.capturedTables.stream().map(As400ConnectorConfig.tableToString::toString).collect(Collectors.toSet());
+
+        List<String> tableLockStatements = capturedTablesNames.stream()
+                .map(tableId -> snapshotterService.getSnapshotLock().tableLockingStatement(lockTimeout, tableId))
+                .filter(Optional::isPresent)
+                .map(Optional::get)
+                .collect(Collectors.toList());
+
+        if (!tableLockStatements.isEmpty()) {
+
+            String lineSeparator = System.lineSeparator();
+            StringBuilder statements = new StringBuilder();
+            statements.append("SET lock_timeout = ").append(lockTimeout.toMillis()).append(";").append(lineSeparator);
+            // we're locking in ACCESS SHARE MODE to avoid concurrent schema changes while we're taking the snapshot
+            // this does not prevent writes to the table, but prevents changes to the table's schema....
+            // DBZ-298 Quoting name in case it has been quoted originally; it doesn't do harm if it hasn't been quoted
+            tableLockStatements.forEach(tableStatement -> statements.append(tableStatement).append(lineSeparator));
+
+            log.info("Waiting a maximum of '{}' seconds for each table lock", lockTimeout.getSeconds());
+            jdbcConnection.executeWithoutCommitting(statements.toString());
+        }
     }
 
     @Override
@@ -163,18 +183,24 @@ public class As400SnapshotChangeEventSource
     protected Optional<String> getSnapshotSelect(
                                                  RelationalSnapshotContext<As400Partition, As400OffsetContext> snapshotContext, TableId tableId,
                                                  List<String> columns) {
-        return Optional.of(String.format("SELECT * FROM %s.%s", tableId.schema(), tableId.table()));
+        String fullTableName = String.format("%s.%s", tableId.schema(), tableId.table());
+        return snapshotterService.getSnapshotQuery().snapshotQuery(fullTableName, columns);
     }
 
     @Override
     public SnapshottingTask getSnapshottingTask(As400Partition partition, As400OffsetContext previousOffset) {
+        final Snapshotter snapshotter = snapshotterService.getSnapshotter();
         final List<String> dataCollectionsToBeSnapshotted = connectorConfig.getDataCollectionsToBeSnapshotted();
         final Map<DataCollectionId, String> snapshotSelectOverridesByTable = connectorConfig.getSnapshotSelectOverridesByTable();
 
-        // found a previous offset and the earlier snapshot has completed
-        boolean previousOffsetsExist = previousOffset != null;
-        boolean snapshotInProcgres = previousOffset != null && !previousOffset.isSnapshotComplete();
-        if (previousOffset != null && previousOffset.isSnapshotComplete()) {
+        boolean offsetExists = previousOffset != null;
+        boolean snapshotInProgress = false;
+
+        if (offsetExists) {
+            snapshotInProgress = !previousOffset.isSnapshotComplete();
+        }
+
+        if (offsetExists && previousOffset.isSnapshotComplete()) {
             // when control tables in place
             if (!previousOffset.hasNewTables()) {
                 log.info(
@@ -182,18 +208,21 @@ public class As400SnapshotChangeEventSource
                 return new SnapshottingTask(true, false, dataCollectionsToBeSnapshotted,
                         snapshotSelectOverridesByTable, false);
             }
+            log.info("A previous offset indicating a completed snapshot has been found.");
         }
 
-        boolean snapshotData = snapshotterService.getSnapshotter().shouldSnapshotData(previousOffsetsExist, snapshotInProcgres);
-        if (snapshotData) {
-            log.info("According to the connector configuration both schema and data will be snapshotted");
+        boolean shouldSnapshotSchema = snapshotter.shouldSnapshotSchema(offsetExists, snapshotInProgress);
+        boolean shouldSnapshotData = snapshotter.shouldSnapshotData(offsetExists, snapshotInProgress);
+
+        if (shouldSnapshotData && shouldSnapshotSchema) {
+            log.info("According to the connector configuration both schema and data will be snapshot.");
         }
         else {
-            log.info("According to the connector configuration only schema will be snapshotted");
+            log.info("According to the connector configuration only schema will be snapshot (this should always be done).");  
         }
 
         return new SnapshottingTask(true,
-                snapshotData, dataCollectionsToBeSnapshotted,
+                shouldSnapshotData, dataCollectionsToBeSnapshotted,
                 snapshotSelectOverridesByTable, false);
     }
 
