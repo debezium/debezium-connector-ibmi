@@ -1,13 +1,10 @@
 package io.debezium.ibmi.db2.journal.data.types;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import com.ibm.as400.access.AS400ZonedDecimal;
+import com.ibm.as400.access.ExtendedIllegalArgumentException;
 
 public class AS400Boolean extends AS400ZonedDecimal {
     private static final long serialVersionUID = 1L;
-
-    private static final Logger log = LoggerFactory.getLogger(AS400Boolean.class);
 
     private static final Boolean DEFAULT_VALUE = Boolean.FALSE;
 
@@ -53,9 +50,7 @@ public class AS400Boolean extends AS400ZonedDecimal {
             case 1:
                 return Boolean.TRUE;
             default:
-                // We got back an unexpected value, log the details and return the default value
-                log.error("Unexpected value '{}'.  Returning default value '{}' instead", n, DEFAULT_VALUE);
-                return DEFAULT_VALUE;
+                throw new ExtendedIllegalArgumentException(String.valueOf(n), ExtendedIllegalArgumentException.PARAMETER_VALUE_NOT_VALID);
         }
     }
 }
