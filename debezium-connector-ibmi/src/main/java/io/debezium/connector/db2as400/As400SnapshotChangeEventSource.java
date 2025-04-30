@@ -95,13 +95,17 @@ public class As400SnapshotChangeEventSource
 
             String lineSeparator = System.lineSeparator();
             StringBuilder statements = new StringBuilder();
-            statements.append("SET lock_timeout = ").append(lockTimeout.toMillis()).append(";").append(lineSeparator);
-            // we're locking in ACCESS SHARE MODE to avoid concurrent schema changes while we're taking the snapshot
-            // this does not prevent writes to the table, but prevents changes to the table's schema....
+
+            // DB2 for the ibmi doesn't appear to support lock timeouts
+            
+            // there are 3 lock options SHARE MODE, EXCLUSIVE MODE ALLOW READ, EXCLUSIVE MODE           
+            // e.g.LOCK TABLE SCHEMA.NAME IN SHARE MODE;
+            
+            // no obvious mode prevents schema changes
             // DBZ-298 Quoting name in case it has been quoted originally; it doesn't do harm if it hasn't been quoted
             tableLockStatements.forEach(tableStatement -> statements.append(tableStatement).append(lineSeparator));
 
-            log.info("Waiting a maximum of '{}' seconds for each table lock", lockTimeout.getSeconds());
+            log.info("Waiting for each table lock");
             jdbcConnection.executeWithoutCommitting(statements.toString());
         }
     }
