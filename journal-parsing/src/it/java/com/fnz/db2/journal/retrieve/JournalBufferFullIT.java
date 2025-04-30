@@ -14,10 +14,16 @@ import org.junit.jupiter.api.Test;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import com.fnz.db2.journal.retrieve.SchemaCacheIF.TableInfo;
-import com.fnz.db2.journal.retrieve.rjne0200.OffsetStatus;
-import com.fnz.db2.journal.test.TestConnector;
 import com.ibm.as400.access.AS400;
+
+import io.debezium.ibmi.db2.journal.retrieve.Connect;
+import io.debezium.ibmi.db2.journal.retrieve.FileFilter;
+import io.debezium.ibmi.db2.journal.retrieve.JournalInfo;
+import io.debezium.ibmi.db2.journal.retrieve.JournalInfoRetrieval;
+import io.debezium.ibmi.db2.journal.retrieve.RetrieveJournal;
+import io.debezium.ibmi.db2.journal.retrieve.SchemaCacheIF.TableInfo;
+import io.debezium.ibmi.db2.journal.retrieve.rjne0200.OffsetStatus;
+import io.debezium.ibmi.db2.journal.test.TestConnector;
 
 /**
  * Tests to verify we retrieve all data when there is a continuation offset set
