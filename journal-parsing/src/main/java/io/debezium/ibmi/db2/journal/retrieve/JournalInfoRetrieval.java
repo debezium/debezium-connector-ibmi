@@ -341,7 +341,7 @@ public class JournalInfoRetrieval {
      * @return
      * @throws Exception
      */
-    private DetailedJournalReceiver getReceiverDetails(AS400 as400, JournalReceiverInfo receiverInfo) throws Exception {
+    public DetailedJournalReceiver getReceiverDetails(AS400 as400, JournalReceiverInfo receiverInfo) throws Exception {
         final int rcvLen = 32768;
         final String receiverNameLib = padRight(receiverInfo.receiver().name(), 10)
                 + padRight(receiverInfo.receiver().library(), 10);
