@@ -87,7 +87,7 @@ public class As400JdbcConnection extends JdbcConnection implements Connect<Conne
         this.toCcsid = config.getInteger(As400ConnectorConfig.TO_CCSID);
         this.config = config;
         realDatabaseName = retrieveRealDatabaseName();
-        log.debug("connection: {}", this.connectionString(URL_PATTERN));
+        log.debug("connection: {}", connectionString());
     }
 
     static JdbcConfiguration withDefaults(JdbcConfiguration config) {
@@ -101,6 +101,10 @@ public class As400JdbcConnection extends JdbcConnection implements Connect<Conne
 
         Configuration driverConfigWithDefaults = config.merge(defaults.build());
         return JdbcConfiguration.adapt(driverConfigWithDefaults);
+    }
+
+    public String connectionString() {
+        return this.connectionString(URL_PATTERN);
     }
 
     public List<FileFilter> shortIncludes(String schema, String includes) {
