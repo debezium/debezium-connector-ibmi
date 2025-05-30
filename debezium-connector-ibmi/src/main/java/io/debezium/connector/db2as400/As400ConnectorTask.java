@@ -9,6 +9,7 @@ import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
@@ -50,6 +51,7 @@ public class As400ConnectorTask extends BaseSourceTask<As400Partition, As400Offs
     private volatile ChangeEventQueue<DataChangeEvent> queue;
     private static final String CONTEXT_NAME = "db2as400-server-connector-task";
     private As400DatabaseSchema schema;
+    private ErrorHandler errorHandler;
 
     @Override
     public String version() {
@@ -88,7 +90,7 @@ public class As400ConnectorTask extends BaseSourceTask<As400Partition, As400Offs
                 .maxBatchSize(connectorConfig.getMaxBatchSize()).maxQueueSize(connectorConfig.getMaxQueueSize())
                 .loggingContextSupplier(() -> ctx.configureLoggingContext(CONTEXT_NAME)).build();
 
-        final ErrorHandler errorHandler = new ErrorHandler(As400RpcConnector.class, connectorConfig, queue, null);
+        errorHandler = new ErrorHandler(As400RpcConnector.class, connectorConfig, queue, null);
 
         Offsets<As400Partition, As400OffsetContext> previousOffsetPartition = getPreviousOffsets(
                 new As400Partition.Provider(connectorConfig), new As400OffsetContext.Loader(connectorConfig));
@@ -161,6 +163,11 @@ public class As400ConnectorTask extends BaseSourceTask<As400Partition, As400Offs
         return coordinator;
     }
 
+    @Override
+    protected String connectorName() {
+        return Module.name();
+    }
+
     private Set<String> additionalTablesInConfigTables(final As400ConnectorConfig connectorConfig,
                                                        As400OffsetContext previousOffset, As400ConnectorConfig newConfig) {
         final String newInclude = newConfig.tableIncludeList();
@@ -184,6 +191,11 @@ public class As400ConnectorTask extends BaseSourceTask<As400Partition, As400Offs
                 .collect(Collectors.toList());
 
         return sourceRecords;
+    }
+
+    @Override
+    protected Optional<ErrorHandler> getErrorHandler() {
+        return Optional.of(errorHandler);
     }
 
     @Override
