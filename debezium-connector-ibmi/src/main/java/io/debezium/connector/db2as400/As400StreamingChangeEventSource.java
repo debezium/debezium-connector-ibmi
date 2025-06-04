@@ -21,6 +21,7 @@ import org.slf4j.LoggerFactory;
 
 import io.debezium.DebeziumException;
 import io.debezium.connector.db2as400.As400RpcConnection.BlockingReceiverConsumer;
+import io.debezium.connector.db2as400.As400RpcConnection.RpcException;
 import io.debezium.data.Envelope.Operation;
 import io.debezium.ibmi.db2.journal.retrieve.JournalEntryType;
 import io.debezium.ibmi.db2.journal.retrieve.JournalProcessedPosition;
@@ -333,5 +334,17 @@ public class As400StreamingChangeEventSource implements StreamingChangeEventSour
 
     private boolean ignore(JournalEntryType journalCode) {
         return journalCode == JournalEntryType.OPEN || journalCode == JournalEntryType.CLOSE;
+    }
+
+    @Override
+    public As400OffsetContext getOffsetContext() {
+        // TODO should this be the last process position?
+        try {
+            return new As400OffsetContext(connectorConfig, new JournalProcessedPosition(dataConnection.getCurrentPosition(), null, true));
+        }
+        catch (RpcException e) {
+            log.error("failed to retrieve journal position", e);
+        }
+        return null;
     }
 }
