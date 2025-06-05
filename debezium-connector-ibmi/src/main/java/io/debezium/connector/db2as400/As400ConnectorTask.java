@@ -24,6 +24,7 @@ import io.debezium.config.Field;
 import io.debezium.connector.base.ChangeEventQueue;
 import io.debezium.connector.common.BaseSourceTask;
 import io.debezium.connector.common.CdcSourceTaskContext;
+import io.debezium.connector.common.DebeziumHeaderProducer;
 import io.debezium.connector.db2as400.metrics.As400ChangeEventSourceMetricsFactory;
 import io.debezium.connector.db2as400.metrics.As400StreamingChangeEventSourceMetrics;
 import io.debezium.document.DocumentReader;
@@ -81,6 +82,7 @@ public class As400ConnectorTask extends BaseSourceTask<As400Partition, As400Offs
         connectorConfig.getBeanRegistry().add(StandardBeanNames.CONFIGURATION, config);
         connectorConfig.getBeanRegistry().add(StandardBeanNames.CONNECTOR_CONFIG, connectorConfig);
         connectorConfig.getBeanRegistry().add(StandardBeanNames.DATABASE_SCHEMA, schema);
+        connectorConfig.getBeanRegistry().add(StandardBeanNames.CDC_SOURCE_TASK_CONTEXT, ctx);
 
         // Service providers
         registerServiceProviders(connectorConfig.getServiceRegistry());
@@ -138,7 +140,9 @@ public class As400ConnectorTask extends BaseSourceTask<As400Partition, As400Offs
                 queue, // ChangeEventQueue
                 newConfig.getTableFilters().dataCollectionFilter(), // DataCollectionFilter
                 DataChangeEvent::new, // ! ChangeEventCreator
-                metadataProvider, schemaNameAdjuster);
+                metadataProvider,
+                schemaNameAdjuster,
+                connectorConfig.getServiceRegistry().tryGetService(DebeziumHeaderProducer.class));
 
         final Clock clock = Clock.system();
 
