@@ -9,6 +9,7 @@ import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
@@ -18,14 +19,17 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import io.debezium.bean.StandardBeanNames;
+import io.debezium.config.CommonConnectorConfig;
 import io.debezium.config.Configuration;
 import io.debezium.config.Field;
 import io.debezium.connector.base.ChangeEventQueue;
 import io.debezium.connector.common.BaseSourceTask;
 import io.debezium.connector.common.CdcSourceTaskContext;
+import io.debezium.connector.common.DebeziumHeaderProducer;
 import io.debezium.connector.db2as400.metrics.As400ChangeEventSourceMetricsFactory;
 import io.debezium.connector.db2as400.metrics.As400StreamingChangeEventSourceMetrics;
 import io.debezium.document.DocumentReader;
+import io.debezium.function.LogPositionValidator;
 import io.debezium.ibmi.db2.journal.retrieve.FileFilter;
 import io.debezium.ibmi.db2.journal.retrieve.JournalProcessedPosition;
 import io.debezium.jdbc.DefaultMainConnectionProvidingConnectionFactory;
@@ -39,6 +43,7 @@ import io.debezium.pipeline.signal.SignalProcessor;
 import io.debezium.pipeline.spi.Offsets;
 import io.debezium.processors.PostProcessorRegistryServiceProvider;
 import io.debezium.relational.TableId;
+import io.debezium.schema.DatabaseSchema;
 import io.debezium.schema.SchemaFactory;
 import io.debezium.schema.SchemaNameAdjuster;
 import io.debezium.service.spi.ServiceRegistry;
@@ -46,6 +51,7 @@ import io.debezium.snapshot.SnapshotLockProvider;
 import io.debezium.snapshot.SnapshotQueryProvider;
 import io.debezium.snapshot.SnapshotterService;
 import io.debezium.snapshot.SnapshotterServiceProvider;
+import io.debezium.spi.snapshot.Snapshotter;
 import io.debezium.spi.topic.TopicNamingStrategy;
 import io.debezium.util.Clock;
 
@@ -54,6 +60,7 @@ public class As400ConnectorTask extends BaseSourceTask<As400Partition, As400Offs
     private volatile ChangeEventQueue<DataChangeEvent> queue;
     private static final String CONTEXT_NAME = "db2as400-server-connector-task";
     private As400DatabaseSchema schema;
+    private ErrorHandler errorHandler;
 
     @Override
     public String version() {
@@ -88,6 +95,7 @@ public class As400ConnectorTask extends BaseSourceTask<As400Partition, As400Offs
         connectorConfig.getBeanRegistry().add(StandardBeanNames.DATABASE_SCHEMA, schema);
         connectorConfig.getBeanRegistry().add(StandardBeanNames.JDBC_CONNECTION, jdbcConnectionFactory.newConnection());
         connectorConfig.getBeanRegistry().add(StandardBeanNames.OFFSETS, previousOffsetPartition);
+        connectorConfig.getBeanRegistry().add(StandardBeanNames.CDC_SOURCE_TASK_CONTEXT, ctx);
 
         // Service providers
         registerServiceProviders(connectorConfig.getServiceRegistry());
@@ -97,7 +105,7 @@ public class As400ConnectorTask extends BaseSourceTask<As400Partition, As400Offs
                 .maxBatchSize(connectorConfig.getMaxBatchSize()).maxQueueSize(connectorConfig.getMaxQueueSize())
                 .loggingContextSupplier(() -> ctx.configureLoggingContext(CONTEXT_NAME)).build();
 
-        final ErrorHandler errorHandler = new ErrorHandler(As400RpcConnector.class, connectorConfig, queue, null);
+        errorHandler = new ErrorHandler(As400RpcConnector.class, connectorConfig, queue, null);
 
         final SnapshotterService snapshotterService = connectorConfig.getServiceRegistry().tryGetService(SnapshotterService.class);
 
@@ -116,8 +124,8 @@ public class As400ConnectorTask extends BaseSourceTask<As400Partition, As400Offs
         final As400RpcConnection rpcConnection = new As400RpcConnection(connectorConfig, streamingMetrics,
                 shortIncludes);
 
-        if (previousOffsetPartition != null) {
-            validateAndLoadSchemaHistory(connectorConfig, rpcConnection::validateLogPosition, previousOffsetPartition, schema,
+        if (previousOffsetPartition != null) {           
+            validateSchemaHistory(connectorConfig, rpcConnection::validateLogPosition, previousOffsetPartition, schema,
                     snapshotterService.getSnapshotter());
         }
 
@@ -147,7 +155,9 @@ public class As400ConnectorTask extends BaseSourceTask<As400Partition, As400Offs
                 queue, // ChangeEventQueue
                 newConfig.getTableFilters().dataCollectionFilter(), // DataCollectionFilter
                 DataChangeEvent::new, // ! ChangeEventCreator
-                metadataProvider, schemaNameAdjuster);
+                metadataProvider,
+                schemaNameAdjuster,
+                connectorConfig.getServiceRegistry().tryGetService(DebeziumHeaderProducer.class));               
 
         final Clock clock = Clock.system();
 
@@ -172,10 +182,16 @@ public class As400ConnectorTask extends BaseSourceTask<As400Partition, As400Offs
         return coordinator;
     }
 
+    @Override
+    protected String connectorName() {
+        return Module.name();
+    }
+
     private Set<String> additionalTablesInConfigTables(As400OffsetContext previousOffset, As400ConnectorConfig newConfig) {
         if (previousOffset == null) {
             return Collections.emptySet();
         }
+
 
         final String newInclude = newConfig.tableIncludeList();
         final String oldInclude = previousOffset.getIncludeTables();
@@ -201,20 +217,16 @@ public class As400ConnectorTask extends BaseSourceTask<As400Partition, As400Offs
     }
 
     @Override
+    protected Optional<ErrorHandler> getErrorHandler() {
+        return Optional.of(errorHandler);
+    }
+
+    @Override
     protected void doStop() {
     }
 
     @Override
     protected Iterable<Field> getAllConfigurationFields() {
         return As400ConnectorConfig.ALL_FIELDS;
-    }
-
-    // TODO remove when DBZ-7700 is implemented
-    @Override
-    protected void registerServiceProviders(ServiceRegistry serviceRegistry) {
-        serviceRegistry.registerServiceProvider(new PostProcessorRegistryServiceProvider());
-        serviceRegistry.registerServiceProvider(new SnapshotLockProvider());
-        serviceRegistry.registerServiceProvider(new SnapshotQueryProvider());
-        serviceRegistry.registerServiceProvider(new SnapshotterServiceProvider());
     }
 }

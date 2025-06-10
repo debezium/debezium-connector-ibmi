@@ -34,6 +34,7 @@ import com.ibm.as400.access.AS400Time;
 import com.ibm.as400.access.AS400Timestamp;
 import com.ibm.as400.access.AS400ZonedDecimal;
 
+import io.debezium.ibmi.db2.journal.data.types.AS400Boolean;
 import io.debezium.ibmi.db2.journal.data.types.AS400VarBin;
 import io.debezium.ibmi.db2.journal.data.types.AS400VarChar;
 import io.debezium.ibmi.db2.journal.data.types.AS400Xml;
@@ -52,6 +53,7 @@ public class JdbcFileDecoder extends JournalFileEntryDecoder {
     private static final AS400Bin8 AS400_BIN8 = new AS400Bin8();
     private static final AS400Bin4 AS400_BIN4 = new AS400Bin4();
     private static final AS400Bin2 AS400_BIN2 = new AS400Bin2();
+    private static final AS400Boolean AS400_BOOLEAN = new AS400Boolean();
     private static final String GET_DATABASE_NAME = "values ( CURRENT_SERVER )";
     private static final String UNIQUE_KEYS = """
             SELECT c.column_name FROM qsys.QADBKATR k
@@ -288,6 +290,8 @@ public class JdbcFileDecoder extends JournalFileEntryDecoder {
     public AS400DataType toDataType(String schema, String table, String columnName, String type, int length,
                                     Integer precision) {
         switch (type) {
+            case "BOOLEAN":
+                return AS400_BOOLEAN;
             case "DECIMAL":
                 return new AS400PackedDecimal(length, precision);
             case "CHAR () FOR BIT DATA": // password fields - treat as binary
