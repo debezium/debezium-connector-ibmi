@@ -46,6 +46,10 @@
             <artifactId>connect-api</artifactId>
             <scope>provided</scope>
         </dependency>
+        <dependency>
+            <groupId>io.debezium</groupId>
+            <artifactId>debezium-common</artifactId>
+        </dependency>
 
         <!-- Testing -->
         <dependency>
