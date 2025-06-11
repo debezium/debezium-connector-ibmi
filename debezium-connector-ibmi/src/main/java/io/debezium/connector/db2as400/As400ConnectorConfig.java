@@ -15,6 +15,7 @@ import org.apache.kafka.common.config.ConfigDef.Width;
 
 import io.debezium.config.CommonConnectorConfig;
 import io.debezium.config.Configuration;
+import io.debezium.config.ConfigurationNames;
 import io.debezium.config.EnumeratedValue;
 import io.debezium.config.Field;
 import io.debezium.connector.SourceInfoStructMaker;
@@ -47,7 +48,7 @@ public class As400ConnectorConfig extends RelationalDatabaseConnectorConfig {
      * A field for the password to connect to the AS400. This field has no default
      * value.
      */
-    public static final Field SCHEMA = Field.create(DATABASE_CONFIG_PREFIX + "schema", "schema holding tables to capture");
+    public static final Field SCHEMA = Field.create(ConfigurationNames.DATABASE_CONFIG_PREFIX + "schema", "schema holding tables to capture");
 
     /**
      * A field for the size of buffer for fetching journal entries default 65535 (should not be smaller)

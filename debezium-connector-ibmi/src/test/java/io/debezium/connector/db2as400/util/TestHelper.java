@@ -10,6 +10,7 @@ import java.util.stream.Stream;
 
 import io.debezium.config.CommonConnectorConfig;
 import io.debezium.config.Configuration;
+import io.debezium.config.ConfigurationNames;
 import io.debezium.connector.db2as400.As400ConnectorConfig;
 import io.debezium.connector.db2as400.As400JdbcConnection;
 import io.debezium.jdbc.JdbcConfiguration;
@@ -19,7 +20,7 @@ public class TestHelper {
     private static final String DATABASE_NAME = "DTEST";
 
     public static JdbcConfiguration defaultJdbcConfig() {
-        return JdbcConfiguration.copy(Configuration.fromSystemProperties(As400ConnectorConfig.DATABASE_CONFIG_PREFIX))
+        return JdbcConfiguration.copy(Configuration.fromSystemProperties(ConfigurationNames.DATABASE_CONFIG_PREFIX))
                 .withDefault(JdbcConfiguration.PORT, "")
                 .withDefault(JdbcConfiguration.USER, "debezium")
                 .withDefault(JdbcConfiguration.DATABASE, DATABASE_NAME)
@@ -34,7 +35,7 @@ public class TestHelper {
         Configuration.Builder builder = Configuration.create();
 
         jdbcConfiguration.forEach(
-                (field, value) -> builder.with(As400ConnectorConfig.DATABASE_CONFIG_PREFIX + field, value));
+                (field, value) -> builder.with(ConfigurationNames.DATABASE_CONFIG_PREFIX + field, value));
 
         final var tableNamesStr = Stream.of(tableNames)
                 .map(x -> DATABASE_NAME + "." + x)
