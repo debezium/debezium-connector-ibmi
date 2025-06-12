@@ -108,10 +108,10 @@ public class As400ConnectorTask extends BaseSourceTask<As400Partition, As400Offs
 
         final As400StreamingChangeEventSourceMetrics streamingMetrics = new As400StreamingChangeEventSourceMetrics(
                 taskContext, queue, metadataProvider);
-        
+
         String configuredIncludes = newConfig.tableIncludeList();
         String signalDataCollection = config.getString(RelationalDatabaseConnectorConfig.SIGNAL_DATA_COLLECTION);
-        String allIncludes = configuredIncludes.length()>0 ? String.format("%s,%s", configuredIncludes, signalDataCollection) : "";
+        String allIncludes = configuredIncludes.length() > 0 ? String.format("%s,%s", configuredIncludes, signalDataCollection) : "";
 
         final List<FileFilter> shortIncludes = jdbcConnection.shortIncludes(schema.getSchemaName(),
                 allIncludes);
@@ -119,7 +119,7 @@ public class As400ConnectorTask extends BaseSourceTask<As400Partition, As400Offs
         final As400RpcConnection rpcConnection = new As400RpcConnection(connectorConfig, streamingMetrics,
                 shortIncludes);
 
-        if (previousOffsetPartition != null) {           
+        if (previousOffsetPartition != null) {
             validateSchemaHistory(connectorConfig, rpcConnection::validateLogPosition, previousOffsetPartition, schema,
                     snapshotterService.getSnapshotter());
         }
@@ -143,13 +143,12 @@ public class As400ConnectorTask extends BaseSourceTask<As400Partition, As400Offs
             previousOffsetPartition = Offsets.of(new As400Partition(connectorConfig.getLogicalName()),
                     previousOffset);
         }
-        
+
         final SignalProcessor<As400Partition, As400OffsetContext> signalProcessor = new SignalProcessor<>(
                 As400RpcConnector.class, connectorConfig, Map.of(),
                 getAvailableSignalChannels(),
                 DocumentReader.defaultReader(),
                 previousOffsetPartition);
-
 
         final EventDispatcher<As400Partition, TableId> dispatcher = new EventDispatcher<>(connectorConfig, // CommonConnectorConfig
                 topicNamingStrategy, // TopicSelector
@@ -160,13 +159,12 @@ public class As400ConnectorTask extends BaseSourceTask<As400Partition, As400Offs
                 metadataProvider,
                 schemaNameAdjuster,
                 signalProcessor,
-                connectorConfig.getServiceRegistry().tryGetService(DebeziumHeaderProducer.class));               
+                connectorConfig.getServiceRegistry().tryGetService(DebeziumHeaderProducer.class));
 
         final Clock clock = Clock.system();
 
         final As400ChangeEventSourceFactory changeFactory = new As400ChangeEventSourceFactory(newConfig, snapshotConnectorConfig, rpcConnection,
                 jdbcConnectionFactory, errorHandler, dispatcher, clock, schema, snapshotterService);
-
 
         final NotificationService<As400Partition, As400OffsetContext> notificationService = new NotificationService<>(getNotificationChannels(),
                 connectorConfig, SchemaFactory.get(), dispatcher::enqueueNotification);
@@ -189,7 +187,6 @@ public class As400ConnectorTask extends BaseSourceTask<As400Partition, As400Offs
         if (previousOffset == null) {
             return Collections.emptySet();
         }
-
 
         final String newInclude = newConfig.tableIncludeList();
         final String oldInclude = previousOffset.getIncludeTables();
