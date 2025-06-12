@@ -118,7 +118,7 @@ public class As400StreamingChangeEventSource implements StreamingChangeEventSour
                             metronome.pause();
                         }
                         if (!offsetContext.getPosition().equals(before)) {
-                            dispatcher.dispatchHeartbeatEvent(partition, offsetContext);
+                            dispatcher.dispatchHeartbeatEventAlsoToIncrementalSnapshot(partition, offsetContext);
                         }
                         retries = 0;
                     }

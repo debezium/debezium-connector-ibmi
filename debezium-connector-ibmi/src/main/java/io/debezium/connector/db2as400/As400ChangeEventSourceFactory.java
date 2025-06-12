@@ -18,6 +18,7 @@ import io.debezium.pipeline.source.spi.DataChangeEventListener;
 import io.debezium.pipeline.source.spi.SnapshotChangeEventSource;
 import io.debezium.pipeline.source.spi.SnapshotProgressListener;
 import io.debezium.pipeline.source.spi.StreamingChangeEventSource;
+import io.debezium.pipeline.spi.OffsetContext;
 import io.debezium.relational.TableId;
 import io.debezium.snapshot.SnapshotterService;
 import io.debezium.spi.schema.DataCollectionId;
