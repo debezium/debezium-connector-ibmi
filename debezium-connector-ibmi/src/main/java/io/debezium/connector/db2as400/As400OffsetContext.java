@@ -53,7 +53,7 @@ public class As400OffsetContext extends CommonOffsetContext<SourceInfo> {
     private final JournalProcessedPosition position;
     private final String includeTables;
     private boolean hasNewTables = false;
-    private final IncrementalSnapshotContext<TableId> incrementalSnapshotContext = new SignalBasedIncrementalSnapshotContext<>();
+    private final IncrementalSnapshotContext<TableId> incrementalSnapshotContext = new SignalBasedIncrementalSnapshotContext<>(true);
 
     public As400OffsetContext(As400ConnectorConfig connectorConfig) {
         super(new SourceInfo(connectorConfig), false);
@@ -121,7 +121,8 @@ public class As400OffsetContext extends CommonOffsetContext<SourceInfo> {
         if (null != offset) {
             offsetStr = offset.toString();
         }
-        String time = Long.toString(position.getTimeOfLastProcessed().getEpochSecond());
+        Instant last = position.getTimeOfLastProcessed();
+        String time = last == null ? "" : Long.toString(last.getEpochSecond());
         return new HashMap<>(Map.of(As400OffsetContext.EVENT_SEQUENCE, offsetStr,
                 As400OffsetContext.EVENT_TIME, time,
                 As400OffsetContext.RECEIVER, position.getReceiver().name(),
@@ -171,7 +172,7 @@ public class As400OffsetContext extends CommonOffsetContext<SourceInfo> {
         @Override
         public As400OffsetContext load(Map<String, ?> map) {
             final String offsetStr = (String) map.get(As400OffsetContext.EVENT_SEQUENCE);
-            final String TimeStr = (String) map.get(As400OffsetContext.EVENT_TIME);
+            final String timeStr = (String) map.get(As400OffsetContext.EVENT_TIME);
             final String complete = (String) map.get(As400OffsetContext.SNAPSHOT_COMPLETED_KEY);
             boolean snapshotComplete = false;
             if (null != complete) {
@@ -187,10 +188,10 @@ public class As400OffsetContext extends CommonOffsetContext<SourceInfo> {
             }
             else {
                 final BigInteger offset = new BigInteger(offsetStr);
-                Instant time = (TimeStr == null) ? Instant.ofEpochSecond(0) : Instant.ofEpochSecond(Long.parseLong(TimeStr));
+                Instant time = (timeStr == null || timeStr.isBlank()) ? Instant.ofEpochSecond(0) : Instant.ofEpochSecond(Long.parseLong(timeStr));
                 position = new JournalProcessedPosition(offset, new JournalReceiver(receiver, receiverLibrary), time, processed);
             }
-            return new As400OffsetContext(connectorConfig, position, inclueTables, snapshotComplete, SignalBasedIncrementalSnapshotContext.load(map));
+            return new As400OffsetContext(connectorConfig, position, inclueTables, snapshotComplete, SignalBasedIncrementalSnapshotContext.load(map, true));
         }
     }
 
