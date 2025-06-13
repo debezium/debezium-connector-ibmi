@@ -30,13 +30,13 @@ import com.ibm.as400.access.TimestampFieldDescription;
 import io.debezium.ibmi.db2.journal.retrieve.XaTransactionDecoder;
 
 public class EntryHeaderDecoder {
-    private final static AS400Structure structure;
+    private final AS400Structure structure;
     private final XaTransactionDecoder txDecoder = new XaTransactionDecoder();
-    private static final ReceiverNameDecoder nameDecoder = new ReceiverNameDecoder();
+    private final ReceiverNameDecoder nameDecoder = new ReceiverNameDecoder();
     private static String[] EMPTY = { "", "" };
     private static final Logger log = LoggerFactory.getLogger(EntryHeaderDecoder.class);
 
-    static {
+    public EntryHeaderDecoder() {
         ArrayList<AS400DataType> dataTypes = new ArrayList<AS400DataType>();
         AS400Timestamp timeType = new AS400Timestamp();
 

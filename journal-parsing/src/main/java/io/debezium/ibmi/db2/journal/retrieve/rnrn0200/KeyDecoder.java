@@ -23,9 +23,9 @@ import com.ibm.as400.access.FieldDescription;
 public class KeyDecoder {
     private static final Logger log = LoggerFactory.getLogger(KeyDecoder.class);
 
-    private final static AS400Structure structure;
+    private final AS400Structure structure;
 
-    static {
+    public KeyDecoder() {
         ArrayList<AS400DataType> dataTypes = new ArrayList<AS400DataType>();
         AS400Timestamp timeType = new AS400Timestamp();
         try {

@@ -6,15 +6,13 @@
 package io.debezium.ibmi.db2.journal.data.types;
 
 import com.ibm.as400.access.AS400Bin2;
-import com.ibm.as400.access.AS400Bin4;
 import com.ibm.as400.access.AS400DataType;
 import com.ibm.as400.access.AS400Text;
 import com.ibm.as400.access.InternalErrorException;
 import com.ibm.as400.access.Trace;
 
 public class AS400VarChar implements AS400DataType {
-    private static final AS400Bin2 AS400_BIN2 = new AS400Bin2();
-    private static final AS400Bin4 AS400_BIN4 = new AS400Bin4();
+    private final AS400Bin2 as400Bin2 = new AS400Bin2();
     private final int maxLenght;
     private final static String defaultValue = "";
     private int actualLength;
@@ -93,7 +91,7 @@ public class AS400VarChar implements AS400DataType {
     @Override
     public Object toObject(byte[] data, int offset) {
         final int lenOffset = 2;
-        actualLength = (Short) AS400_BIN2.toObject(data, offset);
+        actualLength = (Short) as400Bin2.toObject(data, offset);
         actualLength *= bytesPerChar;
         final AS400Text txt = (ccsid > 0) ? new AS400Text(actualLength, ccsid) : new AS400Text(actualLength);
         final String text = (String) txt.toObject(data, offset + lenOffset);
