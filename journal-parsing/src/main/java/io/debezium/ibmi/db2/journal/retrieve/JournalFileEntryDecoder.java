@@ -43,12 +43,12 @@ public abstract class JournalFileEntryDecoder implements JournalEntryDeocder<Obj
     }
 
     static final Logger log = LoggerFactory.getLogger(JournalEntryDeocder.class);
-    static final AS400UnsignedBin4 NullIndicatorLengthDecoder = new AS400UnsignedBin4();
+    final AS400UnsignedBin4 nullIndicatorLengthDecoder = new AS400UnsignedBin4();
 
     private boolean[] getNullFieldIndicators(byte[] data, int nullEntryOffset, int offset) {
         boolean[] isNull = null;
         if (nullEntryOffset != 0) {
-            long l = NullIndicatorLengthDecoder.toLong(data, offset + nullEntryOffset);
+            long l = nullIndicatorLengthDecoder.toLong(data, offset + nullEntryOffset);
             if (l > Integer.MAX_VALUE) {
                 log.error("null indicator length unreasonably large {}", l);
                 return null;

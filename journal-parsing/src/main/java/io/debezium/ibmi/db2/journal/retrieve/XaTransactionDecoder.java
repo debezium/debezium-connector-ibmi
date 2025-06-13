@@ -16,7 +16,8 @@ import com.ibm.as400.access.CharacterFieldDescription;
 import com.ibm.as400.access.FieldDescription;
 
 public class XaTransactionDecoder {
-    static final AS400Structure structure;
+    final AS400Structure structure;
+
     /*
      * long formatID; Format id
      * Value of -1 (constant NULLXID) means that XID is null.
@@ -24,7 +25,7 @@ public class XaTransactionDecoder {
      * long bqual_length; Length of branch qualifier
      * char data[XIDDATASIZE]; Transaction branch id
      */
-    static {
+    public XaTransactionDecoder() {
         FieldDescription[] fds = new FieldDescription[]{
                 new BinaryFieldDescription(new AS400Bin4(), "SRCDAT"),
                 new BinaryFieldDescription(new AS400Bin4(), "SRCSEQ"),

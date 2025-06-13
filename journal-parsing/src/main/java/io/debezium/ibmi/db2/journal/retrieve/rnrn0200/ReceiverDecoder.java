@@ -6,12 +6,16 @@
 package io.debezium.ibmi.db2.journal.retrieve.rnrn0200;
 
 import java.lang.reflect.Field;
+import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.text.ParseException;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Date;
 import java.util.Optional;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import com.ibm.as400.access.AS400Bin4;
 import com.ibm.as400.access.AS400DataType;
@@ -27,9 +31,10 @@ import io.debezium.ibmi.db2.journal.retrieve.StringHelpers;
 
 // https://www.ibm.com/docs/en/i/7.2?topic=ssw_ibm_i_72/apis/QJORJRNI.htm "Key 1 output section"
 public class ReceiverDecoder {
-    private final static AS400Structure structure;
+    private final AS400Structure structure;
+    private static final Logger log = LoggerFactory.getLogger(ReceiverDecoder.class);
 
-    static {
+    public ReceiverDecoder() {
         ArrayList<AS400DataType> dataTypes = new ArrayList<AS400DataType>();
         AS400Timestamp timeType = new AS400Timestamp();
         try {
@@ -40,8 +45,8 @@ public class ReceiverDecoder {
             privateSetFormat.setAccessible(true);
             privateSetFormat.invoke(timeType, dtsformat);
         }
-        catch (Exception e) {
-            e.printStackTrace();
+        catch (IllegalAccessException | IllegalArgumentException | InvocationTargetException | NoSuchFieldException | SecurityException | NoSuchMethodException e) {
+            throw new RuntimeException("Failed to setup ReceiverDecoder", e);
         }
 
         FieldDescription[] fds = new FieldDescription[]{

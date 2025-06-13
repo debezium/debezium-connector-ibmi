@@ -33,12 +33,8 @@ import com.ibm.as400.access.AS400Text;
  *
  */
 public class RetrievalCriteria {
-    private static final AS400DataType[] AS400_DATA_TYPES_2 = new AS400DataType[2];
-    private static final AS400Text AS400_TEXT_20 = new AS400Text(20);
-    private static final AS400Text AS400_TEXT_10 = new AS400Text(10);
-    private static final AS400Text AS400_TEXT_40 = new AS400Text(40);
+    private static final int AS400_TEXT_20_LENGTTH = (new AS400Text(20)).getByteLength();
     private static final Logger log = LoggerFactory.getLogger(RetrievalCriteria.class);
-    private static final AS400Bin4 BIN4 = new AS400Bin4();
     private ArrayList<AS400DataType> structure = new ArrayList<AS400DataType>();
     private ArrayList<Object> data = new ArrayList<Object>();
 
@@ -65,16 +61,16 @@ public class RetrievalCriteria {
             throw new IllegalArgumentException(
                     String.format("value '%s' for 'Range of journal receivers' must be either '*CURAVLCHN' or '*CURCHAIN' or '*CURRENT'", value));
         }
-        addStructureData(RetrieveKey.RCVRNG, AS400_TEXT_40, temp);
+        addStructureData(RetrieveKey.RCVRNG, new AS400Text(40), temp);
     }
 
     public void withReceiverRange(String startReceiver, String startLibrary, String endReceiver, String endLibrary) {
         String padded = String.format("%-10s%-10s%-10s%-10s", startReceiver, startLibrary, endReceiver, endLibrary);
-        addStructureData(RetrieveKey.RCVRNG, AS400_TEXT_40, padded);
+        addStructureData(RetrieveKey.RCVRNG, new AS400Text(40), padded);
     }
 
     public void withLenNullPointerIndicatorVarLength() {
-        addStructureData(RetrieveKey.NULLINDLEN, AS400_TEXT_10, StringHelpers.padRight("*VARLEN", 10));
+        addStructureData(RetrieveKey.NULLINDLEN, new AS400Text(10), StringHelpers.padRight("*VARLEN", 10));
     }
 
     public void withNullPointerIndicatorLength(int value) {
@@ -84,7 +80,7 @@ public class RetrievalCriteria {
                     "Value %d for 'Null value indicators length' should be divisible by 16", value));
         }
         padded = StringHelpers.padLeft(Integer.toString(value), 10);
-        addStructureData(RetrieveKey.NULLINDLEN, AS400_TEXT_10, padded);
+        addStructureData(RetrieveKey.NULLINDLEN, new AS400Text(10), padded);
     }
 
     /**
@@ -94,8 +90,8 @@ public class RetrievalCriteria {
      * @param value
      */
     public void withFromEnt(FromEnt value) {
-        String temp = StringHelpers.padRight(value.getValue(), AS400_TEXT_20.getByteLength());
-        addStructureData(RetrieveKey.FROMENT, AS400_TEXT_20, temp);
+        String temp = StringHelpers.padRight(value.getValue(), AS400_TEXT_20_LENGTTH);
+        addStructureData(RetrieveKey.FROMENT, new AS400Text(20), temp);
     }
 
     /**
@@ -106,20 +102,20 @@ public class RetrievalCriteria {
      */
     public void withFromEnt(BigInteger value) {
         String temp = String.format("%20d", value);
-        addStructureData(RetrieveKey.FROMENT, AS400_TEXT_20, temp);
+        addStructureData(RetrieveKey.FROMENT, new AS400Text(20), temp);
     }
 
     public void withStart() {
-        addStructureData(RetrieveKey.FROMENT, AS400_TEXT_20, "*FIRST");
+        addStructureData(RetrieveKey.FROMENT, new AS400Text(20), "*FIRST");
     }
 
     public void withEnd() {
-        addStructureData(RetrieveKey.TOENT, AS400_TEXT_20, "*LAST");
+        addStructureData(RetrieveKey.TOENT, new AS400Text(20), "*LAST");
     }
 
     public void withEnd(BigInteger value) {
         String temp = String.format("%20d", value);
-        addStructureData(RetrieveKey.TOENT, AS400_TEXT_20, temp);
+        addStructureData(RetrieveKey.TOENT, new AS400Text(20), temp);
     }
 
     /**
@@ -131,7 +127,7 @@ public class RetrievalCriteria {
      * @param value
      */
     private void withMaxEntriesToReturn(Integer value) {
-        addStructureData(RetrieveKey.NBRENT, BIN4, value);
+        addStructureData(RetrieveKey.NBRENT, new AS400Bin4(), value);
     }
 
     /**
@@ -157,8 +153,8 @@ public class RetrievalCriteria {
         temp2[0] = Integer.valueOf(count);
         temp2[1] = codes;
 
-        AS400DataType type[] = AS400_DATA_TYPES_2;
-        type[0] = BIN4;
+        AS400DataType type[] = new AS400DataType[2];
+        type[0] = new AS400Bin4();
         type[1] = new AS400Text(codes.length());
         AS400Structure temp2Structure = new AS400Structure(type);
 
@@ -185,8 +181,8 @@ public class RetrievalCriteria {
         temp2[0] = Integer.valueOf(count);
         temp2[1] = temp;
 
-        AS400DataType[] type = AS400_DATA_TYPES_2;
-        type[0] = BIN4;
+        AS400DataType[] type = new AS400DataType[2];
+        type[0] = new AS400Bin4();
         type[1] = new AS400Text(temp.length());
         AS400Structure temp2Structure = new AS400Structure(type);
 
@@ -216,15 +212,15 @@ public class RetrievalCriteria {
         Object[] fdata = new Object[length * 3 + 1];
         AS400DataType types[] = new AS400DataType[length * 3 + 1];
         fdata[0] = Integer.valueOf(length);
-        types[0] = BIN4;
+        types[0] = new AS400Bin4();
 
         int i = 1;
         for (FileFilter f : fileFilters) {
-            types[i] = AS400_TEXT_10;
+            types[i] = new AS400Text(10);
             fdata[i++] = StringHelpers.padRight(f.table().toUpperCase(), 10);
-            types[i] = AS400_TEXT_10;
+            types[i] = new AS400Text(10);
             fdata[i++] = StringHelpers.padRight(f.schema().toUpperCase(), 10);
-            types[i] = AS400_TEXT_10;
+            types[i] = new AS400Text(10);
             fdata[i++] = "*ALL      ";
         }
 
@@ -235,7 +231,7 @@ public class RetrievalCriteria {
     public void reset() {
         structure.clear();
         data.clear();
-        structure.add(BIN4);
+        structure.add(new AS400Bin4());
         data.add(Integer.valueOf(0));
     }
 
@@ -247,9 +243,9 @@ public class RetrievalCriteria {
      * @param value
      */
     private void addStructureData(RetrieveKey rKey, AS400DataType valueType, Object value) {
-        AS400Bin4 totalLengthType = BIN4;
-        AS400Bin4 keyType = BIN4;
-        AS400Bin4 valueLenghtType = BIN4;
+        AS400Bin4 totalLengthType = new AS400Bin4();
+        AS400Bin4 keyType = new AS400Bin4();
+        AS400Bin4 valueLenghtType = new AS400Bin4();
 
         int totalLengthValue = totalLengthType.getByteLength() + keyType.getByteLength()
                 + valueLenghtType.getByteLength() + valueType.getByteLength();

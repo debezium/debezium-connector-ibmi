@@ -54,8 +54,9 @@ class JournalConcurrentUpdatesResetJournalsIT {
 		connector = new TestConnector(SCHEMA);
 		final Connect<Connection, SQLException> jdbcCon = connector.getJdbc();
 		setupTables(jdbcCon.connection());
+		JournalInfoRetrieval journalInfoRegrieval = new JournalInfoRetrieval();
 
-		journal = JournalInfoRetrieval.getJournal(connector.getAs400().connection(), SCHEMA, includes);
+		journal = journalInfoRegrieval.getJournal(connector.getAs400().connection(), SCHEMA, includes);
 		log.debug("journal {}", journal);
 
 		log.debug("set up");

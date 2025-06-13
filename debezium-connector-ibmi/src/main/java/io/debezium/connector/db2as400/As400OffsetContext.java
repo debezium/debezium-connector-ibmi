@@ -71,7 +71,7 @@ public class As400OffsetContext extends CommonOffsetContext<SourceInfo> {
         sourceInfo = new SourceInfo(connectorConfig);
     }
 
-    public As400OffsetContext(As400ConnectorConfig connectorConfig, JournalProcessedPosition position, 
+    public As400OffsetContext(As400ConnectorConfig connectorConfig, JournalProcessedPosition position,
                               boolean snapshotComplete, IncrementalSnapshotContext<TableId> incrementalSnapshotContext) {
         super(new SourceInfo(connectorConfig), snapshotComplete);
         partition = Collections.singletonMap(SERVER_PARTITION_KEY, connectorConfig.getLogicalName());
