@@ -28,6 +28,7 @@ import io.debezium.pipeline.txmetadata.TransactionContext;
 import io.debezium.relational.RelationalDatabaseConnectorConfig;
 import io.debezium.relational.TableId;
 import io.debezium.spi.schema.DataCollectionId;
+import io.debezium.util.Strings;
 
 public class As400OffsetContext extends CommonOffsetContext<SourceInfo> {
     private static final Logger log = LoggerFactory.getLogger(As400OffsetContext.class);
@@ -188,7 +189,7 @@ public class As400OffsetContext extends CommonOffsetContext<SourceInfo> {
             }
             else {
                 final BigInteger offset = new BigInteger(offsetStr);
-                Instant time = (timeStr == null || timeStr.isBlank()) ? Instant.ofEpochSecond(0) : Instant.ofEpochSecond(Long.parseLong(timeStr));
+                Instant time = (Strings.isNullOrBlank(timeStr)) ? Instant.ofEpochSecond(0) : Instant.ofEpochSecond(Long.parseLong(timeStr));
                 position = new JournalProcessedPosition(offset, new JournalReceiver(receiver, receiverLibrary), time, processed);
             }
             return new As400OffsetContext(connectorConfig, position, inclueTables, snapshotComplete, SignalBasedIncrementalSnapshotContext.load(map, true));
