@@ -57,8 +57,8 @@ class JournalBufferFullIT {
 		connector = new TestConnector(SCHEMA);
 		final Connect<Connection, SQLException> jdbcCon = connector.getJdbc();
 		setupTables(jdbcCon.connection());
-
-		journal = JournalInfoRetrieval.getJournal(connector.getAs400().connection(), SCHEMA, includes);
+		JournalInfoRetrieval journalInfoRegrieval = new JournalInfoRetrieval();
+		journal = journalInfoRegrieval.getJournal(connector.getAs400().connection(), SCHEMA, includes);
 		log.debug("journal {}", journal);
 
 		log.debug("set up");

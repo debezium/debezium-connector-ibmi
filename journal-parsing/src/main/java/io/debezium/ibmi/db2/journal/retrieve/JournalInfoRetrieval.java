@@ -50,12 +50,12 @@ public class JournalInfoRetrieval {
     public static final String JOURNAL_SERVICE_LIB = "/QSYS.LIB/QJOURNAL.SRVPGM";
 
     private static final byte[] EMPTY_AS400_TEXT = new AS400Text(0).toBytes("");
-    private static final AS400Text AS400_TEXT_8 = new AS400Text(8);
-    private static final AS400Text AS400_TEXT_20 = new AS400Text(20);
-    private static final AS400Text AS400_TEXT_1 = new AS400Text(1);
-    private static final AS400Text AS400_TEXT_10 = new AS400Text(10);
-    private static final AS400Bin8 AS400_BIN8 = new AS400Bin8();
-    private static final AS400Bin4 AS400_BIN4 = new AS400Bin4();
+    private final AS400Text as400Text8 = new AS400Text(8);
+    private final AS400Text as400Text20 = new AS400Text(20);
+    private final AS400Text as400Text1 = new AS400Text(1);
+    private final AS400Text as400Text10 = new AS400Text(10);
+    private final AS400Bin8 as400Bin8 = new AS400Bin8();
+    private final AS400Bin4 as400Bin4 = new AS400Bin4();
     private static final int KEY_HEADER_LENGTH = 20;
     private final DetailedJournalReceiverCache cache = new DetailedJournalReceiverCache();
 
@@ -64,14 +64,14 @@ public class JournalInfoRetrieval {
     }
 
     public JournalPosition getCurrentPosition(AS400 as400, JournalInfo journalLib) throws Exception {
-        final JournalReceiver ji = JournalInfoRetrieval.getReceiver(as400, journalLib);
+        final JournalReceiver ji = getReceiver(as400, journalLib);
         final BigInteger offset = getOffset(as400, ji).end();
         return new JournalPosition(offset, ji);
     }
 
     public DetailedJournalReceiver getCurrentDetailedJournalReceiver(AS400 as400, JournalInfo journalLib)
             throws Exception {
-        final JournalReceiver ji = JournalInfoRetrieval.getReceiver(as400, journalLib);
+        final JournalReceiver ji = getReceiver(as400, journalLib);
         return getOffset(as400, ji);
     }
 
@@ -97,7 +97,7 @@ public class JournalInfoRetrieval {
         throw new IllegalStateException("Journal not found");
     }
 
-    public static JournalInfo getJournal(AS400 as400, String schema, List<FileFilter> includes)
+    public JournalInfo getJournal(AS400 as400, String schema, List<FileFilter> includes)
             throws IllegalStateException {
         if (includes.isEmpty()) {
             return getJournal(as400, schema);
@@ -123,7 +123,7 @@ public class JournalInfoRetrieval {
         }
     }
 
-    public static JournalInfo getJournal(AS400 as400, String schema, String table) throws Exception {
+    public JournalInfo getJournal(AS400 as400, String schema, String table) throws Exception {
         final int rcvLen = 32768;
         final String filename = padRight(table.toUpperCase(), 10) + padRight(schema.toUpperCase(), 10);
 
@@ -132,39 +132,39 @@ public class JournalInfoRetrieval {
                                                                                   // Receiver
                                                                                   // variable
                                                                                   // (output)
-                new ProgramParameter(ProgramParameter.PASS_BY_REFERENCE, AS400_BIN4.toBytes(rcvLen)), // 2
-                                                                                                      // Length
-                                                                                                      // of
-                                                                                                      // receiver
-                                                                                                      // variable
+                new ProgramParameter(ProgramParameter.PASS_BY_REFERENCE, as400Bin4.toBytes(rcvLen)), // 2
+                                                                                                     // Length
+                                                                                                     // of
+                                                                                                     // receiver
+                                                                                                     // variable
                 new ProgramParameter(ProgramParameter.PASS_BY_REFERENCE, 20), // 3
                                                                               // Qualified
                                                                               // returned
                                                                               // file
                                                                               // name
                                                                               // (output)
-                new ProgramParameter(ProgramParameter.PASS_BY_REFERENCE, AS400_TEXT_8.toBytes("FILD0100")), // 4
-                                                                                                            // Format
-                                                                                                            // name
-                new ProgramParameter(ProgramParameter.PASS_BY_REFERENCE, AS400_TEXT_20.toBytes(filename)), // 5
-                                                                                                           // Qualified
-                                                                                                           // file
-                                                                                                           // name
-                new ProgramParameter(ProgramParameter.PASS_BY_REFERENCE, AS400_TEXT_10.toBytes("*FIRST")), // 6
-                                                                                                           // Record
-                                                                                                           // format
-                                                                                                           // name
-                new ProgramParameter(ProgramParameter.PASS_BY_REFERENCE, AS400_TEXT_1.toBytes("0")), // 7
-                                                                                                     // Override
-                                                                                                     // processing
-                new ProgramParameter(ProgramParameter.PASS_BY_REFERENCE, AS400_TEXT_10.toBytes("*LCL")), // 8
-                                                                                                         // System
-                new ProgramParameter(ProgramParameter.PASS_BY_REFERENCE, AS400_TEXT_10.toBytes("*INT")), // 9
-                                                                                                         // Format
-                                                                                                         // type
-                new ProgramParameter(ProgramParameter.PASS_BY_REFERENCE, AS400_BIN4.toBytes(0)), // 10
-                                                                                                 // Error
-                                                                                                 // Code
+                new ProgramParameter(ProgramParameter.PASS_BY_REFERENCE, as400Text8.toBytes("FILD0100")), // 4
+                                                                                                          // Format
+                                                                                                          // name
+                new ProgramParameter(ProgramParameter.PASS_BY_REFERENCE, as400Text20.toBytes(filename)), // 5
+                                                                                                         // Qualified
+                                                                                                         // file
+                                                                                                         // name
+                new ProgramParameter(ProgramParameter.PASS_BY_REFERENCE, as400Text10.toBytes("*FIRST")), // 6
+                                                                                                         // Record
+                                                                                                         // format
+                                                                                                         // name
+                new ProgramParameter(ProgramParameter.PASS_BY_REFERENCE, as400Text1.toBytes("0")), // 7
+                                                                                                   // Override
+                                                                                                   // processing
+                new ProgramParameter(ProgramParameter.PASS_BY_REFERENCE, as400Text10.toBytes("*LCL")), // 8
+                                                                                                       // System
+                new ProgramParameter(ProgramParameter.PASS_BY_REFERENCE, as400Text10.toBytes("*INT")), // 9
+                                                                                                       // Format
+                                                                                                       // type
+                new ProgramParameter(ProgramParameter.PASS_BY_REFERENCE, as400Bin4.toBytes(0)), // 10
+                                                                                                // Error
+                                                                                                // Code
         };
 
         final ProgramCall pc = new ProgramCall();
@@ -190,7 +190,6 @@ public class JournalInfoRetrieval {
     }
 
     public static class JournalRetrievalCriteria {
-        private static final AS400Text AS400_TEXT_1 = new AS400Text(1);
         private static final Integer ZERO_INT = Integer.valueOf(0);
         private static final Integer TWELVE_INT = Integer.valueOf(12);
         private static final Integer ONE_INT = Integer.valueOf(1);
@@ -199,11 +198,11 @@ public class JournalInfoRetrieval {
 
         public JournalRetrievalCriteria() {
             // first element is the number of variable length records
-            structure.add(AS400_BIN4);
-            structure.add(AS400_BIN4);
-            structure.add(AS400_BIN4);
-            structure.add(AS400_BIN4);
-            structure.add(AS400_TEXT_1);
+            structure.add(new AS400Bin4());
+            structure.add(new AS400Bin4());
+            structure.add(new AS400Bin4());
+            structure.add(new AS400Bin4());
+            structure.add(new AS400Text(1));
             data.add(ONE_INT); // number of records
             data.add(TWELVE_INT); // data length
             data.add(ONE_INT); // 1 = journal directory info
@@ -230,17 +229,17 @@ public class JournalInfoRetrieval {
      * @return
      * @throws Exception
      */
-    public static JournalReceiver getReceiver(AS400 as400, JournalInfo journalLib) throws Exception {
+    public JournalReceiver getReceiver(AS400 as400, JournalInfo journalLib) throws Exception {
         final int rcvLen = 4096;
         final String jrnLib = padRight(journalLib.journalName(), 10) + padRight(journalLib.journalLibrary(), 10);
         final String format = "RJRN0200";
         final ProgramParameter[] parameters = new ProgramParameter[]{
                 new ProgramParameter(ProgramParameter.PASS_BY_REFERENCE, rcvLen),
-                new ProgramParameter(ProgramParameter.PASS_BY_REFERENCE, AS400_BIN4.toBytes(rcvLen / 4096)),
-                new ProgramParameter(ProgramParameter.PASS_BY_REFERENCE, AS400_TEXT_20.toBytes(jrnLib)),
-                new ProgramParameter(ProgramParameter.PASS_BY_REFERENCE, AS400_TEXT_8.toBytes(format)),
+                new ProgramParameter(ProgramParameter.PASS_BY_REFERENCE, as400Bin4.toBytes(rcvLen / 4096)),
+                new ProgramParameter(ProgramParameter.PASS_BY_REFERENCE, as400Text20.toBytes(jrnLib)),
+                new ProgramParameter(ProgramParameter.PASS_BY_REFERENCE, as400Text8.toBytes(format)),
                 new ProgramParameter(ProgramParameter.PASS_BY_REFERENCE, EMPTY_AS400_TEXT),
-                new ProgramParameter(ProgramParameter.PASS_BY_REFERENCE, AS400_BIN4.toBytes(0)) };
+                new ProgramParameter(ProgramParameter.PASS_BY_REFERENCE, as400Bin4.toBytes(0)) };
 
         return callServiceProgram(as400, JOURNAL_SERVICE_LIB, "QjoRetrieveJournalInformation", parameters,
                 (byte[] data) -> {
@@ -263,11 +262,11 @@ public class JournalInfoRetrieval {
         final byte[] toRetrieve = new AS400Structure(criteria.getStructure()).toBytes(criteria.getObject());
         final ProgramParameter[] parameters = new ProgramParameter[]{
                 new ProgramParameter(ProgramParameter.PASS_BY_REFERENCE, bufSize),
-                new ProgramParameter(ProgramParameter.PASS_BY_REFERENCE, AS400_BIN4.toBytes(bufSize / 4096)),
-                new ProgramParameter(ProgramParameter.PASS_BY_REFERENCE, AS400_TEXT_20.toBytes(jrnLib)),
-                new ProgramParameter(ProgramParameter.PASS_BY_REFERENCE, AS400_TEXT_8.toBytes(format)),
+                new ProgramParameter(ProgramParameter.PASS_BY_REFERENCE, as400Bin4.toBytes(bufSize / 4096)),
+                new ProgramParameter(ProgramParameter.PASS_BY_REFERENCE, as400Text20.toBytes(jrnLib)),
+                new ProgramParameter(ProgramParameter.PASS_BY_REFERENCE, as400Text8.toBytes(format)),
                 new ProgramParameter(ProgramParameter.PASS_BY_REFERENCE, toRetrieve),
-                new ProgramParameter(ProgramParameter.PASS_BY_REFERENCE, AS400_BIN4.toBytes(0)) };
+                new ProgramParameter(ProgramParameter.PASS_BY_REFERENCE, as400Bin4.toBytes(0)) };
         return callServiceProgram(as400, JOURNAL_SERVICE_LIB, "QjoRetrieveJournalInformation", parameters,
                 (byte[] data) -> data);
     }
@@ -355,10 +354,10 @@ public class JournalInfoRetrieval {
         final String format = "RRCV0100";
         final ProgramParameter[] parameters = new ProgramParameter[]{
                 new ProgramParameter(ProgramParameter.PASS_BY_REFERENCE, rcvLen),
-                new ProgramParameter(ProgramParameter.PASS_BY_REFERENCE, AS400_BIN4.toBytes(rcvLen)),
-                new ProgramParameter(ProgramParameter.PASS_BY_REFERENCE, AS400_TEXT_20.toBytes(receiverNameLib)),
-                new ProgramParameter(ProgramParameter.PASS_BY_REFERENCE, AS400_TEXT_8.toBytes(format)),
-                new ProgramParameter(ProgramParameter.PASS_BY_REFERENCE, AS400_BIN4.toBytes(0)) };
+                new ProgramParameter(ProgramParameter.PASS_BY_REFERENCE, as400Bin4.toBytes(rcvLen)),
+                new ProgramParameter(ProgramParameter.PASS_BY_REFERENCE, as400Text20.toBytes(receiverNameLib)),
+                new ProgramParameter(ProgramParameter.PASS_BY_REFERENCE, as400Text8.toBytes(format)),
+                new ProgramParameter(ProgramParameter.PASS_BY_REFERENCE, as400Bin4.toBytes(0)) };
 
         return callServiceProgram(as400, JOURNAL_SERVICE_LIB, "QjoRtvJrnReceiverInformation", parameters,
                 (byte[] data) -> {
@@ -448,14 +447,14 @@ public class JournalInfoRetrieval {
                 p -> processor.process(p[0].getOutputData()));
     }
 
-    public static Integer decodeInt(byte[] data, int offset) {
+    public Integer decodeInt(byte[] data, int offset) {
         final byte[] b = Arrays.copyOfRange(data, offset, offset + 4);
-        return Integer.valueOf(AS400_BIN4.toInt(b));
+        return Integer.valueOf(as400Bin4.toInt(b));
     }
 
-    public static Long decodeLong(byte[] data, int offset) {
+    public Long decodeLong(byte[] data, int offset) {
         final byte[] b = Arrays.copyOfRange(data, offset, offset + 8);
-        return Long.valueOf(AS400_BIN8.toLong(b));
+        return Long.valueOf(as400Bin8.toLong(b));
     }
 
     public static String decodeString(byte[] data, int offset, int length) {
@@ -475,9 +474,9 @@ public class JournalInfoRetrieval {
         T process(byte[] data) throws Exception;
     }
 
-    public static BigInteger decodeBigIntFromString(byte[] data, int offset) {
+    public BigInteger decodeBigIntFromString(byte[] data, int offset) {
         final byte[] b = Arrays.copyOfRange(data, offset, offset + 20);
-        final String s = (String) AS400_TEXT_20.toObject(b);
+        final String s = (String) as400Text20.toObject(b);
         return new BigInteger(s);
     }
 }

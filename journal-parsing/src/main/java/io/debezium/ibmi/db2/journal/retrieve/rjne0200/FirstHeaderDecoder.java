@@ -28,8 +28,9 @@ import io.debezium.ibmi.db2.journal.retrieve.StringHelpers;
 public class FirstHeaderDecoder {
     private static final Logger log = LoggerFactory.getLogger(FirstHeaderDecoder.class);
 
-    private final static AS400Structure structure;
-    static {
+    private final AS400Structure structure;
+
+    public FirstHeaderDecoder() {
         final ArrayList<AS400DataType> dataTypes = new ArrayList<>();
         final FieldDescription[] fds = new FieldDescription[]{
                 new BinaryFieldDescription(new AS400Bin4(), "0 bytes returned"),

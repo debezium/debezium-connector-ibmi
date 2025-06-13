@@ -24,9 +24,9 @@ import com.ibm.as400.access.FieldDescription;
 public class ReceiverNameDecoder {
     private static final Logger log = LoggerFactory.getLogger(ReceiverNameDecoder.class);
 
-    private final static AS400Structure structure;
+    private final AS400Structure structure;
 
-    static {
+    public ReceiverNameDecoder() {
         ArrayList<AS400DataType> dataTypes = new ArrayList<AS400DataType>();
         AS400Timestamp timeType = new AS400Timestamp();
         try {

@@ -36,6 +36,7 @@ public class JournalFilterTimeout {
     private static final Logger log = LoggerFactory.getLogger(JournalFilterTimeout.class);
 
     private static SchemaCacheHash schemaCache = new SchemaCacheHash();
+    private static JournalInfoRetrieval journalInfoRetrieval = new JournalInfoRetrieval();
 
     public static void main(String[] args) throws Exception {
         final TestConnector connector = new TestConnector();
@@ -49,7 +50,7 @@ public class JournalFilterTimeout {
                 includes.add(new FileFilter(schema, i));
             }
         }
-        final JournalInfo journal = JournalInfoRetrieval.getJournal(as400Connect.connection(), schema, includes);
+        final JournalInfo journal = journalInfoRetrieval.getJournal(as400Connect.connection(), schema, includes);
 
         final String offset = System.getenv("ISERIES_OFFSET");
         final String receiver = System.getenv("ISERIES_RECEIVER");
