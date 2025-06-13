@@ -21,10 +21,14 @@ import io.debezium.connector.SnapshotRecord;
 import io.debezium.ibmi.db2.journal.retrieve.JournalProcessedPosition;
 import io.debezium.ibmi.db2.journal.retrieve.JournalReceiver;
 import io.debezium.pipeline.CommonOffsetContext;
+import io.debezium.pipeline.source.snapshot.incremental.IncrementalSnapshotContext;
+import io.debezium.pipeline.source.snapshot.incremental.SignalBasedIncrementalSnapshotContext;
 import io.debezium.pipeline.spi.OffsetContext;
 import io.debezium.pipeline.txmetadata.TransactionContext;
 import io.debezium.relational.RelationalDatabaseConnectorConfig;
+import io.debezium.relational.TableId;
 import io.debezium.spi.schema.DataCollectionId;
+import io.debezium.util.Strings;
 
 public class As400OffsetContext extends CommonOffsetContext<SourceInfo> {
     private static final Logger log = LoggerFactory.getLogger(As400OffsetContext.class);
@@ -50,6 +54,7 @@ public class As400OffsetContext extends CommonOffsetContext<SourceInfo> {
     private final JournalProcessedPosition position;
     private final String includeTables;
     private boolean hasNewTables = false;
+    private final IncrementalSnapshotContext<TableId> incrementalSnapshotContext = new SignalBasedIncrementalSnapshotContext<>(true);
 
     public As400OffsetContext(As400ConnectorConfig connectorConfig) {
         super(new SourceInfo(connectorConfig), false);
@@ -70,7 +75,7 @@ public class As400OffsetContext extends CommonOffsetContext<SourceInfo> {
     }
 
     public As400OffsetContext(As400ConnectorConfig connectorConfig, JournalProcessedPosition position, String includeTables,
-                              boolean snapshotComplete) {
+                              boolean snapshotComplete, IncrementalSnapshotContext<TableId> incrementalSnapshotContext) {
         super(new SourceInfo(connectorConfig), snapshotComplete);
         partition = Collections.singletonMap(SERVER_PARTITION_KEY, connectorConfig.getLogicalName());
         this.position = position;
@@ -117,7 +122,8 @@ public class As400OffsetContext extends CommonOffsetContext<SourceInfo> {
         if (null != offset) {
             offsetStr = offset.toString();
         }
-        String time = Long.toString(position.getTimeOfLastProcessed().getEpochSecond());
+        Instant last = position.getTimeOfLastProcessed();
+        String time = last == null ? "" : Long.toString(last.getEpochSecond());
         return new HashMap<>(Map.of(As400OffsetContext.EVENT_SEQUENCE, offsetStr,
                 As400OffsetContext.EVENT_TIME, time,
                 As400OffsetContext.RECEIVER, position.getReceiver().name(),
@@ -167,7 +173,7 @@ public class As400OffsetContext extends CommonOffsetContext<SourceInfo> {
         @Override
         public As400OffsetContext load(Map<String, ?> map) {
             final String offsetStr = (String) map.get(As400OffsetContext.EVENT_SEQUENCE);
-            final String TimeStr = (String) map.get(As400OffsetContext.EVENT_TIME);
+            final String timeStr = (String) map.get(As400OffsetContext.EVENT_TIME);
             final String complete = (String) map.get(As400OffsetContext.SNAPSHOT_COMPLETED_KEY);
             boolean snapshotComplete = false;
             if (null != complete) {
@@ -183,10 +189,10 @@ public class As400OffsetContext extends CommonOffsetContext<SourceInfo> {
             }
             else {
                 final BigInteger offset = new BigInteger(offsetStr);
-                Instant time = (TimeStr == null) ? Instant.ofEpochSecond(0) : Instant.ofEpochSecond(Long.parseLong(TimeStr));
+                Instant time = (Strings.isNullOrBlank(timeStr)) ? Instant.ofEpochSecond(0) : Instant.ofEpochSecond(Long.parseLong(timeStr));
                 position = new JournalProcessedPosition(offset, new JournalReceiver(receiver, receiverLibrary), time, processed);
             }
-            return new As400OffsetContext(connectorConfig, position, inclueTables, snapshotComplete);
+            return new As400OffsetContext(connectorConfig, position, inclueTables, snapshotComplete, SignalBasedIncrementalSnapshotContext.load(map, true));
         }
     }
 
@@ -206,5 +212,10 @@ public class As400OffsetContext extends CommonOffsetContext<SourceInfo> {
     @Override
     public void markSnapshotRecord(SnapshotRecord record) {
         sourceInfo.setSnapshot(record);
+    }
+
+    @Override
+    public IncrementalSnapshotContext<?> getIncrementalSnapshotContext() {
+        return incrementalSnapshotContext;
     }
 }

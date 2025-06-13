@@ -5,6 +5,9 @@
  */
 package io.debezium.connector.db2as400;
 
+import static io.debezium.config.CommonConnectorConfig.DATABASE_CONFIG_PREFIX;
+import static io.debezium.config.CommonConnectorConfig.DRIVER_CONFIG_PREFIX;
+
 import java.sql.Connection;
 import java.sql.DatabaseMetaData;
 import java.sql.ResultSet;
@@ -87,11 +90,13 @@ public class As400JdbcConnection extends JdbcConnection implements Connect<Conne
         this.toCcsid = config.getInteger(As400ConnectorConfig.TO_CCSID);
         this.config = config;
         realDatabaseName = retrieveRealDatabaseName();
-        log.debug("connection: {}", this.connectionString(URL_PATTERN));
+        log.debug("connection: {}", connectionString());
     }
+
 
     static JdbcConfiguration withDefaults(JdbcConfiguration config) {
         JdbcConfiguration.Builder defaults = JdbcConfiguration.create();
+        
 
         for (Map.Entry<String, String> e : jdbcDefaults.entrySet()) {
             if (!config.hasKey(e.getKey())) {
@@ -99,8 +104,12 @@ public class As400JdbcConnection extends JdbcConnection implements Connect<Conne
             }
         }
 
-        Configuration driverConfigWithDefaults = config.merge(defaults.build());
+        Configuration driverConfigWithDefaults = config.merge(defaults.build()).merge(config.subset(DRIVER_CONFIG_PREFIX, true));
         return JdbcConfiguration.adapt(driverConfigWithDefaults);
+    }
+
+    public String connectionString() {
+        return this.connectionString(URL_PATTERN);
     }
 
     public List<FileFilter> shortIncludes(String schema, String includes) {
