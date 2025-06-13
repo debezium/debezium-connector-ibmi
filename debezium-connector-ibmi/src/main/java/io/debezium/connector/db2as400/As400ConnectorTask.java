@@ -49,6 +49,7 @@ import io.debezium.snapshot.SnapshotterService;
 import io.debezium.snapshot.SnapshotterServiceProvider;
 import io.debezium.spi.topic.TopicNamingStrategy;
 import io.debezium.util.Clock;
+import io.debezium.util.Strings;
 
 public class As400ConnectorTask extends BaseSourceTask<As400Partition, As400OffsetContext> {
     private static final Logger LOGGER = LoggerFactory.getLogger(As400ConnectorTask.class);
@@ -115,10 +116,12 @@ public class As400ConnectorTask extends BaseSourceTask<As400Partition, As400Offs
 
         String configuredIncludes = newConfig.tableIncludeList();
         String signalDataCollection = config.getString(RelationalDatabaseConnectorConfig.SIGNAL_DATA_COLLECTION);
-        String allIncludes = configuredIncludes.length() > 0 ? String.format("%s,%s", configuredIncludes, signalDataCollection) : "";
+        if (!Strings.isNullOrBlank(signalDataCollection)) {
+            configuredIncludes = configuredIncludes.length() > 0 ? String.format("%s,%s", configuredIncludes, signalDataCollection) : "";
+        }
 
         final List<FileFilter> shortIncludes = jdbcConnection.shortIncludes(schema.getSchemaName(),
-                allIncludes);
+                configuredIncludes);
 
         final As400RpcConnection rpcConnection = new As400RpcConnection(connectorConfig, streamingMetrics,
                 shortIncludes);
