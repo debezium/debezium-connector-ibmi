@@ -37,3 +37,12 @@ The annoying thing is injecting in our Connection which looks requires copying t
 To force data into a table with ccsid set to 37 but with a data in ccsid of 285: cast the data as the ccsid you really want it to be then cast it as binary/do not encode. 
 To get this back using the connector the from.ccsid would be as set as the table ccsid 37 and the to.ccsid would be the real data ccsid 285
 `insert into demo (id, name) values (1, CAST(CAST('$~£[¯[^~¤' AS VARCHAR(20) CCSID 285) AS VARCHAR(20) CCSID 65535));`
+
+# Upgrading
+The AS400JDBCDriverForcedCcsid is simply a copy of AS400JDBCDriver with the one line change:
+```
+  private static final String CLASSNAME = "com.ibm.as400.access.AS400JDBCDriverForcedCcsid"; // only line we need to change
+```
+a search and replace for AS400JDBCDriver to AS400JDBCDriverForcedCcsid
+
+
