@@ -22,7 +22,6 @@ import com.ibm.as400.access.SocketProperties;
 
 import io.debezium.config.CommonConnectorConfig;
 import io.debezium.connector.db2as400.metrics.As400StreamingChangeEventSourceMetrics;
-import io.debezium.function.LogPositionValidator;
 import io.debezium.ibmi.db2.journal.retrieve.Connect;
 import io.debezium.ibmi.db2.journal.retrieve.FileFilter;
 import io.debezium.ibmi.db2.journal.retrieve.JournalInfo;
