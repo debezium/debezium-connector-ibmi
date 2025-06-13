@@ -21,7 +21,6 @@ import org.slf4j.LoggerFactory;
 
 import io.debezium.DebeziumException;
 import io.debezium.connector.db2as400.As400RpcConnection.BlockingReceiverConsumer;
-import io.debezium.connector.db2as400.As400RpcConnection.RpcException;
 import io.debezium.data.Envelope.Operation;
 import io.debezium.ibmi.db2.journal.retrieve.JournalEntryType;
 import io.debezium.ibmi.db2.journal.retrieve.JournalProcessedPosition;
@@ -69,6 +68,7 @@ public class As400StreamingChangeEventSource implements StreamingChangeEventSour
     private final As400ConnectorConfig connectorConfig;
     private final Map<String, TransactionContext> txMap = new HashMap<>();
     private final String database;
+    private As400OffsetContext offsetContext;
 
     public As400StreamingChangeEventSource(As400ConnectorConfig connectorConfig, As400RpcConnection dataConnection,
                                            As400JdbcConnection jdbcConnection, EventDispatcher<As400Partition, TableId> dispatcher,
@@ -82,6 +82,16 @@ public class As400StreamingChangeEventSource implements StreamingChangeEventSour
         this.schema = schema;
         this.pollInterval = connectorConfig.getPollInterval();
         this.database = jdbcConnection.getRealDatabaseName();
+    }
+
+    @Override
+    public void init(As400OffsetContext offsetContext) {
+        if (offsetContext == null) {
+            this.offsetContext = new As400OffsetContext(connectorConfig);
+        }
+        else {
+            this.offsetContext = offsetContext;
+        }
     }
 
     private void cacheBefore(TableId tableId, Object[] dataBefore) {
@@ -338,13 +348,6 @@ public class As400StreamingChangeEventSource implements StreamingChangeEventSour
 
     @Override
     public As400OffsetContext getOffsetContext() {
-        // TODO should this be the last process position?
-        try {
-            return new As400OffsetContext(connectorConfig, new JournalProcessedPosition(dataConnection.getCurrentPosition(), null, true));
-        }
-        catch (RpcException e) {
-            log.error("failed to retrieve journal position", e);
-        }
-        return null;
+        return offsetContext;
     }
 }
