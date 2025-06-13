@@ -50,8 +50,8 @@ public class RetrieveJournal {
     private static final JournalEntryType[] REQURED_ENTRY_TYPES = new JournalEntryType[]{ JournalEntryType.PT,
             JournalEntryType.PX, JournalEntryType.UP, JournalEntryType.UB, JournalEntryType.DL, JournalEntryType.DR,
             JournalEntryType.CT, JournalEntryType.CG, JournalEntryType.SC, JournalEntryType.CM };
-    private static final FirstHeaderDecoder firstHeaderDecoder = new FirstHeaderDecoder();
-    private static final EntryHeaderDecoder entryHeaderDecoder = new EntryHeaderDecoder();
+    private final FirstHeaderDecoder firstHeaderDecoder = new FirstHeaderDecoder();
+    private final EntryHeaderDecoder entryHeaderDecoder = new EntryHeaderDecoder();
     private final SimpleDateFormat dateFormatter = new SimpleDateFormat("yyMMdd-hhmm");
     private final ReceiverPagination journalReceivers;
     private final ParameterListBuilder builder = new ParameterListBuilder();

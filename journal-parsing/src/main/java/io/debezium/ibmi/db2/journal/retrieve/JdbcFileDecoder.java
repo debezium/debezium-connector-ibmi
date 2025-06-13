@@ -44,16 +44,16 @@ import io.debezium.ibmi.db2.journal.retrieve.rjne0200.EntryHeader;
 
 public class JdbcFileDecoder extends JournalFileEntryDecoder {
 
-    private static final AS400Float8 AS400_FLOAT8 = new AS400Float8();
-    private static final AS400Float4 AS400_FLOAT4 = new AS400Float4();
-    private static final AS400Time AS400_TIME = new AS400Time();
-    private static final AS400Date AS400_DATE = new AS400Date();
-    private static final AS400Timestamp AS400_TIMESTAMP = new AS400Timestamp();
-    private static final AS400Xml AS400_XML = new AS400Xml();
-    private static final AS400Bin8 AS400_BIN8 = new AS400Bin8();
-    private static final AS400Bin4 AS400_BIN4 = new AS400Bin4();
-    private static final AS400Bin2 AS400_BIN2 = new AS400Bin2();
-    private static final AS400Boolean AS400_BOOLEAN = new AS400Boolean();
+    private final AS400Float8 as400Float8 = new AS400Float8();
+    private final AS400Float4 as400Float4 = new AS400Float4();
+    private final AS400Time as400Time = new AS400Time();
+    private final AS400Date as400Date = new AS400Date();
+    private final AS400Timestamp as400Timestamp = new AS400Timestamp();
+    private final AS400Xml as400Xml = new AS400Xml();
+    private final AS400Bin8 as400Bin8 = new AS400Bin8();
+    private final AS400Bin4 as400Bin4 = new AS400Bin4();
+    private final AS400Bin2 as400Bin2 = new AS400Bin2();
+    private final AS400Boolean as400Boolean = new AS400Boolean();
     private static final String GET_DATABASE_NAME = "values ( CURRENT_SERVER )";
     private static final String UNIQUE_KEYS = """
             SELECT c.column_name FROM qsys.QADBKATR k
@@ -83,7 +83,7 @@ public class JdbcFileDecoder extends JournalFileEntryDecoder {
      * CHAR(5) Length of entry specific data 5 5 CHAR(11) Reserved 16 16 CHAR(*)
      * Entry specific data
      */
-    private static final AS400Text LENGTH_DECODER = new AS400Text(5);
+    private final AS400Text lengthDecoder = new AS400Text(5);
     private static final Object[] EMPTY = new Object[]{};
 
     @Override
@@ -91,7 +91,7 @@ public class JdbcFileDecoder extends JournalFileEntryDecoder {
         final Optional<TableInfo> tableInfoOpt = getRecordFormat(entryHeader.getFile(), entryHeader.getLibrary());
 
         return tableInfoOpt.map(tableInfo -> {
-            final String lengthStr = (String) LENGTH_DECODER.toObject(data,
+            final String lengthStr = (String) lengthDecoder.toObject(data,
                     offset + entryHeader.getEntrySpecificDataOffset());
             final int length = Integer.parseInt(lengthStr);
             if (length > 0) {
@@ -291,7 +291,7 @@ public class JdbcFileDecoder extends JournalFileEntryDecoder {
                                     Integer precision) {
         switch (type) {
             case "BOOLEAN":
-                return AS400_BOOLEAN;
+                return as400Boolean;
             case "DECIMAL":
                 return new AS400PackedDecimal(length, precision);
             case "CHAR () FOR BIT DATA": // password fields - treat as binary
@@ -310,32 +310,32 @@ public class JdbcFileDecoder extends JournalFileEntryDecoder {
                 return getVarText(length, octetLengthCache.getBytesPerChar(schema, table, columnName),
                         ccsidCache.getCcsid(schema, table, columnName));
             case "TIMESTAMP":
-                return AS400_TIMESTAMP;
+                return as400Timestamp;
             case "VARCHAR":
                 return getVarText(length, octetLengthCache.getBytesPerChar(schema, table, columnName),
                         ccsidCache.getCcsid(schema, table, columnName));
             case "NUMERIC":
                 return new AS400ZonedDecimal(length, precision);
             case "DATE":
-                return AS400_DATE;
+                return as400Date;
             case "TIME":
-                return AS400_TIME;
+                return as400Time;
             case "REAL":
-                return AS400_FLOAT4;
+                return as400Float4;
             case "DOUBLE":
-                return AS400_FLOAT8;
+                return as400Float8;
             case "SMALLINT":
-                return AS400_BIN2;
+                return as400Bin2;
             case "INTEGER":
-                return AS400_BIN4;
+                return as400Bin4;
             case "BIGINT":
-                return AS400_BIN8;
+                return as400Bin8;
             case "BINARY":
                 return new AS400ByteArray(length);
             case "VARBINARY":
                 return new AS400VarBin(length);
             case "XML":
-                return AS400_XML;
+                return as400Xml;
             // case "CLOB":
             // return new AS400Clob(as400);
             default:
