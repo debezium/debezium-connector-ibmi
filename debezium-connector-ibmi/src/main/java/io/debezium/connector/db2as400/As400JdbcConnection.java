@@ -93,10 +93,8 @@ public class As400JdbcConnection extends JdbcConnection implements Connect<Conne
         log.debug("connection: {}", connectionString());
     }
 
-
     static JdbcConfiguration withDefaults(JdbcConfiguration config) {
         JdbcConfiguration.Builder defaults = JdbcConfiguration.create();
-        
 
         for (Map.Entry<String, String> e : jdbcDefaults.entrySet()) {
             if (!config.hasKey(e.getKey())) {
