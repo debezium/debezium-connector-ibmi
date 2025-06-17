@@ -140,7 +140,8 @@ public class RetrieveJournal {
         spc.getServerJob().setLoggingLevel(0);
         builder.init();
         builder.withBufferLenth(config.journalBufferSize());
-        builder.withJournalEntryType(JournalEntryType.ALL);
+        builder.filterJournalEntryType(REQURED_ENTRY_TYPES);
+        builder.filterJournalCodes(REQUIRED_JOURNAL_CODES);
         if (config.filtering() && !config.includeFiles().isEmpty()) {
             builder.withFileFilters(config.includeFiles());
         }
