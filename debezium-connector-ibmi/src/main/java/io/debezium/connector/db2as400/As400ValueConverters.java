@@ -6,12 +6,14 @@
 package io.debezium.connector.db2as400;
 
 import java.sql.SQLXML;
+import java.time.ZoneOffset;
 
 import org.apache.kafka.connect.data.Field;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import io.debezium.jdbc.JdbcValueConverters;
+import io.debezium.jdbc.TemporalPrecisionMode;
 import io.debezium.relational.Column;
 
 /**
@@ -21,7 +23,8 @@ import io.debezium.relational.Column;
 public class As400ValueConverters extends JdbcValueConverters {
     private static final Logger log = LoggerFactory.getLogger(As400ValueConverters.class);
 
-    public As400ValueConverters() {
+    public As400ValueConverters(DecimalMode decimalMode) {
+        super(decimalMode, TemporalPrecisionMode.ADAPTIVE, ZoneOffset.UTC, null, null, null);
     }
 
     @Override

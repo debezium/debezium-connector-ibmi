@@ -9,6 +9,7 @@ import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
@@ -23,6 +24,7 @@ import io.debezium.config.Field;
 import io.debezium.connector.base.ChangeEventQueue;
 import io.debezium.connector.common.BaseSourceTask;
 import io.debezium.connector.common.CdcSourceTaskContext;
+import io.debezium.connector.common.DebeziumHeaderProducer;
 import io.debezium.connector.db2as400.metrics.As400ChangeEventSourceMetricsFactory;
 import io.debezium.connector.db2as400.metrics.As400StreamingChangeEventSourceMetrics;
 import io.debezium.document.DocumentReader;
@@ -54,6 +56,7 @@ public class As400ConnectorTask extends BaseSourceTask<As400Partition, As400Offs
     private volatile ChangeEventQueue<DataChangeEvent> queue;
     private static final String CONTEXT_NAME = "db2as400-server-connector-task";
     private As400DatabaseSchema schema;
+    private ErrorHandler errorHandler;
 
     @Override
     public String version() {
@@ -88,6 +91,7 @@ public class As400ConnectorTask extends BaseSourceTask<As400Partition, As400Offs
         connectorConfig.getBeanRegistry().add(StandardBeanNames.DATABASE_SCHEMA, schema);
         connectorConfig.getBeanRegistry().add(StandardBeanNames.JDBC_CONNECTION, jdbcConnectionFactory.newConnection());
         connectorConfig.getBeanRegistry().add(StandardBeanNames.OFFSETS, previousOffsetPartition);
+        connectorConfig.getBeanRegistry().add(StandardBeanNames.CDC_SOURCE_TASK_CONTEXT, ctx);
 
         // Service providers
         registerServiceProviders(connectorConfig.getServiceRegistry());
@@ -97,7 +101,7 @@ public class As400ConnectorTask extends BaseSourceTask<As400Partition, As400Offs
                 .maxBatchSize(connectorConfig.getMaxBatchSize()).maxQueueSize(connectorConfig.getMaxQueueSize())
                 .loggingContextSupplier(() -> ctx.configureLoggingContext(CONTEXT_NAME)).build();
 
-        final ErrorHandler errorHandler = new ErrorHandler(As400RpcConnector.class, connectorConfig, queue, null);
+        errorHandler = new ErrorHandler(As400RpcConnector.class, connectorConfig, queue, null);
 
         final SnapshotterService snapshotterService = connectorConfig.getServiceRegistry().tryGetService(SnapshotterService.class);
 
@@ -147,7 +151,9 @@ public class As400ConnectorTask extends BaseSourceTask<As400Partition, As400Offs
                 queue, // ChangeEventQueue
                 newConfig.getTableFilters().dataCollectionFilter(), // DataCollectionFilter
                 DataChangeEvent::new, // ! ChangeEventCreator
-                metadataProvider, schemaNameAdjuster);
+                metadataProvider,
+                schemaNameAdjuster,
+                connectorConfig.getServiceRegistry().tryGetService(DebeziumHeaderProducer.class));
 
         final Clock clock = Clock.system();
 
@@ -172,11 +178,15 @@ public class As400ConnectorTask extends BaseSourceTask<As400Partition, As400Offs
         return coordinator;
     }
 
+    @Override
+    protected String connectorName() {
+        return Module.name();
+    }
+
     private Set<String> additionalTablesInConfigTables(As400OffsetContext previousOffset, As400ConnectorConfig newConfig) {
         if (previousOffset == null) {
             return Collections.emptySet();
         }
-
         final String newInclude = newConfig.tableIncludeList();
         final String oldInclude = previousOffset.getIncludeTables();
         LOGGER.info("previous includes {} , new includes {}", oldInclude, newInclude);
@@ -198,6 +208,11 @@ public class As400ConnectorTask extends BaseSourceTask<As400Partition, As400Offs
                 .collect(Collectors.toList());
 
         return sourceRecords;
+    }
+
+    @Override
+    protected Optional<ErrorHandler> getErrorHandler() {
+        return Optional.of(errorHandler);
     }
 
     @Override
