@@ -5,7 +5,6 @@
  */
 package io.debezium.connector.db2as400;
 
-import static io.debezium.config.CommonConnectorConfig.DATABASE_CONFIG_PREFIX;
 import static io.debezium.config.CommonConnectorConfig.DRIVER_CONFIG_PREFIX;
 
 import java.sql.Connection;
