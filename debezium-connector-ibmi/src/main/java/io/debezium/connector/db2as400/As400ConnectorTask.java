@@ -42,11 +42,7 @@ import io.debezium.relational.RelationalDatabaseConnectorConfig;
 import io.debezium.relational.TableId;
 import io.debezium.schema.SchemaFactory;
 import io.debezium.schema.SchemaNameAdjuster;
-import io.debezium.service.spi.ServiceRegistry;
-import io.debezium.snapshot.SnapshotLockProvider;
-import io.debezium.snapshot.SnapshotQueryProvider;
 import io.debezium.snapshot.SnapshotterService;
-import io.debezium.snapshot.SnapshotterServiceProvider;
 import io.debezium.spi.topic.TopicNamingStrategy;
 import io.debezium.util.Clock;
 import io.debezium.util.Strings;
@@ -229,14 +225,5 @@ public class As400ConnectorTask extends BaseSourceTask<As400Partition, As400Offs
     @Override
     protected Iterable<Field> getAllConfigurationFields() {
         return As400ConnectorConfig.ALL_FIELDS;
-    }
-
-    // TODO remove when DBZ-7700 is implemented
-    @Override
-    protected void registerServiceProviders(ServiceRegistry serviceRegistry) {
-        serviceRegistry.registerServiceProvider(new PostProcessorRegistryServiceProvider());
-        serviceRegistry.registerServiceProvider(new SnapshotLockProvider());
-        serviceRegistry.registerServiceProvider(new SnapshotQueryProvider());
-        serviceRegistry.registerServiceProvider(new SnapshotterServiceProvider());
     }
 }
