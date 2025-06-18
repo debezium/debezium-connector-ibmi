@@ -97,10 +97,10 @@ public class As400SnapshotChangeEventSource
             StringBuilder statements = new StringBuilder();
 
             // DB2 for the ibmi doesn't appear to support lock timeouts
-            
-            // there are 3 lock options SHARE MODE, EXCLUSIVE MODE ALLOW READ, EXCLUSIVE MODE           
+
+            // there are 3 lock options SHARE MODE, EXCLUSIVE MODE ALLOW READ, EXCLUSIVE MODE
             // e.g.LOCK TABLE SCHEMA.NAME IN SHARE MODE;
-            
+
             // no obvious mode prevents schema changes
             // DBZ-298 Quoting name in case it has been quoted originally; it doesn't do harm if it hasn't been quoted
             tableLockStatements.forEach(tableStatement -> statements.append(tableStatement).append(lineSeparator));
