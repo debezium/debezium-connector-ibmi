@@ -13,12 +13,15 @@ import java.util.List;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import com.fnz.db2.journal.retrieve.rnrn0200.DetailedJournalReceiver;
 import com.ibm.as400.access.AS400;
 import com.ibm.as400.access.AS400Message;
 import com.ibm.as400.access.AS400SecurityException;
 import com.ibm.as400.access.CommandCall;
 import com.ibm.as400.access.ErrorCompletingRequestException;
+
+import io.debezium.ibmi.db2.journal.retrieve.JournalInfo;
+import io.debezium.ibmi.db2.journal.retrieve.JournalInfoRetrieval;
+import io.debezium.ibmi.db2.journal.retrieve.rnrn0200.DetailedJournalReceiver;
 
 public class ITUtilities {
 	private static final Logger log = LoggerFactory.getLogger(JournalBufferFullIT.class);
