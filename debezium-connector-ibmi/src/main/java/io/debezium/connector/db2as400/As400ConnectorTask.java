@@ -29,7 +29,6 @@ import io.debezium.connector.db2as400.metrics.As400ChangeEventSourceMetricsFacto
 import io.debezium.connector.db2as400.metrics.As400StreamingChangeEventSourceMetrics;
 import io.debezium.document.DocumentReader;
 import io.debezium.ibmi.db2.journal.retrieve.FileFilter;
-import io.debezium.ibmi.db2.journal.retrieve.JournalProcessedPosition;
 import io.debezium.jdbc.DefaultMainConnectionProvidingConnectionFactory;
 import io.debezium.jdbc.MainConnectionProvidingConnectionFactory;
 import io.debezium.pipeline.ChangeEventSourceCoordinator;
@@ -39,7 +38,7 @@ import io.debezium.pipeline.EventDispatcher;
 import io.debezium.pipeline.notification.NotificationService;
 import io.debezium.pipeline.signal.SignalProcessor;
 import io.debezium.pipeline.spi.Offsets;
-import io.debezium.processors.PostProcessorRegistryServiceProvider;
+import io.debezium.relational.RelationalDatabaseConnectorConfig;
 import io.debezium.relational.TableId;
 import io.debezium.schema.SchemaFactory;
 import io.debezium.schema.SchemaNameAdjuster;
@@ -114,8 +113,12 @@ public class As400ConnectorTask extends BaseSourceTask<As400Partition, As400Offs
         final As400StreamingChangeEventSourceMetrics streamingMetrics = new As400StreamingChangeEventSourceMetrics(
                 taskContext, queue, metadataProvider);
 
+        String configuredIncludes = newConfig.tableIncludeList();
+        String signalDataCollection = config.getString(RelationalDatabaseConnectorConfig.SIGNAL_DATA_COLLECTION);
+        String allIncludes = configuredIncludes.length()>0 ? String.format("%s,%s", configuredIncludes, signalDataCollection) : "";
+
         final List<FileFilter> shortIncludes = jdbcConnection.shortIncludes(schema.getSchemaName(),
-                newConfig.tableIncludeList());
+                allIncludes);
 
         final As400RpcConnection rpcConnection = new As400RpcConnection(connectorConfig, streamingMetrics,
                 shortIncludes);
@@ -145,6 +148,13 @@ public class As400ConnectorTask extends BaseSourceTask<As400Partition, As400Offs
                     previousOffset);
         }
 
+        final SignalProcessor<As400Partition, As400OffsetContext> signalProcessor = new SignalProcessor<>(
+                As400RpcConnector.class, connectorConfig, Map.of(),
+                getAvailableSignalChannels(),
+                DocumentReader.defaultReader(),
+                previousOffsetPartition);
+
+
         final EventDispatcher<As400Partition, TableId> dispatcher = new EventDispatcher<>(connectorConfig, // CommonConnectorConfig
                 topicNamingStrategy, // TopicSelector
                 schema, // DatabaseSchema
@@ -153,6 +163,7 @@ public class As400ConnectorTask extends BaseSourceTask<As400Partition, As400Offs
                 DataChangeEvent::new, // ! ChangeEventCreator
                 metadataProvider,
                 schemaNameAdjuster,
+                signalProcessor,
                 connectorConfig.getServiceRegistry().tryGetService(DebeziumHeaderProducer.class));
 
         final Clock clock = Clock.system();
@@ -160,11 +171,6 @@ public class As400ConnectorTask extends BaseSourceTask<As400Partition, As400Offs
         final As400ChangeEventSourceFactory changeFactory = new As400ChangeEventSourceFactory(newConfig, snapshotConnectorConfig, rpcConnection,
                 jdbcConnectionFactory, errorHandler, dispatcher, clock, schema, snapshotterService);
 
-        final SignalProcessor<As400Partition, As400OffsetContext> signalProcessor = new SignalProcessor<>(
-                As400RpcConnector.class, connectorConfig, Map.of(),
-                getAvailableSignalChannels(),
-                DocumentReader.defaultReader(),
-                previousOffsetPartition);
 
         final NotificationService<As400Partition, As400OffsetContext> notificationService = new NotificationService<>(getNotificationChannels(),
                 connectorConfig, SchemaFactory.get(), dispatcher::enqueueNotification);
