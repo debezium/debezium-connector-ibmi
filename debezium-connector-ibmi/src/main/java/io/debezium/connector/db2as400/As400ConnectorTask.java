@@ -119,7 +119,7 @@ public class As400ConnectorTask extends BaseSourceTask<As400Partition, As400Offs
 
         String configuredIncludes = newConfig.tableIncludeList();
         String signalDataCollection = config.getString(RelationalDatabaseConnectorConfig.SIGNAL_DATA_COLLECTION);
-        String allIncludes = configuredIncludes.length()>0 ? String.format("%s,%s", configuredIncludes, signalDataCollection) : "";
+        String allIncludes = configuredIncludes.length() > 0 ? String.format("%s,%s", configuredIncludes, signalDataCollection) : "";
 
         final List<FileFilter> shortIncludes = jdbcConnection.shortIncludes(schema.getSchemaName(),
                 allIncludes);
@@ -128,7 +128,7 @@ public class As400ConnectorTask extends BaseSourceTask<As400Partition, As400Offs
                 shortIncludes);
 
         if (previousOffsetPartition != null) {
-            validateAndLoadSchemaHistory(connectorConfig, rpcConnection::validateLogPosition, previousOffsetPartition, schema,
+            validateSchemaHistory(connectorConfig, rpcConnection::validateLogPosition, previousOffsetPartition, schema,
                     snapshotterService.getSnapshotter());
         }
 
@@ -158,7 +158,6 @@ public class As400ConnectorTask extends BaseSourceTask<As400Partition, As400Offs
                 DocumentReader.defaultReader(),
                 previousOffsetPartition);
 
-
         final EventDispatcher<As400Partition, TableId> dispatcher = new EventDispatcher<>(connectorConfig, // CommonConnectorConfig
                 topicNamingStrategy, // TopicSelector
                 schema, // DatabaseSchema
@@ -174,7 +173,6 @@ public class As400ConnectorTask extends BaseSourceTask<As400Partition, As400Offs
 
         final As400ChangeEventSourceFactory changeFactory = new As400ChangeEventSourceFactory(newConfig, snapshotConnectorConfig, rpcConnection,
                 jdbcConnectionFactory, errorHandler, dispatcher, clock, schema, snapshotterService);
-
 
         final NotificationService<As400Partition, As400OffsetContext> notificationService = new NotificationService<>(getNotificationChannels(),
                 connectorConfig, SchemaFactory.get(), dispatcher::enqueueNotification);
