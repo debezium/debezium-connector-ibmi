@@ -68,7 +68,7 @@ public class As400ConnectorTask extends BaseSourceTask<As400Partition, As400Offs
         final TopicNamingStrategy<TableId> topicNamingStrategy = connectorConfig
                 .getTopicNamingStrategy(As400ConnectorConfig.TOPIC_NAMING_STRATEGY, true);
 
-        final SchemaNameAdjuster schemaNameAdjuster = SchemaNameAdjuster.AVRO;
+        final SchemaNameAdjuster schemaNameAdjuster = connectorConfig.schemaNameAdjuster();
 
         final MainConnectionProvidingConnectionFactory<As400JdbcConnection> jdbcConnectionFactory = new DefaultMainConnectionProvidingConnectionFactory<>(
                 () -> new As400JdbcConnection(connectorConfig.getJdbcConfig()));

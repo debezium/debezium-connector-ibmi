@@ -220,7 +220,8 @@ public class As400ConnectorConfig extends RelationalDatabaseConnectorConfig {
                         HOSTNAME, USER, PASSWORD, SCHEMA, BUFFER_SIZE,
                         SOCKET_TIMEOUT, FROM_CCSID, TO_CCSID, SECURE,
                         DIAGNOSTICS_FOLDER)
-                .connector()
+                .connector(
+                        SCHEMA_NAME_ADJUSTMENT_MODE)
                 .events(
                         As400OffsetContext.EVENT_SEQUENCE_FIELD,
                         As400OffsetContext.RECEIVER_FIELD,
