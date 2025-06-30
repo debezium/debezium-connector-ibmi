@@ -128,17 +128,6 @@ public class As400ConnectorTask extends BaseSourceTask<As400Partition, As400Offs
         }
 
         As400ConnectorConfig snapshotConnectorConfig = connectorConfig;
-        final Set<String> additionalTables = additionalTablesInConfigTables(previousOffset, newConfig);
-        if (!additionalTables.isEmpty()) {
-            final String newIncludes = String.join(",", additionalTables);
-            LOGGER.info("found new tables to stream {}", newIncludes);
-
-            snapshotConnectorConfig = new As400ConnectorConfig(config, newIncludes);
-            previousOffset.hasNewTables(true);
-        }
-        else {
-            LOGGER.info("no new tables to stream");
-        }
 
         if (previousOffset == null) {
             LOGGER.info("previous offsets not found creating from config");
@@ -184,23 +173,6 @@ public class As400ConnectorTask extends BaseSourceTask<As400Partition, As400Offs
     @Override
     protected String connectorName() {
         return Module.name();
-    }
-
-    private Set<String> additionalTablesInConfigTables(As400OffsetContext previousOffset, As400ConnectorConfig newConfig) {
-        if (previousOffset == null) {
-            return Collections.emptySet();
-        }
-        final String newInclude = newConfig.tableIncludeList();
-        final String oldInclude = previousOffset.getIncludeTables();
-        LOGGER.info("previous includes {} , new includes {}", oldInclude, newInclude);
-
-        if (oldInclude != null && newInclude != null) {
-            final Set<String> newset = Stream.of(newInclude.split(",", -1))
-                    .collect(Collectors.toCollection(HashSet::new));
-            newset.removeAll(Set.of(oldInclude.split(",")));
-            return newset;
-        }
-        return Collections.emptySet();
     }
 
     @Override
