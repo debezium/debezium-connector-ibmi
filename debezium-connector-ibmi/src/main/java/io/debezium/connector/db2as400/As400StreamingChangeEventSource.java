@@ -68,6 +68,7 @@ public class As400StreamingChangeEventSource implements StreamingChangeEventSour
     private final As400ConnectorConfig connectorConfig;
     private final Map<String, TransactionContext> txMap = new HashMap<>();
     private final String database;
+    private As400OffsetContext offsetContext;
 
     public As400StreamingChangeEventSource(As400ConnectorConfig connectorConfig, As400RpcConnection dataConnection,
                                            As400JdbcConnection jdbcConnection, EventDispatcher<As400Partition, TableId> dispatcher,
@@ -81,6 +82,16 @@ public class As400StreamingChangeEventSource implements StreamingChangeEventSour
         this.schema = schema;
         this.pollInterval = connectorConfig.getPollInterval();
         this.database = jdbcConnection.getRealDatabaseName();
+    }
+
+    @Override
+    public void init(As400OffsetContext offsetContext) {
+        if (offsetContext == null) {
+            this.offsetContext = new As400OffsetContext(connectorConfig);
+        }
+        else {
+            this.offsetContext = offsetContext;
+        }
     }
 
     private void cacheBefore(TableId tableId, Object[] dataBefore) {
@@ -117,7 +128,7 @@ public class As400StreamingChangeEventSource implements StreamingChangeEventSour
                             metronome.pause();
                         }
                         if (!offsetContext.getPosition().equals(before)) {
-                            dispatcher.dispatchHeartbeatEvent(partition, offsetContext);
+                            dispatcher.dispatchHeartbeatEventAlsoToIncrementalSnapshot(partition, offsetContext);
                         }
                         retries = 0;
                     }
@@ -333,5 +344,10 @@ public class As400StreamingChangeEventSource implements StreamingChangeEventSour
 
     private boolean ignore(JournalEntryType journalCode) {
         return journalCode == JournalEntryType.OPEN || journalCode == JournalEntryType.CLOSE;
+    }
+
+    @Override
+    public As400OffsetContext getOffsetContext() {
+        return offsetContext;
     }
 }
