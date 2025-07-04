@@ -21,8 +21,8 @@
 
     <dependencies>
         <dependency>
-		  <groupId>net.sf.jt400</groupId>
-		  <artifactId>jt400</artifactId>
+        <groupId>net.sf.jt400</groupId>
+        <artifactId>jt400</artifactId>
         </dependency>
         <dependency>
             <groupId>org.junit.jupiter</groupId>
