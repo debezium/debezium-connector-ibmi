@@ -118,19 +118,10 @@ public class As400ConnectorTask extends BaseSourceTask<As400Partition, As400Offs
         final As400RpcConnection rpcConnection = new As400RpcConnection(connectorConfig, streamingMetrics,
                 shortIncludes);
 
-        if (previousOffsetPartition != null) {
-            validateSchemaHistory(connectorConfig, rpcConnection::validateLogPosition, previousOffsetPartition, schema,
-                    snapshotterService.getSnapshotter());
-        }
+        validateSchemaHistory(connectorConfig, rpcConnection::validateLogPosition, previousOffsetPartition, schema,
+                snapshotterService.getSnapshotter());
 
         As400ConnectorConfig snapshotConnectorConfig = connectorConfig;
-
-        if (previousOffset == null) {
-            LOGGER.info("previous offsets not found creating from config");
-            previousOffset = new As400OffsetContext(connectorConfig);
-            previousOffsetPartition = Offsets.of(new As400Partition(connectorConfig.getLogicalName()),
-                    previousOffset);
-        }
 
         final SignalProcessor<As400Partition, As400OffsetContext> signalProcessor = new SignalProcessor<>(
                 As400RpcConnector.class, connectorConfig, Map.of(),
