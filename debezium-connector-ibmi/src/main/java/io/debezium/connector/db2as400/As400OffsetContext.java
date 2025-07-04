@@ -25,7 +25,6 @@ import io.debezium.pipeline.source.snapshot.incremental.IncrementalSnapshotConte
 import io.debezium.pipeline.source.snapshot.incremental.SignalBasedIncrementalSnapshotContext;
 import io.debezium.pipeline.spi.OffsetContext;
 import io.debezium.pipeline.txmetadata.TransactionContext;
-import io.debezium.relational.RelationalDatabaseConnectorConfig;
 import io.debezium.relational.TableId;
 import io.debezium.spi.schema.DataCollectionId;
 import io.debezium.util.Strings;
@@ -71,7 +70,7 @@ public class As400OffsetContext extends CommonOffsetContext<SourceInfo> {
         sourceInfo = new SourceInfo(connectorConfig);
     }
 
-    public As400OffsetContext(As400ConnectorConfig connectorConfig, JournalProcessedPosition position, 
+    public As400OffsetContext(As400ConnectorConfig connectorConfig, JournalProcessedPosition position,
                               boolean snapshotComplete, IncrementalSnapshotContext<TableId> incrementalSnapshotContext) {
         super(new SourceInfo(connectorConfig), snapshotComplete);
         partition = Collections.singletonMap(SERVER_PARTITION_KEY, connectorConfig.getLogicalName());
