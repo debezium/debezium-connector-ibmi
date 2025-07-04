@@ -54,13 +54,8 @@ public class As400RpcConnection implements AutoCloseable, Connect<AS400, IOExcep
         this.streamingMetrics = streamingMetrics;
         try {
             System.setProperty("com.ibm.as400.access.AS400.guiAvailable", "False");
-            if (includes.isEmpty()) {
-                // TODO add in parameters so this is configurable
-                journalInfo = JournalInfoRetrieval.getJournal(connection(), config.getSchema());
-            }
-            else {
-                journalInfo = JournalInfoRetrieval.getJournal(connection(), config.getSchema(), includes);
-            }
+            final var JournalInfoRetrieval = new JournalInfoRetrieval();
+            journalInfo = JournalInfoRetrieval.getJournal(connection(), config.getSchema(), includes);
             final RetrieveConfig rconfig = new RetrieveConfigBuilder().withAs400(this)
                     .withJournalBufferSize(config.getJournalBufferSize())
                     .withJournalInfo(journalInfo)
