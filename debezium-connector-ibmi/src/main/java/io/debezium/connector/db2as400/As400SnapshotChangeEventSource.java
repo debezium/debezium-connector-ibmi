@@ -132,15 +132,16 @@ public class As400SnapshotChangeEventSource
                                            RelationalSnapshotContext<As400Partition, As400OffsetContext> snapshotContext,
                                            As400OffsetContext previousOffset)
             throws Exception {
-        if (previousOffset != null && previousOffset.isPositionSet()) {
+        if (previousOffset != null && previousOffset.isPositionSet() && !snapshotterService.getSnapshotter().shouldStreamEventsStartingFromSnapshot()) {
             snapshotContext.offset = previousOffset;
         }
-
-        final Instant now = Instant.now();
-        final JournalPosition position = rpcConnection.getCurrentPosition();
-        // set last entry to processed, so we don't process it again
-        final JournalProcessedPosition processedPos = new JournalProcessedPosition(position, now, true);
-        snapshotContext.offset = new As400OffsetContext(connectorConfig, processedPos);
+        else {
+            final Instant now = Instant.now();
+            final JournalPosition position = rpcConnection.getCurrentPosition();
+            // set last entry to processed, so we don't process it again
+            final JournalProcessedPosition processedPos = new JournalProcessedPosition(position, now, true);
+            snapshotContext.offset = new As400OffsetContext(connectorConfig, processedPos);
+        }
     }
 
     @Override
