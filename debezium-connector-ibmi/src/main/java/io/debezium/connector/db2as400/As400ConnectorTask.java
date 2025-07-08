@@ -27,6 +27,7 @@ import io.debezium.connector.common.CdcSourceTaskContext;
 import io.debezium.connector.common.DebeziumHeaderProducer;
 import io.debezium.connector.db2as400.metrics.As400ChangeEventSourceMetricsFactory;
 import io.debezium.connector.db2as400.metrics.As400StreamingChangeEventSourceMetrics;
+import io.debezium.converters.custom.CustomConverterServiceProvider;
 import io.debezium.document.DocumentReader;
 import io.debezium.ibmi.db2.journal.retrieve.FileFilter;
 import io.debezium.jdbc.DefaultMainConnectionProvidingConnectionFactory;
@@ -39,6 +40,7 @@ import io.debezium.pipeline.notification.NotificationService;
 import io.debezium.pipeline.signal.SignalProcessor;
 import io.debezium.pipeline.spi.Offsets;
 import io.debezium.processors.PostProcessorRegistryServiceProvider;
+import io.debezium.relational.CustomConverterRegistry;
 import io.debezium.relational.TableId;
 import io.debezium.schema.SchemaFactory;
 import io.debezium.schema.SchemaNameAdjuster;
@@ -73,8 +75,11 @@ public class As400ConnectorTask extends BaseSourceTask<As400Partition, As400Offs
         final MainConnectionProvidingConnectionFactory<As400JdbcConnection> jdbcConnectionFactory = new DefaultMainConnectionProvidingConnectionFactory<>(
                 () -> new As400JdbcConnection(connectorConfig.getJdbcConfig()));
         final As400JdbcConnection jdbcConnection = jdbcConnectionFactory.mainConnection();
+        registerServiceProviders(connectorConfig.getServiceRegistry());
 
-        this.schema = new As400DatabaseSchema(connectorConfig, jdbcConnection, topicNamingStrategy, schemaNameAdjuster);
+        CustomConverterRegistry customConverterRegistry = connectorConfig.getServiceRegistry().tryGetService(CustomConverterRegistry.class);
+
+        this.schema = new As400DatabaseSchema(connectorConfig, jdbcConnection, topicNamingStrategy, schemaNameAdjuster, customConverterRegistry);
 
         final CdcSourceTaskContext ctx = new CdcSourceTaskContext(connectorConfig, connectorConfig.getCustomMetricTags(), schema::tableIds);
 
@@ -85,7 +90,6 @@ public class As400ConnectorTask extends BaseSourceTask<As400Partition, As400Offs
         connectorConfig.getBeanRegistry().add(StandardBeanNames.CDC_SOURCE_TASK_CONTEXT, ctx);
 
         // Service providers
-        registerServiceProviders(connectorConfig.getServiceRegistry());
 
         // Set up the task record queue ...
         this.queue = new ChangeEventQueue.Builder<DataChangeEvent>().pollInterval(connectorConfig.getPollInterval())
@@ -216,5 +220,6 @@ public class As400ConnectorTask extends BaseSourceTask<As400Partition, As400Offs
     protected void registerServiceProviders(ServiceRegistry serviceRegistry) {
 
         serviceRegistry.registerServiceProvider(new PostProcessorRegistryServiceProvider());
+        serviceRegistry.registerServiceProvider(new CustomConverterServiceProvider());
     }
 }
