@@ -15,8 +15,11 @@ import org.junit.jupiter.api.Test;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import com.fnz.db2.journal.retrieve.SchemaCacheIF.TableInfo;
-import com.fnz.db2.journal.test.TestConnector;
+import io.debezium.ibmi.db2.journal.retrieve.Connect;
+import io.debezium.ibmi.db2.journal.retrieve.JdbcFileDecoder;
+import io.debezium.ibmi.db2.journal.retrieve.SchemaCacheHash;
+import io.debezium.ibmi.db2.journal.retrieve.SchemaCacheIF.TableInfo;
+import io.debezium.ibmi.db2.journal.test.TestConnector;
 
 public class JdbcFileDecoderIT {
 
