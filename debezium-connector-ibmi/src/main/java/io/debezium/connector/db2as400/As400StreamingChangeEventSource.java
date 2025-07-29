@@ -280,7 +280,7 @@ public class As400StreamingChangeEventSource implements StreamingChangeEventSour
                         final Object[] dataBefore = getBefore(tableId);
                         final Object[] dataNext = r.decode(schema.getFileDecoder());
 
-                        offsetContext.setSourceTime(eheader.getTime());
+                        offsetContext.updateSourceInfo(eheader.getTime());
 
                         final String txId = eheader.getCommitCycle().toString();
                         final TransactionContext txc = txMap.get(txId);
@@ -295,7 +295,7 @@ public class As400StreamingChangeEventSource implements StreamingChangeEventSour
                     case ADD_ROW1, ADD_ROW2: {
                         // record added
                         final Object[] dataNext = r.decode(schema.getFileDecoder());
-                        offsetContext.setSourceTime(eheader.getTime());
+                        offsetContext.updateSourceInfo(eheader.getTime());
 
                         final String txId = eheader.getCommitCycle().toString();
                         final TransactionContext txc = txMap.get(txId);
@@ -314,7 +314,7 @@ public class As400StreamingChangeEventSource implements StreamingChangeEventSour
                         // record deleted
                         final Object[] dataBefore = r.decode(schema.getFileDecoder());
 
-                        offsetContext.setSourceTime(eheader.getTime());
+                        offsetContext.updateSourceInfo(eheader.getTime());
 
                         final String txId = eheader.getCommitCycle().toString();
                         final TransactionContext txc = txMap.get(txId);
