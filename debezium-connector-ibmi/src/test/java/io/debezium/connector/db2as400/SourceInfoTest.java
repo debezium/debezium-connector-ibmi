@@ -1,17 +1,26 @@
+/*
+ * Copyright Debezium Authors.
+ *
+ * Licensed under the Apache Software License version 2.0, available at http://www.apache.org/licenses/LICENSE-2.0
+ */
 package io.debezium.connector.db2as400;
+
+import static io.debezium.connector.db2as400.SourceInfo.EVENT_TIME_KEY;
+import static io.debezium.connector.db2as400.SourceInfo.RECEIVER_KEY;
+import static io.debezium.connector.db2as400.SourceInfo.RECEIVER_LIBRARY_KEY;
+import static io.debezium.connector.db2as400.SourceInfo.SEQUENCE_KEY;
+import static org.assertj.core.api.Assertions.assertThat;
+
+import org.apache.kafka.connect.data.Schema;
+import org.apache.kafka.connect.data.SchemaBuilder;
+import org.junit.Before;
+import org.junit.Test;
 
 import io.debezium.config.CommonConnectorConfig;
 import io.debezium.config.Configuration;
 import io.debezium.data.VerifyRecord;
 import io.debezium.schema.SchemaFactory;
 import io.debezium.time.Conversions;
-import org.apache.kafka.connect.data.Schema;
-import org.apache.kafka.connect.data.SchemaBuilder;
-import org.junit.Before;
-import org.junit.Test;
-
-import static io.debezium.connector.db2as400.SourceInfo.*;
-import static org.assertj.core.api.Assertions.assertThat;
 
 /**
  * @author Pierre-Yves Péton
