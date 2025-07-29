@@ -132,7 +132,7 @@ public class As400OffsetContext extends CommonOffsetContext<SourceInfo> {
         return sourceInfo.schema();
     }
 
-    public void setSourceTime(Instant timestamp) {
+    public void updateSourceInfo(Instant timestamp) {
         sourceInfo.setSourceTime(timestamp);
         sourceInfo.setReceiver(position.getReceiver().name());
         sourceInfo.setReceiverLib(position.getReceiver().library());
