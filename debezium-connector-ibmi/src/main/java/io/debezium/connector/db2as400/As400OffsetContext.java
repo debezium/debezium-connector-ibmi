@@ -137,8 +137,6 @@ public class As400OffsetContext extends CommonOffsetContext<SourceInfo> {
         sourceInfo.setReceiver(position.getReceiver().name());
         sourceInfo.setReceiverLib(position.getReceiver().library());
         sourceInfo.setSequence(position.getOffset().toString());
-        String time = Long.toString(position.getTimeOfLastProcessed().getEpochSecond());
-        sourceInfo.setEventTime(time);
     }
 
     @Override
@@ -152,8 +150,6 @@ public class As400OffsetContext extends CommonOffsetContext<SourceInfo> {
         sourceInfo.setReceiver(position.getReceiver().name());
         sourceInfo.setReceiverLib(position.getReceiver().library());
         sourceInfo.setSequence(position.getOffset().toString());
-        String time = Long.toString(position.getTimeOfLastProcessed().getEpochSecond());
-        sourceInfo.setEventTime(time);
         // sourceInfo.tableEvent((TableId) collectionId);
     }
 

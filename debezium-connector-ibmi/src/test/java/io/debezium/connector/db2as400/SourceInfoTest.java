@@ -5,7 +5,6 @@
  */
 package io.debezium.connector.db2as400;
 
-import static io.debezium.connector.db2as400.SourceInfo.EVENT_TIME_KEY;
 import static io.debezium.connector.db2as400.SourceInfo.RECEIVER_KEY;
 import static io.debezium.connector.db2as400.SourceInfo.RECEIVER_LIBRARY_KEY;
 import static io.debezium.connector.db2as400.SourceInfo.SEQUENCE_KEY;
@@ -40,7 +39,6 @@ public class SourceInfoTest {
         source.setReceiver("RECV008");
         source.setReceiverLib("RCV_LIB");
         source.setSequence("82");
-        source.setEventTime(Long.toString(Conversions.toInstantFromMicros(123_456_000L).toEpochMilli()));
     }
 
     @Test
@@ -69,11 +67,6 @@ public class SourceInfoTest {
     }
 
     @Test
-    public void shouldHaveEventTime() {
-        assertThat(source.struct().getString(EVENT_TIME_KEY)).isEqualTo("123456");
-    }
-
-    @Test
     public void shouldHaveTimestamp() {
         assertThat(source.struct().getInt64("ts_ms")).isEqualTo(123_456L);
     }
@@ -94,7 +87,6 @@ public class SourceInfoTest {
                 .field("ts_ns", Schema.OPTIONAL_INT64_SCHEMA)
                 .field(RECEIVER_KEY, Schema.STRING_SCHEMA)
                 .field(RECEIVER_LIBRARY_KEY, Schema.STRING_SCHEMA)
-                .field(EVENT_TIME_KEY, Schema.STRING_SCHEMA)
                 .build();
 
         VerifyRecord.assertConnectSchemasAreEqual(null, source.struct().schema(), schema);
