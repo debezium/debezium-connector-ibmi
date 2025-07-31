@@ -5,7 +5,6 @@
  */
 package io.debezium.connector.db2as400;
 
-import static io.debezium.connector.db2as400.SourceInfo.EVENT_TIME_KEY;
 import static io.debezium.connector.db2as400.SourceInfo.RECEIVER_KEY;
 import static io.debezium.connector.db2as400.SourceInfo.RECEIVER_LIBRARY_KEY;
 
@@ -28,7 +27,6 @@ public class As400SourceInfoStructMaker extends AbstractSourceInfoStructMaker<So
                 // .field(SourceInfo.TABLE_NAME_KEY, Schema.STRING_SCHEMA)
                 .field(RECEIVER_KEY, Schema.STRING_SCHEMA)
                 .field(RECEIVER_LIBRARY_KEY, Schema.STRING_SCHEMA)
-                .field(EVENT_TIME_KEY, Schema.STRING_SCHEMA)
                 .build();
     }
 
@@ -44,7 +42,6 @@ public class As400SourceInfoStructMaker extends AbstractSourceInfoStructMaker<So
         // .put(SourceInfo.TABLE_NAME_KEY, sourceInfo.getTableId().table());
         ret.put(RECEIVER_KEY, sourceInfo.getReceiver() == null ? "null" : sourceInfo.getReceiver());
         ret.put(RECEIVER_LIBRARY_KEY, sourceInfo.getReceiverLib() == null ? "null" : sourceInfo.getReceiverLib());
-        ret.put(EVENT_TIME_KEY, sourceInfo.getEventTime() == null ? "null" : sourceInfo.getEventTime());
         return ret;
     }
 }
