@@ -235,5 +235,4 @@ public class As400ConnectorTask extends BaseSourceTask<As400Partition, As400Offs
     protected Iterable<Field> getAllConfigurationFields() {
         return As400ConnectorConfig.ALL_FIELDS;
     }
-
 }
