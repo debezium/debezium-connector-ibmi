@@ -1,0 +1,1 @@
+io.debezium.connector.db2as400.snapshot.query.SelectAllSnapshotQuery
