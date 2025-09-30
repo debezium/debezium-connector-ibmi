@@ -84,7 +84,7 @@ public class As400JdbcConnection extends JdbcConnection implements Connect<Conne
             AS400JDBCDriverForcedCcsid.class.getName(), As400JdbcConnection.class.getClassLoader());
 
     public As400JdbcConnection(JdbcConfiguration config) {
-        super(withDefaults(config), FACTORY, "'", "'");
+        super(withDefaults(config), FACTORY, "\"", "\"");
         this.fromCcsid = config.getInteger(As400ConnectorConfig.FROM_CCSID);
         this.toCcsid = config.getInteger(As400ConnectorConfig.TO_CCSID);
         this.config = config;
