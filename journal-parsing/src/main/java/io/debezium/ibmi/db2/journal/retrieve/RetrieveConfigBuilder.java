@@ -50,8 +50,10 @@ public class RetrieveConfigBuilder {
                 this.dumpFolder = f;
                 return this;
             }
+            else {
+                log.error("ignoring dump folder {} as it doesn't exist", dumpFolder);
+            }
         }
-        log.error("ignoring dump folder {} as it doesn't exist", dumpFolder);
         return this;
     }
 
