@@ -103,6 +103,14 @@ public class As400ConnectorConfig extends RelationalDatabaseConnectorConfig {
                     "for data change, schema change, transaction, heartbeat event etc.")
             .withDefault(HostnamePrefixNamingScheme.class.getName());
 
+    public static final Field TRIM_NON_XML_CHARSEQUENCE_FIELDS_IND = Field.create("trim.non.xml.charsequence.fields.ind")
+            .withDisplayName("Trim Non-XML Charsequence Fields")
+            .withType(Type.BOOLEAN)
+            .withDefault(true)
+            .withImportance(Importance.LOW)
+            .withDescription("A toggle for trimming the leading and trailing whitespace for non-XML columns that are CHAR/VARCHAR " +
+                    "or other Character sequence types.  Defaults to true to conform to pre-existing functionality.");
+
     public As400ConnectorConfig(Configuration config) {
         super(config, new SystemTablesPredicate(),
                 tableToString, 1, ColumnFilterMode.SCHEMA, false);
@@ -176,6 +184,10 @@ public class As400ConnectorConfig extends RelationalDatabaseConnectorConfig {
         return config.getString(DIAGNOSTICS_FOLDER);
     }
 
+    public boolean isTrimNonXMLCharsequenceInd() {
+        return config.getBoolean(TRIM_NON_XML_CHARSEQUENCE_FIELDS_IND);
+    }
+
     public JournalProcessedPosition getOffset() {
         final String receiver = config.getString(As400OffsetContext.RECEIVER);
         final String lib = config.getString(As400OffsetContext.RECEIVER_LIBRARY);
@@ -212,7 +224,7 @@ public class As400ConnectorConfig extends RelationalDatabaseConnectorConfig {
     public static Field.Set ALL_FIELDS = Field.setOf(JdbcConfiguration.HOSTNAME, USER, PASSWORD, SCHEMA, BUFFER_SIZE,
             RelationalDatabaseConnectorConfig.SNAPSHOT_SELECT_STATEMENT_OVERRIDES_BY_TABLE, SOCKET_TIMEOUT,
             MAX_SERVER_SIDE_ENTRIES, TOPIC_NAMING_STRATEGY, FROM_CCSID, TO_CCSID, SECURE,
-            DIAGNOSTICS_FOLDER);
+            DIAGNOSTICS_FOLDER, TRIM_NON_XML_CHARSEQUENCE_FIELDS_IND);
 
     public static ConfigDef configDef() {
         final ConfigDef c = RelationalDatabaseConnectorConfig.CONFIG_DEFINITION.edit()
@@ -220,7 +232,7 @@ public class As400ConnectorConfig extends RelationalDatabaseConnectorConfig {
                 .type(
                         HOSTNAME, USER, PASSWORD, SCHEMA, BUFFER_SIZE,
                         SOCKET_TIMEOUT, FROM_CCSID, TO_CCSID, SECURE,
-                        DIAGNOSTICS_FOLDER)
+                        DIAGNOSTICS_FOLDER, TRIM_NON_XML_CHARSEQUENCE_FIELDS_IND)
                 .connector(
                         SCHEMA_NAME_ADJUSTMENT_MODE)
                 .events(
