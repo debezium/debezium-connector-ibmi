@@ -103,13 +103,13 @@ public class As400ConnectorConfig extends RelationalDatabaseConnectorConfig {
                     "for data change, schema change, transaction, heartbeat event etc.")
             .withDefault(HostnamePrefixNamingScheme.class.getName());
 
-    public static final Field TRIM_NON_XML_CHARSEQUENCE_FIELDS_IND = Field.create("trim.non.xml.charsequence.fields.ind")
-            .withDisplayName("Trim Non-XML Charsequence Fields")
-            .withType(Type.BOOLEAN)
-            .withDefault(true)
+    public static final Field TRIM_NON_XML_CHARSEQUENCE_FIELD_MODE = Field.create("trim.non.xml.charsequence.field.mode")
+            .withDisplayName("Trim Non-XML Charsequence Field Mode")
+            .withEnum(CharSequenceTrimMode.class, CharSequenceTrimMode.BOTH)
             .withImportance(Importance.LOW)
-            .withDescription("A toggle for trimming the leading and trailing whitespace for non-XML columns that are CHAR/VARCHAR " +
-                    "or other Character sequence types.  Defaults to true to conform to pre-existing functionality.");
+            .withDescription("An enum to control trimming the leading and trailing whitespace for non-XML columns that " +
+                    "are CHAR/VARCHAR or other Character sequence types.  Defaults to both to conform to pre-existing " +
+                    "functionality.  Options are none, both, leading, trailing.");
 
     public As400ConnectorConfig(Configuration config) {
         super(config, new SystemTablesPredicate(),
@@ -185,7 +185,7 @@ public class As400ConnectorConfig extends RelationalDatabaseConnectorConfig {
     }
 
     public boolean isTrimNonXMLCharsequenceInd() {
-        return config.getBoolean(TRIM_NON_XML_CHARSEQUENCE_FIELDS_IND);
+        return config.getBoolean(TRIM_NON_XML_CHARSEQUENCE_FIELD_MODE);
     }
 
     public JournalProcessedPosition getOffset() {
@@ -224,7 +224,7 @@ public class As400ConnectorConfig extends RelationalDatabaseConnectorConfig {
     public static Field.Set ALL_FIELDS = Field.setOf(JdbcConfiguration.HOSTNAME, USER, PASSWORD, SCHEMA, BUFFER_SIZE,
             RelationalDatabaseConnectorConfig.SNAPSHOT_SELECT_STATEMENT_OVERRIDES_BY_TABLE, SOCKET_TIMEOUT,
             MAX_SERVER_SIDE_ENTRIES, TOPIC_NAMING_STRATEGY, FROM_CCSID, TO_CCSID, SECURE,
-            DIAGNOSTICS_FOLDER, TRIM_NON_XML_CHARSEQUENCE_FIELDS_IND);
+            DIAGNOSTICS_FOLDER, TRIM_NON_XML_CHARSEQUENCE_FIELD_MODE);
 
     public static ConfigDef configDef() {
         final ConfigDef c = RelationalDatabaseConnectorConfig.CONFIG_DEFINITION.edit()
@@ -232,7 +232,7 @@ public class As400ConnectorConfig extends RelationalDatabaseConnectorConfig {
                 .type(
                         HOSTNAME, USER, PASSWORD, SCHEMA, BUFFER_SIZE,
                         SOCKET_TIMEOUT, FROM_CCSID, TO_CCSID, SECURE,
-                        DIAGNOSTICS_FOLDER, TRIM_NON_XML_CHARSEQUENCE_FIELDS_IND)
+                        DIAGNOSTICS_FOLDER, TRIM_NON_XML_CHARSEQUENCE_FIELD_MODE)
                 .connector(
                         SCHEMA_NAME_ADJUSTMENT_MODE)
                 .events(
@@ -362,5 +362,64 @@ public class As400ConnectorConfig extends RelationalDatabaseConnectorConfig {
 
         Configuration driverConfig = this.config.subset(CommonConnectorConfig.DRIVER_CONFIG_PREFIX, true);
         return JdbcConfiguration.adapt(dbConfig.merge(dbFromConfig.build()).merge(driverConfig));
+    }
+
+    public CharSequenceTrimMode getCharSequenceTrimMode(){
+        return config.getInstance(TRIM_NON_XML_CHARSEQUENCE_FIELD_MODE, CharSequenceTrimMode.class);
+    }
+    /**
+     * The set of predefined ways of trimming charsequence fields.
+     */
+    public enum CharSequenceTrimMode implements EnumeratedValue {
+
+        /**
+         * Do not trim CharSequence columns.
+         */
+        NONE("none"),
+
+        /**
+         * Trim only leading whitespace.
+         */
+        LEADING("leading"),
+
+        /**
+         * Trim only trailing whitespace
+         */
+        TRAILING("trailing"),
+
+        /**
+         * Trim both leading and trailing whitespace
+         */
+        BOTH("both");
+
+        private final String value;
+
+        CharSequenceTrimMode(String value) {
+            this.value = value;
+        }
+
+        @Override
+        public String getValue() {
+            return value;
+        }
+
+        /**
+         * Determine if the supplied value is one of the predefined options.
+         *
+         * @param value the configuration property value; may not be null
+         * @return the matching option, or null if no match is found
+         */
+        public static CharSequenceTrimMode parse(String value) {
+            if (value == null) {
+                return null;
+            }
+            value = value.trim();
+            for (final CharSequenceTrimMode option : CharSequenceTrimMode.values()) {
+                if (option.getValue().equalsIgnoreCase(value)) {
+                    return option;
+                }
+            }
+            throw new IllegalArgumentException("Value for CharSequenceTrim Mode of: \"" + value + "\" is not valid.");
+        }
     }
 }
