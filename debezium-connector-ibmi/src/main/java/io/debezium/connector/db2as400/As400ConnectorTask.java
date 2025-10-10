@@ -83,7 +83,7 @@ public class As400ConnectorTask extends BaseSourceTask<As400Partition, As400Offs
 
         this.schema = new As400DatabaseSchema(connectorConfig, jdbcConnection, topicNamingStrategy, schemaNameAdjuster, customConverterRegistry);
 
-        final CdcSourceTaskContext ctx = new CdcSourceTaskContext(connectorConfig, connectorConfig.getCustomMetricTags(), schema::tableIds);
+        final CdcSourceTaskContext ctx = new CdcSourceTaskContext(connectorConfig, connectorConfig.getCustomMetricTags());
 
         // Manual Bean Registration
         connectorConfig.getBeanRegistry().add(StandardBeanNames.CONFIGURATION, config);
@@ -117,12 +117,12 @@ public class As400ConnectorTask extends BaseSourceTask<As400Partition, As400Offs
 
         final As400EventMetadataProvider metadataProvider = new As400EventMetadataProvider();
 
-        final As400TaskContext taskContext = new As400TaskContext(connectorConfig, schema,
+        final As400TaskContext taskContext = new As400TaskContext(connectorConfig,
                 connectorConfig.getCustomMetricTags());
         final As400ConnectorConfig newConfig = taskContext.getConfig();
 
         final As400StreamingChangeEventSourceMetrics streamingMetrics = new As400StreamingChangeEventSourceMetrics(
-                taskContext, queue, metadataProvider);
+                taskContext, queue, metadataProvider, schema::tableIds);
 
         final List<FileFilter> shortIncludes = jdbcConnection.shortIncludes(schema.getSchemaName(),
                 newConfig.tableIncludeList());
