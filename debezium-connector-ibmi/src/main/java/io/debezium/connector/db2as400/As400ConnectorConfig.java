@@ -184,10 +184,6 @@ public class As400ConnectorConfig extends RelationalDatabaseConnectorConfig {
         return config.getString(DIAGNOSTICS_FOLDER);
     }
 
-    public boolean isTrimNonXMLCharsequenceInd() {
-        return config.getBoolean(TRIM_NON_XML_CHARSEQUENCE_FIELD_MODE);
-    }
-
     public JournalProcessedPosition getOffset() {
         final String receiver = config.getString(As400OffsetContext.RECEIVER);
         final String lib = config.getString(As400OffsetContext.RECEIVER_LIBRARY);
@@ -397,7 +393,6 @@ public class As400ConnectorConfig extends RelationalDatabaseConnectorConfig {
         CharSequenceTrimMode(String value) {
             this.value = value;
         }
-
         @Override
         public String getValue() {
             return value;
