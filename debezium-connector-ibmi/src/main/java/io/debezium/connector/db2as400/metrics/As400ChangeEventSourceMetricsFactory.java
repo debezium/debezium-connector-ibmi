@@ -12,6 +12,7 @@ import io.debezium.connector.db2as400.As400TaskContext;
 import io.debezium.pipeline.metrics.DefaultChangeEventSourceMetricsFactory;
 import io.debezium.pipeline.metrics.SnapshotChangeEventSourceMetrics;
 import io.debezium.pipeline.metrics.StreamingChangeEventSourceMetrics;
+import io.debezium.pipeline.metrics.spi.CapturedTablesSupplier;
 import io.debezium.pipeline.source.spi.EventMetadataProvider;
 
 public class As400ChangeEventSourceMetricsFactory extends DefaultChangeEventSourceMetricsFactory<As400Partition> {
@@ -32,7 +33,8 @@ public class As400ChangeEventSourceMetricsFactory extends DefaultChangeEventSour
     @Override
     public <T extends CdcSourceTaskContext> StreamingChangeEventSourceMetrics<As400Partition> getStreamingMetrics(T taskContext,
                                                                                                                   ChangeEventQueueMetrics changeEventQueueMetrics,
-                                                                                                                  EventMetadataProvider eventMetadataProvider) {
+                                                                                                                  EventMetadataProvider eventMetadataProvider,
+                                                                                                                  CapturedTablesSupplier capturedTablesSupplier) {
         return streamingMetrics;
     }
 

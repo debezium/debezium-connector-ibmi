@@ -12,9 +12,9 @@ import io.debezium.connector.common.CdcSourceTaskContext;
 public class As400TaskContext extends CdcSourceTaskContext {
     private final As400ConnectorConfig config;
 
-    public As400TaskContext(As400ConnectorConfig config, As400DatabaseSchema schema,
+    public As400TaskContext(As400ConnectorConfig config,
                             Map<String, String> customMetricTags) {
-        super(config, customMetricTags, schema::tableIds);
+        super(config, customMetricTags);
         this.config = config;
     }
 
