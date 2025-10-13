@@ -7,18 +7,14 @@ package io.debezium.connector.db2as400;
 
 import java.util.Map;
 
+import io.debezium.config.Configuration;
 import io.debezium.connector.common.CdcSourceTaskContext;
 
-public class As400TaskContext extends CdcSourceTaskContext {
-    private final As400ConnectorConfig config;
+public class As400TaskContext extends CdcSourceTaskContext<As400ConnectorConfig> {
 
-    public As400TaskContext(As400ConnectorConfig config,
+    public As400TaskContext(Configuration rawConfig,
+                            As400ConnectorConfig config,
                             Map<String, String> customMetricTags) {
-        super(config, customMetricTags);
-        this.config = config;
-    }
-
-    public As400ConnectorConfig getConfig() {
-        return config;
+        super(rawConfig, config, customMetricTags);
     }
 }
