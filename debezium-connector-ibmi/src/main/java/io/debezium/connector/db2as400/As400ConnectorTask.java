@@ -83,7 +83,7 @@ public class As400ConnectorTask extends BaseSourceTask<As400Partition, As400Offs
 
         this.schema = new As400DatabaseSchema(connectorConfig, jdbcConnection, topicNamingStrategy, schemaNameAdjuster, customConverterRegistry);
 
-        final CdcSourceTaskContext ctx = new CdcSourceTaskContext(connectorConfig, connectorConfig.getCustomMetricTags());
+        final CdcSourceTaskContext ctx = new CdcSourceTaskContext(config, connectorConfig, connectorConfig.getCustomMetricTags());
 
         // Manual Bean Registration
         connectorConfig.getBeanRegistry().add(StandardBeanNames.CONFIGURATION, config);
@@ -117,7 +117,8 @@ public class As400ConnectorTask extends BaseSourceTask<As400Partition, As400Offs
 
         final As400EventMetadataProvider metadataProvider = new As400EventMetadataProvider();
 
-        final As400TaskContext taskContext = new As400TaskContext(connectorConfig,
+        final As400TaskContext taskContext = new As400TaskContext(config,
+                connectorConfig,
                 connectorConfig.getCustomMetricTags());
         final As400ConnectorConfig newConfig = taskContext.getConfig();
 
