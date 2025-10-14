@@ -416,5 +416,13 @@ public class As400ConnectorConfig extends RelationalDatabaseConnectorConfig {
             }
             throw new IllegalArgumentException("Value for CharSequenceTrim Mode of: \"" + value + "\" is not valid.");
         }
+        public String strip(String fixed){
+            return switch(this){
+                case NONE ->        fixed;
+                case LEADING ->     fixed.stripLeading();
+                case TRAILING ->    fixed.stripTrailing();
+                case BOTH ->        fixed.trim();
+            };
+        }
     }
 }

@@ -42,17 +42,7 @@ public class As400ValueConverters extends JdbcValueConverters {
                 String fname = (fieldDefn == null) ? "" : String.format(" fieldDefn name %s", fieldDefn.name());
                 log.warn("removed binary data from{}{}", cname, fname);
             }
-            if (data instanceof CharSequence) {
-                return switch(config.getCharSequenceTrimMode()){
-                    case NONE ->        super.convertString(column, fieldDefn, fixed.value);
-                    case LEADING ->     super.convertString(column, fieldDefn, fixed.value.stripLeading());
-                    case TRAILING ->    super.convertString(column, fieldDefn, fixed.value.stripTrailing());
-                    case BOTH ->        super.convertString(column, fieldDefn, fixed.value.trim());
-                };
-            }
-            else {
-                return super.convertString(column, fieldDefn, fixed.value.trim());
-            }
+            return super.convertString(column, fieldDefn, config.getCharSequenceTrimMode().strip(fixed.value));
         }
         return super.convertString(column, fieldDefn, data);
     }
