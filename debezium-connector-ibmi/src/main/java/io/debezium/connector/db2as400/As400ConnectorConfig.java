@@ -37,6 +37,7 @@ public class As400ConnectorConfig extends RelationalDatabaseConnectorConfig {
         return sb.toString();
     };
 
+    private final CharSequenceTrimMode charSequenceTrimMode;
     private final SnapshotMode snapshotMode;
     private final Configuration config;
     private String incrementalTables = "";
@@ -117,6 +118,7 @@ public class As400ConnectorConfig extends RelationalDatabaseConnectorConfig {
         this.config = config;
         this.snapshotMode = SnapshotMode.parse(config.getString(SNAPSHOT_MODE), SNAPSHOT_MODE.defaultValueAsString());
         this.tableFilters = new As400NormalRelationalTableFilters(config, new SystemTablesPredicate(), tableToString);
+        this.charSequenceTrimMode = CharSequenceTrimMode.parse(config.getString(TRIM_NON_XML_CHARSEQUENCE_FIELD_MODE), TRIM_NON_XML_CHARSEQUENCE_FIELD_MODE.defaultValueAsString());
     }
 
     // used by the snapshot to limit the additional tables for a change in configuration
@@ -361,7 +363,7 @@ public class As400ConnectorConfig extends RelationalDatabaseConnectorConfig {
     }
 
     public CharSequenceTrimMode getCharSequenceTrimMode(){
-        return config.getInstance(TRIM_NON_XML_CHARSEQUENCE_FIELD_MODE, CharSequenceTrimMode.class);
+        return charSequenceTrimMode;
     }
     /**
      * The set of predefined ways of trimming charsequence fields.
@@ -415,6 +417,21 @@ public class As400ConnectorConfig extends RelationalDatabaseConnectorConfig {
                 }
             }
             throw new IllegalArgumentException("Value for CharSequenceTrim Mode of: \"" + value + "\" is not valid.");
+        }
+        /**
+         * Determine if the supplied value is one of the predefined options.
+         *
+         * @param value        the configuration property value; may not be null
+         * @param defaultValue the default value; may be null
+         * @return the matching option, or null if no match is found and the non-null
+         *         default is invalid
+         */
+        public static CharSequenceTrimMode parse(String value, String defaultValue) {
+            CharSequenceTrimMode mode = parse(value);
+            if (mode == null && defaultValue != null) {
+                mode = parse(defaultValue);
+            }
+            return mode;
         }
         public String strip(String fixed){
             return switch(this){
