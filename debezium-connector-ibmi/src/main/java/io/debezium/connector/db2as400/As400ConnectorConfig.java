@@ -118,7 +118,8 @@ public class As400ConnectorConfig extends RelationalDatabaseConnectorConfig {
         this.config = config;
         this.snapshotMode = SnapshotMode.parse(config.getString(SNAPSHOT_MODE), SNAPSHOT_MODE.defaultValueAsString());
         this.tableFilters = new As400NormalRelationalTableFilters(config, new SystemTablesPredicate(), tableToString);
-        this.charSequenceTrimMode = CharSequenceTrimMode.parse(config.getString(TRIM_NON_XML_CHARSEQUENCE_FIELD_MODE), TRIM_NON_XML_CHARSEQUENCE_FIELD_MODE.defaultValueAsString());
+        this.charSequenceTrimMode = CharSequenceTrimMode.parse(config.getString(TRIM_NON_XML_CHARSEQUENCE_FIELD_MODE),
+                TRIM_NON_XML_CHARSEQUENCE_FIELD_MODE.defaultValueAsString());
     }
 
     // used by the snapshot to limit the additional tables for a change in configuration
@@ -362,9 +363,10 @@ public class As400ConnectorConfig extends RelationalDatabaseConnectorConfig {
         return JdbcConfiguration.adapt(dbConfig.merge(dbFromConfig.build()).merge(driverConfig));
     }
 
-    public CharSequenceTrimMode getCharSequenceTrimMode(){
+    public CharSequenceTrimMode getCharSequenceTrimMode() {
         return charSequenceTrimMode;
     }
+
     /**
      * The set of predefined ways of trimming charsequence fields.
      */
@@ -395,6 +397,7 @@ public class As400ConnectorConfig extends RelationalDatabaseConnectorConfig {
         CharSequenceTrimMode(String value) {
             this.value = value;
         }
+
         @Override
         public String getValue() {
             return value;
@@ -418,6 +421,7 @@ public class As400ConnectorConfig extends RelationalDatabaseConnectorConfig {
             }
             throw new IllegalArgumentException("Value for CharSequenceTrim Mode of: \"" + value + "\" is not valid.");
         }
+
         /**
          * Determine if the supplied value is one of the predefined options.
          *
@@ -433,12 +437,13 @@ public class As400ConnectorConfig extends RelationalDatabaseConnectorConfig {
             }
             return mode;
         }
-        public String strip(String fixed){
-            return switch(this){
-                case NONE ->        fixed;
-                case LEADING ->     fixed.stripLeading();
-                case TRAILING ->    fixed.stripTrailing();
-                case BOTH ->        fixed.trim();
+
+        public String strip(String fixed) {
+            return switch (this) {
+                case NONE -> fixed;
+                case LEADING -> fixed.stripLeading();
+                case TRAILING -> fixed.stripTrailing();
+                case BOTH -> fixed.trim();
             };
         }
     }
