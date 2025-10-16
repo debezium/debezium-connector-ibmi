@@ -22,8 +22,13 @@ public class SourceInfo extends BaseSourceInfo {
 
     public static final String SNAPSHOT_KEY = "snapshot";
     public static final String JOURNAL_KEY = "journal";
+    public static final String RECEIVER_KEY = "receiver";
+    public static final String RECEIVER_LIBRARY_KEY = "receiver_library";
     private Instant sourceTime;
     private String databaseName;
+    private String receiver;
+    private String receiverLib;
+    private String sequence;
 
     protected SourceInfo(As400ConnectorConfig connectorConfig) {
         super(connectorConfig);
@@ -43,4 +48,30 @@ public class SourceInfo extends BaseSourceInfo {
     protected String database() {
         return databaseName;
     }
+
+    public String getReceiver() {
+        return receiver;
+    }
+
+    public void setReceiver(String receiver) {
+        this.receiver = receiver;
+    }
+
+    public String getReceiverLib() {
+        return receiverLib;
+    }
+
+    public void setReceiverLib(String receiverLib) {
+        this.receiverLib = receiverLib;
+    }
+
+    @Override
+    protected String sequence() {
+        return sequence;
+    }
+
+    public void setSequence(String sequence) {
+        this.sequence = sequence;
+    }
+
 }

@@ -5,6 +5,9 @@
  */
 package io.debezium.connector.db2as400;
 
+import static io.debezium.connector.db2as400.SourceInfo.RECEIVER_KEY;
+import static io.debezium.connector.db2as400.SourceInfo.RECEIVER_LIBRARY_KEY;
+
 import org.apache.kafka.connect.data.Schema;
 import org.apache.kafka.connect.data.Struct;
 
@@ -22,7 +25,8 @@ public class As400SourceInfoStructMaker extends AbstractSourceInfoStructMaker<So
                 // TODO add in table info
                 // .field(SourceInfo.SCHEMA_NAME_KEY, Schema.STRING_SCHEMA)
                 // .field(SourceInfo.TABLE_NAME_KEY, Schema.STRING_SCHEMA)
-                // TODO add in offset
+                .field(RECEIVER_KEY, Schema.OPTIONAL_STRING_SCHEMA)
+                .field(RECEIVER_LIBRARY_KEY, Schema.OPTIONAL_STRING_SCHEMA)
                 .build();
     }
 
@@ -36,7 +40,8 @@ public class As400SourceInfoStructMaker extends AbstractSourceInfoStructMaker<So
         final Struct ret = super.commonStruct(sourceInfo);
         // .put(SourceInfo.SCHEMA_NAME_KEY, sourceInfo.getTableId().schema())
         // .put(SourceInfo.TABLE_NAME_KEY, sourceInfo.getTableId().table());
-
+        ret.put(RECEIVER_KEY, sourceInfo.getReceiver());
+        ret.put(RECEIVER_LIBRARY_KEY, sourceInfo.getReceiverLib());
         return ret;
     }
 }
