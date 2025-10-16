@@ -85,8 +85,8 @@ public class SourceInfoTest {
                 .field("sequence", Schema.OPTIONAL_STRING_SCHEMA)
                 .field("ts_us", Schema.OPTIONAL_INT64_SCHEMA)
                 .field("ts_ns", Schema.OPTIONAL_INT64_SCHEMA)
-                .field(RECEIVER_KEY, Schema.STRING_SCHEMA)
-                .field(RECEIVER_LIBRARY_KEY, Schema.STRING_SCHEMA)
+                .field(RECEIVER_KEY, Schema.OPTIONAL_STRING_SCHEMA)
+                .field(RECEIVER_LIBRARY_KEY, Schema.OPTIONAL_STRING_SCHEMA)
                 .build();
 
         VerifyRecord.assertConnectSchemasAreEqual(null, source.struct().schema(), schema);
