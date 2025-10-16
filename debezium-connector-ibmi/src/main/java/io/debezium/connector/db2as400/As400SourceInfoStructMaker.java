@@ -25,8 +25,8 @@ public class As400SourceInfoStructMaker extends AbstractSourceInfoStructMaker<So
                 // TODO add in table info
                 // .field(SourceInfo.SCHEMA_NAME_KEY, Schema.STRING_SCHEMA)
                 // .field(SourceInfo.TABLE_NAME_KEY, Schema.STRING_SCHEMA)
-                .field(RECEIVER_KEY, Schema.STRING_SCHEMA)
-                .field(RECEIVER_LIBRARY_KEY, Schema.STRING_SCHEMA)
+                .field(RECEIVER_KEY, Schema.OPTIONAL_STRING_SCHEMA)
+                .field(RECEIVER_LIBRARY_KEY, Schema.OPTIONAL_STRING_SCHEMA)
                 .build();
     }
 
@@ -40,8 +40,8 @@ public class As400SourceInfoStructMaker extends AbstractSourceInfoStructMaker<So
         final Struct ret = super.commonStruct(sourceInfo);
         // .put(SourceInfo.SCHEMA_NAME_KEY, sourceInfo.getTableId().schema())
         // .put(SourceInfo.TABLE_NAME_KEY, sourceInfo.getTableId().table());
-        ret.put(RECEIVER_KEY, sourceInfo.getReceiver() == null ? "null" : sourceInfo.getReceiver());
-        ret.put(RECEIVER_LIBRARY_KEY, sourceInfo.getReceiverLib() == null ? "null" : sourceInfo.getReceiverLib());
+        ret.put(RECEIVER_KEY, sourceInfo.getReceiver());
+        ret.put(RECEIVER_LIBRARY_KEY, sourceInfo.getReceiverLib());
         return ret;
     }
 }
