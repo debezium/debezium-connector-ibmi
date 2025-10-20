@@ -44,6 +44,7 @@ public class As400SnapshotChangeEventSource
     private final As400JdbcConnection jdbcConnection;
     private final As400RpcConnection rpcConnection;
     private final As400DatabaseSchema schema;
+    protected final SnapshotterService snapshotterService;
 
     public As400SnapshotChangeEventSource(As400ConnectorConfig connectorConfig, As400RpcConnection rpcConnection,
                                           MainConnectionProvidingConnectionFactory<As400JdbcConnection> jdbcConnectionFactory,
@@ -59,6 +60,7 @@ public class As400SnapshotChangeEventSource
         this.rpcConnection = rpcConnection;
         this.jdbcConnection = jdbcConnectionFactory.mainConnection();
         this.schema = schema;
+        this.snapshotterService = snapshotterService;
     }
 
     @Override
@@ -214,7 +216,9 @@ public class As400SnapshotChangeEventSource
         final Map<DataCollectionId, String> snapshotSelectOverridesByTable = connectorConfig.getSnapshotSelectOverridesByTable();
 
         // found a previous offset and the earlier snapshot has completed
-        if (previousOffset != null && previousOffset.isSnapshotComplete()) {
+        boolean offsetsExist = previousOffset != null;
+        boolean snapshotInProgress = previousOffset != null && previousOffset.isSnapshotComplete();
+        if (offsetsExist && snapshotInProgress) {
             // when control tables in place
             if (!previousOffset.hasNewTables()) {
                 log.info(
@@ -224,16 +228,17 @@ public class As400SnapshotChangeEventSource
             }
         }
 
+        boolean snapshotData = snapshotterService.getSnapshotter().shouldSnapshotData(offsetsExist, snapshotInProgress);
         log.info("No previous offset has been found");
-        if (this.connectorConfig.getSnapshotMode().includeData()) {
+        if (snapshotData) {
             log.info("According to the connector configuration both schema and data will be snapshotted");
         }
         else {
             log.info("According to the connector configuration only schema will be snapshotted");
         }
 
-        return new SnapshottingTask(this.connectorConfig.getSnapshotMode().includeData(),
-                this.connectorConfig.getSnapshotMode().includeData(), dataCollectionsToBeSnapshotted,
+        return new SnapshottingTask(snapshotData,
+                snapshotData, dataCollectionsToBeSnapshotted,
                 snapshotSelectOverridesByTable, false);
     }
 
