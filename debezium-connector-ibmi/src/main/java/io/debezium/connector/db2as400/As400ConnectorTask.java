@@ -47,7 +47,10 @@ import io.debezium.relational.TableId;
 import io.debezium.schema.SchemaFactory;
 import io.debezium.schema.SchemaNameAdjuster;
 import io.debezium.service.spi.ServiceRegistry;
+import io.debezium.snapshot.SnapshotLockProvider;
+import io.debezium.snapshot.SnapshotQueryProvider;
 import io.debezium.snapshot.SnapshotterService;
+import io.debezium.snapshot.SnapshotterServiceProvider;
 import io.debezium.spi.topic.TopicNamingStrategy;
 import io.debezium.util.Clock;
 
@@ -83,13 +86,17 @@ public class As400ConnectorTask extends BaseSourceTask<As400Partition, As400Offs
 
         this.schema = new As400DatabaseSchema(connectorConfig, jdbcConnection, topicNamingStrategy, schemaNameAdjuster, customConverterRegistry);
 
-        final CdcSourceTaskContext ctx = new CdcSourceTaskContext(config, connectorConfig, connectorConfig.getCustomMetricTags());
+        final CdcSourceTaskContext<As400ConnectorConfig> ctx = new CdcSourceTaskContext<As400ConnectorConfig>(config, connectorConfig, connectorConfig.getCustomMetricTags());
+        Offsets<As400Partition, As400OffsetContext> previousOffsetPartition = getPreviousOffsets(
+                new As400Partition.Provider(connectorConfig), new As400OffsetContext.Loader(connectorConfig));
+        As400OffsetContext previousOffset = previousOffsetPartition.getTheOnlyOffset();
 
         // Manual Bean Registration
         connectorConfig.getBeanRegistry().add(StandardBeanNames.CONFIGURATION, config);
         connectorConfig.getBeanRegistry().add(StandardBeanNames.CONNECTOR_CONFIG, connectorConfig);
         connectorConfig.getBeanRegistry().add(StandardBeanNames.DATABASE_SCHEMA, schema);
         connectorConfig.getBeanRegistry().add(StandardBeanNames.CDC_SOURCE_TASK_CONTEXT, ctx);
+        connectorConfig.getBeanRegistry().add(StandardBeanNames.JDBC_CONNECTION, jdbcConnection);
 
         // Service providers
 
@@ -103,9 +110,6 @@ public class As400ConnectorTask extends BaseSourceTask<As400Partition, As400Offs
 
         errorHandler = new ErrorHandler(As400RpcConnector.class, connectorConfig, queue, null);
 
-        Offsets<As400Partition, As400OffsetContext> previousOffsetPartition = getPreviousOffsets(
-                new As400Partition.Provider(connectorConfig), new As400OffsetContext.Loader(connectorConfig));
-        As400OffsetContext previousOffset = previousOffsetPartition.getTheOnlyOffset();
         if (previousOffset == null) {
             LOGGER.info("previous offsets not found creating from config");
             previousOffset = new As400OffsetContext(connectorConfig);
@@ -221,12 +225,4 @@ public class As400ConnectorTask extends BaseSourceTask<As400Partition, As400Offs
         return As400ConnectorConfig.ALL_FIELDS;
     }
 
-    // TODO remove when DBZ-7700 is implemented
-    @Override
-    protected void registerServiceProviders(ServiceRegistry serviceRegistry) {
-
-        serviceRegistry.registerServiceProvider(new PostProcessorRegistryServiceProvider());
-        serviceRegistry.registerServiceProvider(new DebeziumHeaderProducerProvider());
-        serviceRegistry.registerServiceProvider(new CustomConverterServiceProvider());
-    }
 }
