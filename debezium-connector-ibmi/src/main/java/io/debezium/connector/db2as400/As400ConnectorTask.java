@@ -77,7 +77,8 @@ public class As400ConnectorTask extends BaseSourceTask<As400Partition, As400Offs
 
         this.schema = new As400DatabaseSchema(connectorConfig, jdbcConnection, topicNamingStrategy, schemaNameAdjuster, customConverterRegistry);
 
-        final CdcSourceTaskContext<As400ConnectorConfig> ctx = new CdcSourceTaskContext<As400ConnectorConfig>(config, connectorConfig, connectorConfig.getCustomMetricTags());
+        final CdcSourceTaskContext<As400ConnectorConfig> ctx = new CdcSourceTaskContext<As400ConnectorConfig>(config, connectorConfig,
+                connectorConfig.getCustomMetricTags());
         Offsets<As400Partition, As400OffsetContext> previousOffsetPartition = getPreviousOffsets(
                 new As400Partition.Provider(connectorConfig), new As400OffsetContext.Loader(connectorConfig));
         As400OffsetContext previousOffset = previousOffsetPartition.getTheOnlyOffset();
