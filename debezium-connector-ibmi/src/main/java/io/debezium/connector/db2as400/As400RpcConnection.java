@@ -52,7 +52,7 @@ public class As400RpcConnection implements AutoCloseable, Connect<AS400, IOExcep
 
     private final boolean isSecure;
 
-    public As400RpcConnection(As400ConnectorConfig config, As400StreamingChangeEventSourceMetrics streamingMetrics, List<FileFilter> includes) {
+    public As400RpcConnection(As400ConnectorConfig config, As400StreamingChangeEventSourceMetrics streamingMetrics, List<FileFilter> includes, long cacheWait) {
         super();
         this.config = config;
         this.isSecure = config.getJdbcConfig().getBoolean("secure", config.isSecure());
@@ -61,12 +61,16 @@ public class As400RpcConnection implements AutoCloseable, Connect<AS400, IOExcep
             System.setProperty("com.ibm.as400.access.AS400.guiAvailable", "False");
             final var JournalInfoRetrieval = new JournalInfoRetrieval();
             journalInfo = JournalInfoRetrieval.getJournal(connection(), config.getSchema(), includes);
+
             final RetrieveConfig rconfig = new RetrieveConfigBuilder().withAs400(this)
                     .withJournalBufferSize(config.getJournalBufferSize())
                     .withJournalInfo(journalInfo)
                     .withMaxServerSideEntries(config.getMaxServerSideEntries())
                     .withServerFiltering(true)
-                    .withIncludeFiles(includes).withDumpFolder(config.diagnosticsFolder()).build();
+                    .withIncludeFiles(includes).withDumpFolder(config.diagnosticsFolder())
+                    .withJournalCacheDelay(cacheWait + config.cacheAdditionalDelay())
+                    .withPollInterval(config.getPollInterval().toMillis())
+                    .build();
             retrieveJournal = new RetrieveJournal(rconfig, journalInfoRetrieval);
         }
         catch (final IOException e) {

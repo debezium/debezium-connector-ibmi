@@ -6,13 +6,18 @@
 package io.debezium.ibmi.db2.journal.retrieve;
 
 import java.math.BigInteger;
+import java.sql.Connection;
+import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Date;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.function.Function;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -58,6 +63,8 @@ public class JournalInfoRetrieval {
     private final AS400Bin4 as400Bin4 = new AS400Bin4();
     private static final int KEY_HEADER_LENGTH = 20;
     private final DetailedJournalReceiverCache cache = new DetailedJournalReceiverCache();
+    private Map<String, Boolean> isJournalCaching = new HashMap<>();
+    private Map<JournalInfo, DelayedDetailedJournalReceiver> delayedCache = new HashMap<>();
 
     public JournalInfoRetrieval() {
         super();
@@ -69,23 +76,19 @@ public class JournalInfoRetrieval {
         return new JournalPosition(offset, ji);
     }
 
-    public DetailedJournalReceiver getCurrentDetailedJournalReceiver(AS400 as400, JournalInfo journalLib)
-            throws Exception {
-        final JournalReceiver ji = getReceiver(as400, journalLib);
-        return getOffset(as400, ji);
-    }
-
     static final Pattern JOURNAL_REGEX = Pattern.compile("\\/[^/]*\\/([^.]*).LIB\\/(.*).JRN");
 
-    @Deprecated
-    public static JournalInfo getJournal(AS400 as400, String schema) throws IllegalStateException {
+    public JournalInfo getJournal(AS400 as400, String schema) throws IllegalStateException {
         // https://stackoverflow.com/questions/43061626/as-400-create-journal-jt400-java
         // note each file can have it's own different journal
         try {
             final FileAttributes fa = new FileAttributes(as400, String.format("/QSYS.LIB/%s.LIB", schema));
             final Matcher m = JOURNAL_REGEX.matcher(fa.getJournal());
             if (m.matches()) {
-                return new JournalInfo(m.group(2), m.group(1));
+                String journalName = m.group(2);
+                String journalLib = m.group(1);
+                boolean isCaching = isJournalCaching(as400, journalName, journalLib);
+                return new JournalInfo(journalName, journalLib, isCaching);
             }
             else {
                 log.error("no match searching for journal filename {}", fa.getJournal());
@@ -97,12 +100,56 @@ public class JournalInfoRetrieval {
         throw new IllegalStateException("Journal not found");
     }
 
-    public JournalInfo getJournal(AS400 as400, String schema, List<FileFilter> includes)
-            throws IllegalStateException {
-        if (includes.isEmpty()) {
-            return getJournal(as400, schema);
+    public Optional<DetailedJournalReceiver> getDelayedDetailedJournalReceiver(AS400 as400, JournalInfo journalLib, long journalCacheDelay, long pollMilliSeconds)
+            throws Exception {
+        DetailedJournalReceiver dr = getCurrentDetailedJournalReceiver(as400, journalLib);
+        if (journalLib.isCaching()) {
+            if (!delayedCache.containsKey(journalLib)) {
+                DelayedDetailedJournalReceiver ddr = new DelayedDetailedJournalReceiver(journalCacheDelay, pollMilliSeconds);
+                delayedCache.put(journalLib, ddr);
+            }
+            DelayedDetailedJournalReceiver cached = delayedCache.get(journalLib);
+            cached.addDetailedReceiver(dr);
+            return Optional.ofNullable(cached.getDelayedReceiver());
         }
+        else {
+            return Optional.of(dr);
+        }
+    }
+
+    public static long getJournalCacheDurationInMilliseconds(Connect<Connection, SQLException> jdbcConnection) {
+        try (Connection connection = jdbcConnection.connection()) {
+            String sql = "SELECT JOURNAL_CACHE_WAIT_TIME FROM QSYS2.SYSTEM_STATUS_INFO";
+            try (java.sql.PreparedStatement ps = connection.prepareStatement(sql)) {
+                try (java.sql.ResultSet rs = ps.executeQuery()) {
+                    if (rs.next()) {
+                        return rs.getLong("JOURNAL_CACHE_WAIT_TIME") * 1000L;
+                    }
+                    else {
+                        log.error("unable to retrieve journal cache wait time defaulting to 30 seconds");
+                        return 30000L;
+                    }
+                }
+            }
+        }
+        catch (SQLException e) {
+            log.error("unable to retrieve journal cache wait time defaulting to 30 seconds", e);
+            return 30000L;
+        }
+
+    }
+
+    public DetailedJournalReceiver getCurrentDetailedJournalReceiver(AS400 as400, JournalInfo journalLib)
+            throws Exception {
+        final JournalReceiver ji = getReceiver(as400, journalLib);
+        return getOffset(as400, ji);
+    }
+
+    public JournalInfo getJournal(AS400 as400, String schema, List<FileFilter> includes) throws IllegalStateException {
         try {
+            if (includes.isEmpty()) {
+                return getJournal(as400, schema);
+            }
             final Set<JournalInfo> jis = new HashSet<>();
             for (final FileFilter f : includes) {
                 if (!schema.equals(f.schema())) {
@@ -180,13 +227,29 @@ public class JournalInfoRetrieval {
 
             final String journalName = decodeString(data, offsetJournalOrn, 10);
             final String journalLib = decodeString(data, offsetJournalOrn + 10, 10);
-            return new JournalInfo(journalName, journalLib);
+
+            boolean isCaching = isJournalCaching(as400, journalName, journalLib);
+
+            return new JournalInfo(journalName, journalLib, isCaching);
         }
         else {
             final String msg = Arrays.asList(pc.getMessageList()).stream().map(AS400Message::getText).reduce("",
                     (a, s) -> a + s);
             throw new IllegalStateException(String.format("Journal not found for %s.%s error %s", schema, table, msg));
         }
+    }
+
+    private boolean isJournalCaching(AS400 as400, final String journalName, final String journalLib) throws Exception {
+        String key = journalName + journalLib;
+        if (isJournalCaching.containsKey(key)) {
+            return isJournalCaching.get(key);
+        }
+        boolean isCaching = this._getReceiver(as400, new JournalInfo(journalName, journalLib, false), b -> {
+            String cache = decodeString(b, 195, 1);
+            return "1".equals(cache);
+        });
+        isJournalCaching.put(key, isCaching);
+        return isCaching;
     }
 
     public static class JournalRetrievalCriteria {
@@ -219,6 +282,19 @@ public class JournalInfoRetrieval {
         }
     }
 
+    public JournalReceiver getReceiver(AS400 as400, JournalInfo journalLib) throws Exception {
+        return _getReceiver(as400, journalLib, b -> {
+            // Attached journal receiver name. The name of the journal
+            // receiver that is
+            // currently attached to this journal. This field will be
+            // blank if no journal
+            // receivers are attached.
+            final String journalReceiver = decodeString(b, 200, 10);
+            final String journalLibrary = decodeString(b, 210, 10);
+            return new JournalReceiver(journalReceiver, journalLibrary);
+        });
+    }
+
     /**
      * uses the current attached journal information in the header
      *
@@ -229,7 +305,7 @@ public class JournalInfoRetrieval {
      * @return
      * @throws Exception
      */
-    public JournalReceiver getReceiver(AS400 as400, JournalInfo journalLib) throws Exception {
+    private <R> R _getReceiver(AS400 as400, JournalInfo journalLib, Function<byte[], R> f) throws Exception {
         final int rcvLen = 4096;
         final String jrnLib = padRight(journalLib.journalName(), 10) + padRight(journalLib.journalLibrary(), 10);
         final String format = "RJRN0200";
@@ -241,17 +317,7 @@ public class JournalInfoRetrieval {
                 new ProgramParameter(ProgramParameter.PASS_BY_REFERENCE, EMPTY_AS400_TEXT),
                 new ProgramParameter(ProgramParameter.PASS_BY_REFERENCE, as400Bin4.toBytes(0)) };
 
-        return callServiceProgram(as400, JOURNAL_SERVICE_LIB, "QjoRetrieveJournalInformation", parameters,
-                (byte[] data) -> {
-                    // Attached journal receiver name. The name of the journal
-                    // receiver that is
-                    // currently attached to this journal. This field will be
-                    // blank if no journal
-                    // receivers are attached.
-                    final String journalReceiver = decodeString(data, 200, 10);
-                    final String journalLibrary = decodeString(data, 210, 10);
-                    return new JournalReceiver(journalReceiver, journalLibrary);
-                });
+        return callServiceProgram(as400, JOURNAL_SERVICE_LIB, "QjoRetrieveJournalInformation", parameters, f::apply);
     }
 
     private byte[] getReceiversForJournal(AS400 as400, JournalInfo journalLib, int bufSize) throws Exception {
@@ -394,13 +460,11 @@ public class JournalInfoRetrieval {
 
     /**
      *
-     * @param <T>
-     *            return type of processor
+     * @param <T>            return type of processor
      * @param as400
      * @param programLibrary
      * @param program
-     * @param parameters
-     *            assumes first parameter is output
+     * @param parameters     assumes first parameter is output
      * @param processor
      * @return output of processor
      * @throws Exception
@@ -429,13 +493,11 @@ public class JournalInfoRetrieval {
 
     /**
      *
-     * @param <T>
-     *            return type of processor
+     * @param <T>            return type of processor
      * @param as400
      * @param programLibrary
      * @param program
-     * @param parameters
-     *            assumes first parameter is output
+     * @param parameters     assumes first parameter is output
      * @param processor
      * @return output of processor
      * @throws Exception
