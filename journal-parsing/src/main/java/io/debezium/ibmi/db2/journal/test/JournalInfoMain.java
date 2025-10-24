@@ -26,7 +26,7 @@ public class JournalInfoMain {
         TestConnector connector = new TestConnector();
         Connect<AS400, IOException> as400Connect = connector.getAs400();
         String schema = connector.getSchema();
-        JournalInfoRetrieval journalInfoRetrieval = new JournalInfoRetrieval();
+        JournalInfoRetrieval journalInfoRetrieval = new JournalInfoRetrieval(35000, 2000);
         JournalInfo ji = journalInfoRetrieval.getJournal(as400Connect.connection(), schema, "PERSON");
 
         List<DetailedJournalReceiver> jri = journalInfoRetrieval.getReceivers(as400Connect.connection(), ji);

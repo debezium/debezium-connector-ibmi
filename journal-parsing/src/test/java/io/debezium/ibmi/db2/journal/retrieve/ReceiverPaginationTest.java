@@ -64,14 +64,14 @@ class ReceiverPaginationTest {
 
         when(journalInfoRetrieval.getReceivers(any(), any())).thenReturn(list);
 
-        when(journalInfoRetrieval.getCurrentDetailedJournalReceiver(any(), any())).thenReturn(dr1);
+        when(journalInfoRetrieval.getDelayedDetailedJournalReceiver(any(), any())).thenReturn(Optional.of(dr1));
 
         final JournalProcessedPosition startPosition = new JournalProcessedPosition(BigInteger.ONE,
                 new JournalReceiver("j1", "jlib"), Instant.ofEpochSecond(0), true);
-        final PositionRange result = jreceivers.findRange(as400, startPosition);
+        final Optional<PositionRange> result = jreceivers.findRange(as400, startPosition);
         final PositionRange rangeAnswer = new PositionRange(false, startPosition,
                 new JournalPosition(dr1.end(), dr1.info().receiver()));
-        assertEquals(rangeAnswer, result);
+        assertEquals(rangeAnswer, result.get());
     }
 
     @Test
@@ -82,14 +82,14 @@ class ReceiverPaginationTest {
 
         when(journalInfoRetrieval.getReceivers(any(), any())).thenReturn(list);
 
-        when(journalInfoRetrieval.getCurrentDetailedJournalReceiver(any(), any())).thenReturn(dr2);
+        when(journalInfoRetrieval.getDelayedDetailedJournalReceiver(any(), any())).thenReturn(Optional.of(dr2));
 
         final JournalProcessedPosition startPosition = new JournalProcessedPosition(BigInteger.ONE,
                 new JournalReceiver("j1", "jlib"), Instant.ofEpochSecond(0), true);
-        final PositionRange result = jreceivers.findRange(as400, startPosition);
+        final Optional<PositionRange> result = jreceivers.findRange(as400, startPosition);
         final PositionRange rangeAnswer = new PositionRange(false, startPosition,
                 new JournalPosition(dr2.end(), dr2.info().receiver()));
-        assertEquals(rangeAnswer, result);
+        assertEquals(rangeAnswer, result.get());
     }
 
     @Test
@@ -102,22 +102,21 @@ class ReceiverPaginationTest {
         final DetailedJournalReceiver detailedEnd2 = dr3;
         final List<DetailedJournalReceiver> list2 = Arrays.asList(dr1, dr2, detailedEnd2);
         when(journalInfoRetrieval.getReceivers(any(), any())).thenReturn(list).thenReturn(list2);
-        when(journalInfoRetrieval.getCurrentDetailedJournalReceiver(any(), any())).thenReturn(detailedEnd)
-                .thenReturn(detailedEnd2);
+        when(journalInfoRetrieval.getDelayedDetailedJournalReceiver(any(), any())).thenReturn(Optional.of(detailedEnd)).thenReturn(Optional.of(detailedEnd2));
 
         final JournalProcessedPosition startPosition = new JournalProcessedPosition(BigInteger.ONE,
                 new JournalReceiver("j1", "jlib"), Instant.ofEpochSecond(0), true);
-        final PositionRange result = jreceivers.findRange(as400, startPosition);
+        final Optional<PositionRange> result = jreceivers.findRange(as400, startPosition);
         final PositionRange rangeAnswer = new PositionRange(false, startPosition,
                 new JournalPosition(BigInteger.valueOf(8), detailedEnd.info().receiver()));
-        assertEquals(rangeAnswer, result);
+        assertEquals(rangeAnswer, result.get());
 
         final JournalProcessedPosition startPosition2 = new JournalProcessedPosition(BigInteger.valueOf(2),
                 new JournalReceiver("j2", "jlib"), Instant.ofEpochSecond(0), true);
-        final PositionRange result2 = jreceivers.findRange(as400, startPosition2);
+        final Optional<PositionRange> result2 = jreceivers.findRange(as400, startPosition2);
         final PositionRange rangeAnswer2 = new PositionRange(false, startPosition2,
                 new JournalPosition(BigInteger.valueOf(17), detailedEnd2.info().receiver()));
-        assertEquals(rangeAnswer2, result2);
+        assertEquals(rangeAnswer2, result2.get());
 
     }
 

@@ -33,11 +33,22 @@ public class ReceiverPagination {
         this.journalInfo = journalInfo;
     }
 
-    PositionRange findRange(AS400 as400, JournalProcessedPosition startPosition) throws Exception {
+    Optional<PositionRange> findRange(AS400 as400, JournalProcessedPosition startPosition) throws Exception {
+        final Optional<DetailedJournalReceiver> endPositionOpt = journalInfoRetrieval.getDelayedDetailedJournalReceiver(as400, journalInfo);
+
+        return endPositionOpt.map(endPosition -> {
+            try {
+                return _findRange(as400, startPosition, endPosition);
+            }
+            catch (Exception e) {
+                throw new RuntimeException(e);
+            }
+        });
+    }
+
+    PositionRange _findRange(AS400 as400, JournalProcessedPosition startPosition, DetailedJournalReceiver endPosition) throws Exception {
         final BigInteger start = startPosition.getOffset();
         final boolean fromBeginning = !startPosition.isOffsetSet() || start.equals(BigInteger.ZERO);
-
-        final DetailedJournalReceiver endPosition = journalInfoRetrieval.getCurrentDetailedJournalReceiver(as400, journalInfo);
 
         if (cachedEndPosition == null) {
             cachedEndPosition = endPosition;

@@ -1,3 +1,8 @@
+/*
+ * Copyright Debezium Authors.
+ *
+ * Licensed under the Apache Software License version 2.0, available at http://www.apache.org/licenses/LICENSE-2.0
+ */
 package io.debezium.ibmi.db2.journal.retrieve;
 
 import java.util.function.Supplier;
@@ -21,22 +26,22 @@ public class DelayedDetailedJournalReceiver {
     private int getPosition = 0;
     private long lastAdded = Long.MIN_VALUE;
     private long minDelayBetweenReadings;
-    private long delayMilliseconds;
+    private long delayMs;
     private final Supplier<Long> timeSupplier;
 
-    public DelayedDetailedJournalReceiver(long delayMilliseconds, long pollIntervalMs) {
-        this(delayMilliseconds, pollIntervalMs, System::currentTimeMillis);
+    public DelayedDetailedJournalReceiver(long delayMs, long pollIntervalMs) {
+        this(delayMs, pollIntervalMs, System::currentTimeMillis);
     }
 
-    public DelayedDetailedJournalReceiver(long delayMilliseconds, long pollIntervalMs, Supplier<Long> timeSupplier) {
-        int t = (int) ((delayMilliseconds / pollIntervalMs) * 1.2 + 1); // allow 20% and round up
+    public DelayedDetailedJournalReceiver(long delayMs, long pollIntervalMs, Supplier<Long> timeSupplier) {
+        int t = (int) ((delayMs / pollIntervalMs) * 1.2 + 1); // allow 20% and round up
         if (t > MAX_ENTRIES) {
             t = MAX_ENTRIES;
         }
         entries = t + PADDING;
         timedPositions = new TimedPosition[entries];
-        minDelayBetweenReadings = delayMilliseconds / entries;
-        this.delayMilliseconds = delayMilliseconds;
+        minDelayBetweenReadings = delayMs / entries;
+        this.delayMs = delayMs;
         this.timeSupplier = timeSupplier;
     }
 
@@ -61,8 +66,8 @@ public class DelayedDetailedJournalReceiver {
             log.debug("no receivers avaiable");
             return null;
         }
-        if (now < tp.timestamp + delayMilliseconds) {
-            log.debug("next receiver is still too recent {} need to wait until {} currently {}", tp.timestamp, tp.timestamp + delayMilliseconds, now);
+        if (now < tp.timestamp + delayMs) {
+            log.debug("next receiver is still too recent {} need to wait until {} currently {}", tp.timestamp, tp.timestamp + delayMs, now);
             return null;
         }
         TimedPosition nextTp = tp;
@@ -71,7 +76,7 @@ public class DelayedDetailedJournalReceiver {
             getPosition = (getPosition + 1) % entries;
             tp = nextTp;
             nextTp = timedPositions[getPosition];
-        } while (nextTp != null && now >= nextTp.timestamp + delayMilliseconds);
+        } while (nextTp != null && now >= nextTp.timestamp + delayMs);
         return tp.position;
     }
 }
