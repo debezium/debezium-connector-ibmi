@@ -26,6 +26,7 @@ import io.debezium.connector.db2as400.metrics.As400ChangeEventSourceMetricsFacto
 import io.debezium.connector.db2as400.metrics.As400StreamingChangeEventSourceMetrics;
 import io.debezium.document.DocumentReader;
 import io.debezium.ibmi.db2.journal.retrieve.FileFilter;
+import io.debezium.ibmi.db2.journal.retrieve.JournalInfoRetrieval;
 import io.debezium.jdbc.DefaultMainConnectionProvidingConnectionFactory;
 import io.debezium.jdbc.MainConnectionProvidingConnectionFactory;
 import io.debezium.pipeline.ChangeEventSourceCoordinator;
@@ -124,8 +125,10 @@ public class As400ConnectorTask extends BaseSourceTask<As400Partition, As400Offs
         final List<FileFilter> shortIncludes = jdbcConnection.shortIncludes(schema.getSchemaName(),
                 configuredIncludes);
 
+        final long cacheWait = JournalInfoRetrieval.getJournalCacheDurationInMilliseconds(jdbcConnection);
+
         final As400RpcConnection rpcConnection = new As400RpcConnection(connectorConfig, streamingMetrics,
-                shortIncludes);
+                shortIncludes, cacheWait);
 
         validateSchemaHistory(connectorConfig, rpcConnection::validateLogPosition, previousOffsetPartition, schema,
                 snapshotterService.getSnapshotter());

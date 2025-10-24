@@ -37,7 +37,7 @@ class ReceiverPaginationTest {
     ReceiverPagination receivers;
     @Mock
     JournalInfoRetrieval journalInfoRetrieval;
-    JournalInfo journalInfo = new JournalInfo("journal", "journallib");
+    JournalInfo journalInfo = new JournalInfo("journal", "journallib", false);
     @Mock
     AS400 as400;
 
