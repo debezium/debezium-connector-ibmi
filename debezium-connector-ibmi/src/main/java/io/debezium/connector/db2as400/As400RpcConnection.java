@@ -28,6 +28,7 @@ import io.debezium.ibmi.db2.journal.retrieve.JournalInfo;
 import io.debezium.ibmi.db2.journal.retrieve.JournalInfoRetrieval;
 import io.debezium.ibmi.db2.journal.retrieve.JournalPosition;
 import io.debezium.ibmi.db2.journal.retrieve.JournalProcessedPosition;
+import io.debezium.ibmi.db2.journal.retrieve.RetreivalState;
 import io.debezium.ibmi.db2.journal.retrieve.RetrieveConfig;
 import io.debezium.ibmi.db2.journal.retrieve.RetrieveConfigBuilder;
 import io.debezium.ibmi.db2.journal.retrieve.RetrieveJournal;
@@ -48,7 +49,7 @@ public class As400RpcConnection implements AutoCloseable, Connect<AS400, IOExcep
     private AS400 as400;
     private static SocketProperties socketProperties = new SocketProperties();
     private final LogLimmiting periodic = new LogLimmiting(5 * 60 * 1000l);
-    private final JournalInfoRetrieval journalInfoRetrieval = new JournalInfoRetrieval();
+    private final JournalInfoRetrieval journalInfoRetrieval;
 
     private final boolean isSecure;
 
@@ -57,10 +58,10 @@ public class As400RpcConnection implements AutoCloseable, Connect<AS400, IOExcep
         this.config = config;
         this.isSecure = config.getJdbcConfig().getBoolean("secure", config.isSecure());
         this.streamingMetrics = streamingMetrics;
+        this.journalInfoRetrieval = new JournalInfoRetrieval(cacheWait, config.getPollInterval().toMillis());
         try {
             System.setProperty("com.ibm.as400.access.AS400.guiAvailable", "False");
-            final var JournalInfoRetrieval = new JournalInfoRetrieval();
-            journalInfo = JournalInfoRetrieval.getJournal(connection(), config.getSchema(), includes);
+            journalInfo = journalInfoRetrieval.getJournal(connection(), config.getSchema(), includes);
 
             final RetrieveConfig rconfig = new RetrieveConfigBuilder().withAs400(this)
                     .withJournalBufferSize(config.getJournalBufferSize())
@@ -105,7 +106,7 @@ public class As400RpcConnection implements AutoCloseable, Connect<AS400, IOExcep
                 if (offset.isPositionSet()) {
                     JournalReceiverInfo receiver = new JournalReceiverInfo(offset.getPosition().getReceiver(), null, null, Optional.empty());
 
-                    DetailedJournalReceiver dr = new JournalInfoRetrieval().getReceiverDetails(as400, receiver);
+                    DetailedJournalReceiver dr = journalInfoRetrieval.getReceiverDetails(as400, receiver);
                     return dr != null;
                 }
             }
@@ -153,17 +154,17 @@ public class As400RpcConnection implements AutoCloseable, Connect<AS400, IOExcep
         }
     }
 
-    public boolean getJournalEntries(ChangeEventSourceContext context, As400OffsetContext offsetCtx, BlockingReceiverConsumer consumer, WatchDog watchDog)
+    public RetreivalState getJournalEntries(ChangeEventSourceContext context, As400OffsetContext offsetCtx, BlockingReceiverConsumer consumer, WatchDog watchDog)
             throws Exception {
-        boolean success = false;
+        RetreivalState state;
         final JournalProcessedPosition position = offsetCtx.getPosition();
-        success = retrieveJournal.retrieveJournal(position);
+        state = retrieveJournal.retrieveJournal(position);
 
-        logOffsets(position, success);
+        logOffsets(position, state);
 
         watchDog.alive();
 
-        if (success) {
+        if (state.hasData()) {
             while (retrieveJournal.nextEntry() && context.isRunning()) {
                 watchDog.alive();
                 final EntryHeader eheader = retrieveJournal.getEntryHeader();
@@ -179,31 +180,28 @@ public class As400RpcConnection implements AutoCloseable, Connect<AS400, IOExcep
 
         }
         else {
-            // this is bad, we've probably lost data
-            final List<DetailedJournalReceiver> receivers = journalInfoRetrieval.getReceivers(connection(), journalInfo);
-            log.error("Failed to fetch journal entries '{}', resetting journal to blank",
-                    Map.of("position", position,
-                            "receivers", receivers));
-            offsetCtx.setPosition(new JournalProcessedPosition());
+            if (RetreivalState.LostJournal.equals(state)) {
+                // this is bad, we've probably lost data
+                final List<DetailedJournalReceiver> receivers = journalInfoRetrieval.getReceivers(connection(), journalInfo);
+                log.error("Failed to fetch journal entries '{}', resetting journal to blank",
+                        Map.of("position", position,
+                                "receivers", receivers));
+                offsetCtx.setPosition(new JournalProcessedPosition());
+            }
         }
 
-        return success && retrieveJournal.futureDataAvailable();
+        return state;
     }
 
-    private void logOffsets(JournalProcessedPosition position, boolean success) throws IOException, Exception {
+    private void logOffsets(JournalProcessedPosition position, RetreivalState state) throws IOException, Exception {
         if (periodic.shouldLogRateLimted("offsets")) {
             final JournalPosition currentReceiver = getCurrentPosition();
             final BigInteger behind = currentReceiver.getOffset().subtract(position.getOffset());
             streamingMetrics.setJournalOffset(currentReceiver.getOffset());
             streamingMetrics.setJournalBehind(behind);
             streamingMetrics.setLastProcessedMs(position.getTimeOfLastProcessed().toEpochMilli());
-            log.info("Current position diagnostics '{}'",
-                    Map.of("header", retrieveJournal.getFirstHeader(),
-                            "behind", behind,
-                            "position", position,
-                            "currentReceiver", currentReceiver,
-                            "success", success));
-
+            log.info("Current position diagnostics last call {}, header {}, behind {}, currentReceiver", state, retrieveJournal.getFirstHeader(), behind,
+                    currentReceiver);
         }
     }
 

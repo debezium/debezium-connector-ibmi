@@ -65,9 +65,13 @@ public class JournalInfoRetrieval {
     private final DetailedJournalReceiverCache cache = new DetailedJournalReceiverCache();
     private Map<String, Boolean> isJournalCaching = new HashMap<>();
     private Map<JournalInfo, DelayedDetailedJournalReceiver> delayedCache = new HashMap<>();
+    private final long journalCacheDelay;
+    private final long pollInterval;
 
-    public JournalInfoRetrieval() {
+    public JournalInfoRetrieval(long journalCacheDelay, long pollInterval) {
         super();
+        this.journalCacheDelay = journalCacheDelay;
+        this.pollInterval = pollInterval;
     }
 
     public JournalPosition getCurrentPosition(AS400 as400, JournalInfo journalLib) throws Exception {
@@ -100,12 +104,12 @@ public class JournalInfoRetrieval {
         throw new IllegalStateException("Journal not found");
     }
 
-    public Optional<DetailedJournalReceiver> getDelayedDetailedJournalReceiver(AS400 as400, JournalInfo journalLib, long journalCacheDelay, long pollMilliSeconds)
+    public Optional<DetailedJournalReceiver> getDelayedDetailedJournalReceiver(AS400 as400, JournalInfo journalLib)
             throws Exception {
         DetailedJournalReceiver dr = getCurrentDetailedJournalReceiver(as400, journalLib);
         if (journalLib.isCaching()) {
             if (!delayedCache.containsKey(journalLib)) {
-                DelayedDetailedJournalReceiver ddr = new DelayedDetailedJournalReceiver(journalCacheDelay, pollMilliSeconds);
+                DelayedDetailedJournalReceiver ddr = new DelayedDetailedJournalReceiver(journalCacheDelay, pollInterval);
                 delayedCache.put(journalLib, ddr);
             }
             DelayedDetailedJournalReceiver cached = delayedCache.get(journalLib);

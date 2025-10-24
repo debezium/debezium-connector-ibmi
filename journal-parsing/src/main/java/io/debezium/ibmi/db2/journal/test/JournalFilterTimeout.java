@@ -26,6 +26,7 @@ import io.debezium.ibmi.db2.journal.retrieve.JournalInfo;
 import io.debezium.ibmi.db2.journal.retrieve.JournalInfoRetrieval;
 import io.debezium.ibmi.db2.journal.retrieve.JournalPosition;
 import io.debezium.ibmi.db2.journal.retrieve.JournalProcessedPosition;
+import io.debezium.ibmi.db2.journal.retrieve.RetreivalState;
 import io.debezium.ibmi.db2.journal.retrieve.RetrieveConfig;
 import io.debezium.ibmi.db2.journal.retrieve.RetrieveConfigBuilder;
 import io.debezium.ibmi.db2.journal.retrieve.RetrieveJournal;
@@ -36,7 +37,7 @@ public class JournalFilterTimeout {
     private static final Logger log = LoggerFactory.getLogger(JournalFilterTimeout.class);
 
     private static SchemaCacheHash schemaCache = new SchemaCacheHash();
-    private static JournalInfoRetrieval journalInfoRetrieval = new JournalInfoRetrieval();
+    private static JournalInfoRetrieval journalInfoRetrieval = new JournalInfoRetrieval(35000, 2000);
 
     public static void main(String[] args) throws Exception {
         final TestConnector connector = new TestConnector();
@@ -55,7 +56,6 @@ public class JournalFilterTimeout {
         final String offset = System.getenv("ISERIES_OFFSET");
         final String receiver = System.getenv("ISERIES_RECEIVER");
 
-        final JournalInfoRetrieval journalInfoRetrieval = new JournalInfoRetrieval();
         final List<DetailedJournalReceiver> receivers = journalInfoRetrieval.getReceivers(as400Connect.connection(),
                 journal);
         final DetailedJournalReceiver first = receivers.stream().min((x, y) -> x.start().compareTo(y.start())).get();
@@ -72,10 +72,10 @@ public class JournalFilterTimeout {
             final JournalProcessedPosition p = new JournalProcessedPosition(first.start(), first.info().receiver(),
                     Instant.ofEpochSecond(0), false);
             final long start = System.currentTimeMillis();
-            final boolean success = rj.retrieveJournal(p);
+            final RetreivalState state = rj.retrieveJournal(p);
             final long end = System.currentTimeMillis();
 
-            log.info("success: {} position: {} time: {} ", success, rj.getPosition(), (end - start) / 1000.0);
+            log.info("success: {} position: {} time: {} ", state, rj.getPosition(), (end - start) / 1000.0);
 
         }
     }
