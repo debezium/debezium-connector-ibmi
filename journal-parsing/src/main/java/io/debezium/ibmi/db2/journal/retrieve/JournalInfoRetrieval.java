@@ -66,11 +66,13 @@ public class JournalInfoRetrieval {
     private Map<String, Boolean> isJournalCaching = new HashMap<>();
     private Map<JournalInfo, DelayedDetailedJournalReceiver> delayedCache = new HashMap<>();
     private final long journalCacheDelay;
+    private final long additionalJournalDelay;
     private final long pollInterval;
 
-    public JournalInfoRetrieval(long journalCacheDelay, long pollInterval) {
+    public JournalInfoRetrieval(long journalCacheDelay, long additionalJournalDelay, long pollInterval) {
         super();
         this.journalCacheDelay = journalCacheDelay;
+        this.additionalJournalDelay = additionalJournalDelay;
         this.pollInterval = pollInterval;
     }
 
@@ -107,9 +109,10 @@ public class JournalInfoRetrieval {
     public Optional<DetailedJournalReceiver> getDelayedDetailedJournalReceiver(AS400 as400, JournalInfo journalLib)
             throws Exception {
         DetailedJournalReceiver dr = getCurrentDetailedJournalReceiver(as400, journalLib);
-        if (journalLib.isCaching()) {
+        long totalDelay = additionalJournalDelay + (journalLib.isCaching() ? journalCacheDelay : 0l);
+        if (totalDelay > 0) {
             if (!delayedCache.containsKey(journalLib)) {
-                DelayedDetailedJournalReceiver ddr = new DelayedDetailedJournalReceiver(journalCacheDelay, pollInterval);
+                DelayedDetailedJournalReceiver ddr = new DelayedDetailedJournalReceiver(totalDelay, pollInterval);
                 delayedCache.put(journalLib, ddr);
             }
             DelayedDetailedJournalReceiver cached = delayedCache.get(journalLib);

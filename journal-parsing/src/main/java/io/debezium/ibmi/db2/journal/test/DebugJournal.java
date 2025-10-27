@@ -38,7 +38,7 @@ public class DebugJournal {
         final Connect<AS400, IOException> as400Connect = connector.getAs400();
         final Connect<Connection, SQLException> sqlConnect = connector.getJdbc();
         final String schema = connector.getSchema();
-        JournalInfoRetrieval jir = new JournalInfoRetrieval(35000, 2000);
+        JournalInfoRetrieval jir = new JournalInfoRetrieval(30000, 5000, 2000);
 
         final byte[] data = Files.readAllBytes(Paths.get("C:\\dev\\kafka\\journal-parsing\\good-journal\\201218-0616-0"));
         final JournalInfo journal = jir.getJournal(as400Connect.connection(), schema);

@@ -59,7 +59,7 @@ public class As400RpcConnection implements AutoCloseable, Connect<AS400, IOExcep
         this.config = config;
         this.isSecure = config.getJdbcConfig().getBoolean("secure", config.isSecure());
         this.streamingMetrics = streamingMetrics;
-        this.journalInfoRetrieval = new JournalInfoRetrieval(cacheWait, config.getPollInterval().toMillis());
+        this.journalInfoRetrieval = new JournalInfoRetrieval(cacheWait, config.cacheAdditionalDelay(), config.getPollInterval().toMillis());
         try {
             System.setProperty("com.ibm.as400.access.AS400.guiAvailable", "False");
             journalInfo = journalInfoRetrieval.getJournal(connection(), config.getSchema(), includes);
@@ -70,8 +70,6 @@ public class As400RpcConnection implements AutoCloseable, Connect<AS400, IOExcep
                     .withMaxServerSideEntries(config.getMaxServerSideEntries())
                     .withServerFiltering(true)
                     .withIncludeFiles(includes).withDumpFolder(config.diagnosticsFolder())
-                    .withJournalCacheDelay(cacheWait + config.cacheAdditionalDelay())
-                    .withPollInterval(config.getPollInterval().toMillis())
                     .build();
             retrieveJournal = new RetrieveJournal(rconfig, journalInfoRetrieval);
         }
