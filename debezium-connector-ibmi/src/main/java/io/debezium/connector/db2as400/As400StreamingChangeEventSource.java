@@ -123,6 +123,8 @@ public class As400StreamingChangeEventSource implements StreamingChangeEventSour
                     try {
                         switch (dataConnection.getJournalEntries(context, offsetContext,
                                 processJournalEntries(partition, offsetContext), watchDog)) {
+                            case Success:
+                                break;
                             case MoreDataAvailable:
                                 break;
                             case NotCalled:
@@ -135,11 +137,12 @@ public class As400StreamingChangeEventSource implements StreamingChangeEventSour
                         }
                         retries = 0;
                     }
+                    catch (final InvalidPositionException e) {
+                        throw new DebeziumException("Invalid journal receiver/sequence are we using the wrong offset for the receiver: " + offsetContext.getPosition(),
+                                e);
+                    }
                     catch (final FatalException e) {
                         throw new DebeziumException("Unable to process offset " + offsetContext.getPosition(), e);
-                    }
-                    catch (final InvalidPositionException e) {
-                        throw new DebeziumException("Invalid journal receiver/sequence has the receiver been deleted? position was: " + offsetContext.getPosition(), e);
                     }
                     catch (final InterruptedException e) {
                         if (context.isRunning()) {

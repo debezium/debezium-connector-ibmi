@@ -28,13 +28,15 @@ public class DelayedDetailedJournalReceiver {
     private long minDelayBetweenReadings;
     private long delayMs;
     private final Supplier<Long> timeSupplier;
+    static final double TIMING_ALLOWANCE_PERCENT = 20.0;
+    static final double TIMING_ALLOWANCE_RATIO = TIMING_ALLOWANCE_PERCENT / 100.0;
 
     public DelayedDetailedJournalReceiver(long delayMs, long pollIntervalMs) {
         this(delayMs, pollIntervalMs, System::currentTimeMillis);
     }
 
     public DelayedDetailedJournalReceiver(long delayMs, long pollIntervalMs, Supplier<Long> timeSupplier) {
-        int t = (int) ((delayMs / pollIntervalMs) * 1.2 + 1); // allow 20% and round up
+        int t = (int) ((delayMs / pollIntervalMs) * (1.0 + TIMING_ALLOWANCE_PERCENT) + 1); // allow 20% and round up
         if (t > MAX_ENTRIES) {
             t = MAX_ENTRIES;
         }
@@ -47,7 +49,7 @@ public class DelayedDetailedJournalReceiver {
 
     public void addDetailedReceiver(DetailedJournalReceiver position) {
         long now = timeSupplier.get();
-        if (now < minDelayBetweenReadings + lastAdded) {
+        if (now < minDelayBetweenReadings + lastAdded - (minDelayBetweenReadings * TIMING_ALLOWANCE_PERCENT)) {
             log.debug("not adding as buffer has resolution {} and last added was at {}", minDelayBetweenReadings, lastAdded);
             return;
         }
