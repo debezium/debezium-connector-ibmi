@@ -8,7 +8,6 @@ package io.debezium.ibmi.db2.journal.retrieve;
 public enum RetreivalState {
     Success,
     MoreDataAvailable,
-    LostJournal,
     NotCalled;
 
     public boolean hasData() {
