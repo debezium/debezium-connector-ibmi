@@ -29,8 +29,6 @@ public class RetrieveConfigBuilder {
     private List<FileFilter> includeFiles = Collections.<FileFilter> emptyList();
     private int maxServerSideEntries = RetrieveConfig.DEFAULT_MAX_SERVER_SIDE_ENTRIES;
     private boolean filtering;
-    private long journalCacheDelay = 35000;
-    private long pollInterval = 2000;
 
     public RetrieveConfigBuilder() {
     }
@@ -103,18 +101,7 @@ public class RetrieveConfigBuilder {
         return this;
     }
 
-    public RetrieveConfigBuilder withJournalCacheDelay(long journalCacheDelay) {
-        this.journalCacheDelay = journalCacheDelay;
-        return this;
-    }
-
-    public RetrieveConfigBuilder withPollInterval(long pollInterval) {
-        this.pollInterval = pollInterval;
-        return this;
-    }
-
     public RetrieveConfig build() {
-        return new RetrieveConfig(as400, journalInfo, journalBufferSize, filtering, filterCodes, includeFiles, maxServerSideEntries, dumpFolder, journalCacheDelay,
-                pollInterval);
+        return new RetrieveConfig(as400, journalInfo, journalBufferSize, filtering, filterCodes, includeFiles, maxServerSideEntries, dumpFolder);
     }
 }

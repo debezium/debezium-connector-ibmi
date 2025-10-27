@@ -37,7 +37,7 @@ public class JournalFilterTimeout {
     private static final Logger log = LoggerFactory.getLogger(JournalFilterTimeout.class);
 
     private static SchemaCacheHash schemaCache = new SchemaCacheHash();
-    private static JournalInfoRetrieval journalInfoRetrieval = new JournalInfoRetrieval(35000, 2000);
+    private static JournalInfoRetrieval journalInfoRetrieval = new JournalInfoRetrieval(30000, 5000, 2000);
 
     public static void main(String[] args) throws Exception {
         final TestConnector connector = new TestConnector();
