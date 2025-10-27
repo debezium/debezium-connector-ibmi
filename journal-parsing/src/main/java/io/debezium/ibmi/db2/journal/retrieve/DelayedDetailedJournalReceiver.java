@@ -47,18 +47,29 @@ public class DelayedDetailedJournalReceiver {
         this.timeSupplier = timeSupplier;
     }
 
-    public void addDetailedReceiver(DetailedJournalReceiver position) {
+    public boolean addDetailedReceiver(DetailedJournalReceiver position) {
         long now = timeSupplier.get();
-        if (now < minDelayBetweenReadings + lastAdded - (minDelayBetweenReadings * TIMING_ALLOWANCE_PERCENT)) {
+        long allowedTime = lastAdded + minDelayBetweenReadingsWithAllowance();
+        if (now < allowedTime) {
             log.debug("not adding as buffer has resolution {} and last added was at {}", minDelayBetweenReadings, lastAdded);
-            return;
+            return false;
         }
         lastAdded = now;
         if (timedPositions[addPosition] != null) {
             log.warn("adding faster than consuming, skipping");
+            return false;
         }
         timedPositions[addPosition] = new TimedPosition(now, position);
         addPosition = (addPosition + 1) % entries;
+        return true;
+    }
+
+    long minDelayBetweenReadings() {
+        return minDelayBetweenReadings;
+    }
+
+    long minDelayBetweenReadingsWithAllowance() {
+        return (long) (minDelayBetweenReadings * (1.0 - TIMING_ALLOWANCE_RATIO));
     }
 
     public DetailedJournalReceiver getDelayedReceiver() {
