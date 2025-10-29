@@ -228,7 +228,7 @@ sample grafana charts
 
 # Troubleshooting
 
-See upstream project: https://bitbucket.org/jhc-systems/journal-parsing/src/master/
+See upstream project: https://github.com/debezium/debezium-connector-ibmi/tree/main/journal-parsing
 
 ## No journal entries found check journalling is enabled and set to *BOTH
 
