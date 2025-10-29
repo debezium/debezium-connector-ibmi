@@ -1,6 +1,6 @@
 # Project
 
-Use the IBM I journal as a source of CDC events see https://bitbucket.org/jhc-systems/journal-parsing/ for the journal fetch/decoding
+Use the IBM I journal as a source of CDC events see https://github.com/debezium/debezium-connector-ibmi/tree/main/journal-parsing/ for the journal fetch/decoding
 
 # Configuration
 
@@ -99,9 +99,7 @@ producer.zipkin.bootstrap.servers=mskafka:9092
 
 ## Use the REST interface to post a new connector
 
-https://bitbucket.org/jhc-systems/kafka-kubernetes/src/master/runtime/source/
-
-A new connector configuration `connector-name.json`:
+Create a new connector configuration `connector-name.json`:
 
 `curl -i -X POST -H "Accept:application/json" -H "Content-Type:application/json" http://localhost:8083/connectors/ -d '@./connector-name.json'`
 
@@ -230,7 +228,7 @@ sample grafana charts
 
 # Troubleshooting
 
-See upstream project: https://bitbucket.org/jhc-systems/journal-parsing/src/master/
+See upstream project: https://github.com/debezium/debezium-connector-ibmi/tree/main/journal-parsing
 
 ## No journal entries found check journalling is enabled and set to *BOTH
 
