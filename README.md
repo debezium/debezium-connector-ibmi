@@ -99,9 +99,7 @@ producer.zipkin.bootstrap.servers=mskafka:9092
 
 ## Use the REST interface to post a new connector
 
-https://bitbucket.org/jhc-systems/kafka-kubernetes/src/master/runtime/source/
-
-A new connector configuration `connector-name.json`:
+Create a new connector configuration `connector-name.json`:
 
 `curl -i -X POST -H "Accept:application/json" -H "Content-Type:application/json" http://localhost:8083/connectors/ -d '@./connector-name.json'`
 
