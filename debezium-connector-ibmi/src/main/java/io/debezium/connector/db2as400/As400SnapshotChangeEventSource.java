@@ -115,7 +115,9 @@ public class As400SnapshotChangeEventSource
                                            RelationalSnapshotContext<As400Partition, As400OffsetContext> snapshotContext,
                                            As400OffsetContext previousOffset)
             throws Exception {
-        if (previousOffset != null && previousOffset.isPositionSet() && !snapshotterService.getSnapshotter().shouldStreamEventsStartingFromSnapshot()) {
+        boolean shouldSnapshotData = shouldSnapshotData(previousOffset, snapshotterService.getSnapshotter());
+        boolean useOffset = !shouldSnapshotData || (shouldSnapshotData && !snapshotterService.getSnapshotter().shouldStreamEventsStartingFromSnapshot());
+        if (previousOffset != null && previousOffset.isPositionSet() && useOffset) {
             snapshotContext.offset = previousOffset;
         }
         else {
@@ -198,37 +200,27 @@ public class As400SnapshotChangeEventSource
         final List<String> dataCollectionsToBeSnapshotted = connectorConfig.getDataCollectionsToBeSnapshotted();
         final Map<DataCollectionId, String> snapshotSelectOverridesByTable = connectorConfig.getSnapshotSelectOverridesByTable();
 
-        boolean offsetExists = previousOffset != null;
-        boolean snapshotInProgress = false;
-
-        if (offsetExists) {
-            snapshotInProgress = !previousOffset.isSnapshotComplete();
-        }
-
-        if (offsetExists && previousOffset.isSnapshotComplete()) {
-            // when control tables in place
-            if (!previousOffset.hasNewTables()) {
-                log.info(
-                        "A previous offset indicating a completed snapshot has been found. Neither schema nor data will be snapshotted.");
-                return new SnapshottingTask(true, false, dataCollectionsToBeSnapshotted,
-                        snapshotSelectOverridesByTable, false);
-            }
-            log.info("A previous offset indicating a completed snapshot has been found.");
-        }
-
-        boolean shouldSnapshotSchema = snapshotter.shouldSnapshotSchema(offsetExists, snapshotInProgress);
-        boolean shouldSnapshotData = snapshotter.shouldSnapshotData(offsetExists, snapshotInProgress);
+        boolean shouldSnapshotSchema = true; // connector needs the schema to decode the journal data
+        boolean shouldSnapshotData = shouldSnapshotData(previousOffset, snapshotter);
 
         if (shouldSnapshotData && shouldSnapshotSchema) {
-            log.info("According to the connector configuration both schema and data will be snapshot.");
+            log.info("According to the connector configuration both schema and data will be snapshotted.");
         }
-        else {
-            log.info("According to the connector configuration only schema will be snapshot (this should always be done).");
+        else if (shouldSnapshotSchema) {
+            log.info("According to the connector configuration only schema will be snapshotted (this should always be done).");
         }
 
-        return new SnapshottingTask(true,
+        return new SnapshottingTask(shouldSnapshotSchema,
                 shouldSnapshotData, dataCollectionsToBeSnapshotted,
                 snapshotSelectOverridesByTable, false);
+    }
+
+    private boolean shouldSnapshotData(As400OffsetContext previousOffset, final Snapshotter snapshotter) {
+        boolean offsetExists = previousOffset != null;
+        boolean snapshotInProgress = (offsetExists && !previousOffset.isSnapshotComplete());
+
+        boolean shouldSnapshotData = snapshotter.shouldSnapshotData(offsetExists, snapshotInProgress);
+        return shouldSnapshotData;
     }
 
     @Override
