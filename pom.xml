@@ -55,8 +55,8 @@
     <dependencyManagement>
         <dependencies>
             <dependency>
-			    <groupId>net.sf.jt400</groupId>
-			    <artifactId>jt400</artifactId>
+                <groupId>net.sf.jt400</groupId>
+                <artifactId>jt400</artifactId>
                 <version>${version.jt400}</version>
             </dependency>
 
