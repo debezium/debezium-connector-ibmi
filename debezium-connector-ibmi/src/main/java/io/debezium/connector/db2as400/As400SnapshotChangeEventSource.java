@@ -5,14 +5,12 @@
  */
 package io.debezium.connector.db2as400;
 
+import java.time.Duration;
 import java.time.Instant;
-import java.util.HashSet;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
-import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 import org.slf4j.Logger;
@@ -34,6 +32,7 @@ import io.debezium.schema.SchemaChangeEvent;
 import io.debezium.schema.SchemaChangeEvent.SchemaChangeEventType;
 import io.debezium.snapshot.SnapshotterService;
 import io.debezium.spi.schema.DataCollectionId;
+import io.debezium.spi.snapshot.Snapshotter;
 import io.debezium.util.Clock;
 
 public class As400SnapshotChangeEventSource
@@ -44,6 +43,7 @@ public class As400SnapshotChangeEventSource
     private final As400JdbcConnection jdbcConnection;
     private final As400RpcConnection rpcConnection;
     private final As400DatabaseSchema schema;
+    protected final SnapshotterService snapshotterService;
 
     public As400SnapshotChangeEventSource(As400ConnectorConfig connectorConfig, As400RpcConnection rpcConnection,
                                           MainConnectionProvidingConnectionFactory<As400JdbcConnection> jdbcConnectionFactory,
@@ -59,57 +59,15 @@ public class As400SnapshotChangeEventSource
         this.rpcConnection = rpcConnection;
         this.jdbcConnection = jdbcConnectionFactory.mainConnection();
         this.schema = schema;
+        this.snapshotterService = snapshotterService;
     }
 
     @Override
     public SnapshotResult<As400OffsetContext> execute(ChangeEventSourceContext context, As400Partition partition,
                                                       As400OffsetContext previousOffset, SnapshottingTask snapshottingTask)
             throws InterruptedException {
-        if (snapshottingTask.shouldSkipSnapshot()) {
-            log.info("snapshotting skipped but fetching structure");
-            final RelationalSnapshotContext<As400Partition, As400OffsetContext> ctx;
-            try {
-                ctx = (RelationalSnapshotContext<As400Partition, As400OffsetContext>) prepare(partition, false);
-                determineTables(ctx, snapshottingTask);
-                readTableStructure(context, ctx, previousOffset, snapshottingTask);
-            }
-            catch (final Exception e) {
-                throw new RuntimeException("Failed to initialize snapshot context.", e);
-            }
-            log.info("finished fetching structure");
-        }
+
         return super.execute(context, partition, previousOffset, snapshottingTask);
-    }
-
-    void determineTables(RelationalSnapshotContext<As400Partition, As400OffsetContext> ctx,
-                         SnapshottingTask snapshottingTask)
-            throws Exception {
-        final Set<TableId> allTableIds = getAllTableIds(ctx);
-        final Set<Pattern> dataCollectionsToBeSnapshotted = getDataCollectionPattern(
-                snapshottingTask.getDataCollections());
-
-        final Set<TableId> snapshottedTableIds = determineDataCollectionsToBeSnapshotted(allTableIds,
-                dataCollectionsToBeSnapshotted)
-                .collect(Collectors.toSet());
-
-        final Set<TableId> capturedTables = new HashSet<>();
-        final Set<TableId> capturedSchemaTables = new HashSet<>();
-
-        for (final TableId tableId : allTableIds) {
-            if (connectorConfig.getTableFilters().eligibleForSchemaDataCollectionFilter().isIncluded(tableId)) {
-                capturedSchemaTables.add(tableId);
-            }
-        }
-
-        for (final TableId tableId : snapshottedTableIds) {
-            if (connectorConfig.getTableFilters().dataCollectionFilter().isIncluded(tableId)) {
-                capturedTables.add(tableId);
-            }
-        }
-
-        ctx.capturedTables = capturedTables;
-        ctx.capturedSchemaTables = capturedSchemaTables.stream().sorted()
-                .collect(Collectors.toCollection(LinkedHashSet::new));
     }
 
     @Override
@@ -124,7 +82,32 @@ public class As400SnapshotChangeEventSource
     protected void lockTablesForSchemaSnapshot(ChangeEventSourceContext sourceContext,
                                                RelationalSnapshotContext<As400Partition, As400OffsetContext> snapshotContext)
             throws Exception {
-        // TODO lock tables
+        final Duration lockTimeout = connectorConfig.snapshotLockTimeout();
+        final Set<String> capturedTablesNames = snapshotContext.capturedTables.stream().map(As400ConnectorConfig.tableToString::toString).collect(Collectors.toSet());
+
+        List<String> tableLockStatements = capturedTablesNames.stream()
+                .map(tableId -> snapshotterService.getSnapshotLock().tableLockingStatement(lockTimeout, tableId))
+                .filter(Optional::isPresent)
+                .map(Optional::get)
+                .collect(Collectors.toList());
+
+        if (!tableLockStatements.isEmpty()) {
+
+            String lineSeparator = System.lineSeparator();
+            StringBuilder statements = new StringBuilder();
+
+            // DB2 for the ibmi doesn't appear to support lock timeouts
+
+            // there are 3 lock options SHARE MODE, EXCLUSIVE MODE ALLOW READ, EXCLUSIVE MODE
+            // e.g.LOCK TABLE SCHEMA.NAME IN SHARE MODE;
+
+            // no obvious mode prevents schema changes
+            // DBZ-298 Quoting name in case it has been quoted originally; it doesn't do harm if it hasn't been quoted
+            tableLockStatements.forEach(tableStatement -> statements.append(tableStatement).append(lineSeparator));
+
+            log.info("Waiting for each table lock");
+            jdbcConnection.executeWithoutCommitting(statements.toString());
+        }
     }
 
     @Override
@@ -132,7 +115,9 @@ public class As400SnapshotChangeEventSource
                                            RelationalSnapshotContext<As400Partition, As400OffsetContext> snapshotContext,
                                            As400OffsetContext previousOffset)
             throws Exception {
-        if (previousOffset != null && previousOffset.isPositionSet() && !snapshotterService.getSnapshotter().shouldStreamEventsStartingFromSnapshot()) {
+        boolean shouldSnapshotData = shouldSnapshotData(previousOffset, snapshotterService.getSnapshotter());
+        boolean useOffset = !shouldSnapshotData || (shouldSnapshotData && !snapshotterService.getSnapshotter().shouldStreamEventsStartingFromSnapshot());
+        if (previousOffset != null && previousOffset.isPositionSet() && useOffset) {
             snapshotContext.offset = previousOffset;
         }
         else {
@@ -205,36 +190,37 @@ public class As400SnapshotChangeEventSource
     protected Optional<String> getSnapshotSelect(
                                                  RelationalSnapshotContext<As400Partition, As400OffsetContext> snapshotContext, TableId tableId,
                                                  List<String> columns) {
-        return Optional.of(String.format("SELECT * FROM %s.%s", tableId.schema(), tableId.table()));
+        String fullTableName = String.format("%s.%s", tableId.schema(), tableId.table());
+        return snapshotterService.getSnapshotQuery().snapshotQuery(fullTableName, columns);
     }
 
     @Override
     public SnapshottingTask getSnapshottingTask(As400Partition partition, As400OffsetContext previousOffset) {
+        final Snapshotter snapshotter = snapshotterService.getSnapshotter();
         final List<String> dataCollectionsToBeSnapshotted = connectorConfig.getDataCollectionsToBeSnapshotted();
         final Map<DataCollectionId, String> snapshotSelectOverridesByTable = connectorConfig.getSnapshotSelectOverridesByTable();
 
-        // found a previous offset and the earlier snapshot has completed
-        if (previousOffset != null && previousOffset.isSnapshotComplete()) {
-            // when control tables in place
-            if (!previousOffset.hasNewTables()) {
-                log.info(
-                        "A previous offset indicating a completed snapshot has been found. Neither schema nor data will be snapshotted.");
-                return new SnapshottingTask(false, false, dataCollectionsToBeSnapshotted,
-                        snapshotSelectOverridesByTable, false);
-            }
+        boolean shouldSnapshotSchema = true; // connector needs the schema to decode the journal data
+        boolean shouldSnapshotData = shouldSnapshotData(previousOffset, snapshotter);
+
+        if (shouldSnapshotData && shouldSnapshotSchema) {
+            log.info("According to the connector configuration both schema and data will be snapshotted.");
+        }
+        else if (shouldSnapshotSchema) {
+            log.info("According to the connector configuration only schema will be snapshotted (this should always be done).");
         }
 
-        log.info("No previous offset has been found");
-        if (this.connectorConfig.getSnapshotMode().includeData()) {
-            log.info("According to the connector configuration both schema and data will be snapshotted");
-        }
-        else {
-            log.info("According to the connector configuration only schema will be snapshotted");
-        }
-
-        return new SnapshottingTask(this.connectorConfig.getSnapshotMode().includeData(),
-                this.connectorConfig.getSnapshotMode().includeData(), dataCollectionsToBeSnapshotted,
+        return new SnapshottingTask(shouldSnapshotSchema,
+                shouldSnapshotData, dataCollectionsToBeSnapshotted,
                 snapshotSelectOverridesByTable, false);
+    }
+
+    private boolean shouldSnapshotData(As400OffsetContext previousOffset, final Snapshotter snapshotter) {
+        boolean offsetExists = previousOffset != null;
+        boolean snapshotInProgress = (offsetExists && !previousOffset.isSnapshotComplete());
+
+        boolean shouldSnapshotData = snapshotter.shouldSnapshotData(offsetExists, snapshotInProgress);
+        return shouldSnapshotData;
     }
 
     @Override

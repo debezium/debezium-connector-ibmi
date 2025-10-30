@@ -12,6 +12,8 @@ import org.apache.kafka.common.config.ConfigDef;
 import org.apache.kafka.common.config.ConfigDef.Importance;
 import org.apache.kafka.common.config.ConfigDef.Type;
 import org.apache.kafka.common.config.ConfigDef.Width;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import io.debezium.config.CommonConnectorConfig;
 import io.debezium.config.Configuration;
@@ -31,10 +33,19 @@ import io.debezium.relational.Tables.TableFilter;
 
 //TODO  can we deliver HistorizedRelationalDatabaseConnectorConfig or should it be RelationalDatabaseConnectorConfig
 public class As400ConnectorConfig extends RelationalDatabaseConnectorConfig {
-    private static TableIdToStringMapper tableToString = x -> {
-        final StringBuilder sb = new StringBuilder(x.schema());
-        sb.append(".").append(x.table());
-        return sb.toString();
+    private static final Logger LOGGER = LoggerFactory.getLogger(As400ConnectorTask.class);
+
+    public static TableIdToStringMapper tableToString = x -> {
+        if (x.table() != null) {
+            if (x.schema() != null) {
+                return String.format("%s.%s", x.schema(), x.table());
+            }
+            LOGGER.error("missing schema name {}, did the function expect the database.schema.table?", x);
+
+            return x.table();
+        }
+        LOGGER.error("missing table name {}", x);
+        return "";
     };
 
     private final CharSequenceTrimMode charSequenceTrimMode;
@@ -243,61 +254,71 @@ public class As400ConnectorConfig extends RelationalDatabaseConnectorConfig {
         return c;
     }
 
-    public static final Field SNAPSHOT_MODE = Field.create("snapshot.mode").withDisplayName("Snapshot mode")
-            .withEnum(SnapshotMode.class, SnapshotMode.INITIAL).withWidth(Width.SHORT).withImportance(Importance.LOW)
-            .withDescription("The criteria for running a snapshot upon startup of the connector. " + "Options include: "
-                    + "'initial' (the default) to specify the connector should run a snapshot only when no offsets are available for the logical server name; "
-                    + "'schema_only' to specify the connector should run a snapshot of the schema when no offsets are available for the logical server name. ");
+    public static final Field SNAPSHOT_MODE = Field.create("snapshot.mode")
+            .withDisplayName("Snapshot mode")
+            .withGroup(Field.createGroupEntry(Field.Group.CONNECTOR_SNAPSHOT, 0))
+            .withEnum(SnapshotMode.class, SnapshotMode.INITIAL)
+            .withWidth(Width.SHORT)
+            .withImportance(Importance.MEDIUM)
+            .withDescription("The criteria for running a snapshot upon startup of the connector. "
+                    + "Select one of the following snapshot options: "
+                    + "'always': The connector runs a snapshot every time that it starts. After the snapshot completes, the connector begins to stream changes from the transaction log.; "
+                    + "'initial' (default): If the connector does not detect any offsets for the logical server name, it runs a snapshot that captures the current full state of the configured tables. After the snapshot completes, the connector begins to stream changes from the transaction log. "
+                    + "'initial_only': The connector performs a snapshot as it does for the 'initial' option, but after the connector completes the snapshot, it stops, and does not stream changes from the transaction log.; "
+                    + "'never': The connector does not run a snapshot. Upon first startup, the connector immediately begins reading from the beginning of the transaction log. "
+                    + "'exported': This option is deprecated; use 'initial' instead.; "
+                    + "'custom': The connector loads a custom class  to specify how the connector performs snapshots. For more information, see Custom snapshotter SPI in the PostgreSQL connector documentation.");
 
     /**
-     * The set of predefined SnapshotMode options or aliases.
+     * The set of predefined Snapshotter options or aliases.
      */
     public enum SnapshotMode implements EnumeratedValue {
 
         /**
-         * Perform a snapshot when it is needed.
+         * Always perform a snapshot when starting.
          */
-        WHEN_NEEDED("when_needed", true),
+        ALWAYS("always"),
 
         /**
          * Perform a snapshot only upon initial startup of a connector.
          */
-        INITIAL("initial", true),
+        INITIAL("initial"),
 
         /**
-         * Perform a snapshot of only the database schemas (without data) and then begin
-         * reading the binlog. This should be used with care, but it is very useful when
-         * the change event consumers need only the changes from the point in time the
-         * snapshot is made (and doesn't care about any state or changes prior to this
-         * point).
+         * Never perform a snapshot and only receive logical changes.
          */
-        SCHEMA_ONLY("schema_only", false),
+        NO_DATA("no_data"),
 
         /**
-         * Never perform a snapshot and only read the binlog. This assumes the binlog
-         * contains all the history of those databases and tables that will be captured.
+         * Perform a snapshot and then stop before attempting to receive any logical changes.
          */
-        NEVER("never", false);
+        INITIAL_ONLY("initial_only"),
+
+        /**
+         * Perform a snapshot when it is needed.
+         */
+        WHEN_NEEDED("when_needed"),
+
+        /**
+         * Allows control over snapshots by setting connectors properties prefixed with 'snapshot.mode.configuration.based'.
+         */
+        CONFIGURATION_BASED("configuration_based"),
+
+        /**
+         * Inject a custom snapshotter, which allows for more control over snapshots.
+         */
+        CUSTOM("custom");
 
         private final String value;
-        private final boolean includeData;
 
-        SnapshotMode(String value, boolean includeData) {
+        SnapshotMode(String value) {
             this.value = value;
-            this.includeData = includeData;
+
         }
 
         @Override
         public String getValue() {
             return value;
-        }
-
-        /**
-         * Whether this snapshotting mode should include the actual data or just the
-         * schema of captured tables.
-         */
-        public boolean includeData() {
-            return includeData;
         }
 
         /**
@@ -311,7 +332,7 @@ public class As400ConnectorConfig extends RelationalDatabaseConnectorConfig {
                 return null;
             }
             value = value.trim();
-            for (final SnapshotMode option : SnapshotMode.values()) {
+            for (SnapshotMode option : SnapshotMode.values()) {
                 if (option.getValue().equalsIgnoreCase(value)) {
                     return option;
                 }
@@ -322,10 +343,9 @@ public class As400ConnectorConfig extends RelationalDatabaseConnectorConfig {
         /**
          * Determine if the supplied value is one of the predefined options.
          *
-         * @param value        the configuration property value; may not be null
+         * @param value the configuration property value; may not be null
          * @param defaultValue the default value; may be null
-         * @return the matching option, or null if no match is found and the non-null
-         *         default is invalid
+         * @return the matching option, or null if no match is found and the non-null default is invalid
          */
         public static SnapshotMode parse(String value, String defaultValue) {
             SnapshotMode mode = parse(value);
