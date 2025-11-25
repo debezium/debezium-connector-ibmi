@@ -12,6 +12,7 @@ import java.util.Optional;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import io.debezium.connector.common.CdcSourceTaskContext;
 import io.debezium.connector.db2as400.conversion.As400DefaultValueConverter;
 import io.debezium.connector.db2as400.conversion.SchemaInfoConversion;
 import io.debezium.ibmi.db2.journal.retrieve.JdbcFileDecoder;
@@ -34,13 +35,14 @@ public class As400DatabaseSchema extends RelationalDatabaseSchema implements Sch
     private final JdbcFileDecoder fileDecoder;
 
     public As400DatabaseSchema(As400ConnectorConfig config, As400JdbcConnection jdbcConnection,
-                               TopicNamingStrategy<TableId> topicSelector, SchemaNameAdjuster schemaNameAdjuster, CustomConverterRegistry customConverterRegistry) {
+                               TopicNamingStrategy<TableId> topicSelector, SchemaNameAdjuster schemaNameAdjuster, CustomConverterRegistry customConverterRegistry,
+                               CdcSourceTaskContext<As400ConnectorConfig> taskContext) {
         super(config, topicSelector, config.getTableFilters().dataCollectionFilter(), config.getColumnFilter(),
                 new TableSchemaBuilder(new As400ValueConverters(config.getDecimalMode(), config),
                         new As400DefaultValueConverter(), schemaNameAdjuster,
                         customConverterRegistry, config.getSourceInfoStructMaker().schema(),
                         config.getFieldNamer(), false),
-                false, config.getKeyMapper());
+                false, config.getKeyMapper(), taskContext);
 
         this.config = config;
         this.jdbcConnection = jdbcConnection;
