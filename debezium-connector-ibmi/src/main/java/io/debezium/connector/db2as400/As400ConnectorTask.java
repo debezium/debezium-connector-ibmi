@@ -15,6 +15,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import io.debezium.bean.StandardBeanNames;
+import io.debezium.config.CommonConnectorConfig;
 import io.debezium.config.Configuration;
 import io.debezium.config.Field;
 import io.debezium.connector.base.ChangeEventQueue;
@@ -51,6 +52,8 @@ public class As400ConnectorTask extends BaseSourceTask<As400Partition, As400Offs
     private static final String CONTEXT_NAME = "db2as400-server-connector-task";
     private As400DatabaseSchema schema;
     private ErrorHandler errorHandler;
+    private As400ConnectorConfig connectorConfig;
+    private CdcSourceTaskContext<As400ConnectorConfig> taskContext;
 
     @Override
     public String version() {
@@ -58,10 +61,19 @@ public class As400ConnectorTask extends BaseSourceTask<As400Partition, As400Offs
     }
 
     @Override
+    public CdcSourceTaskContext<? extends CommonConnectorConfig> preStart(Configuration config) {
+
+        connectorConfig = new As400ConnectorConfig(config);
+        taskContext = new CdcSourceTaskContext<>(config, connectorConfig, connectorConfig.getCustomMetricTags());
+
+        return taskContext;
+    }
+
+    @Override
     protected ChangeEventSourceCoordinator<As400Partition, As400OffsetContext> start(Configuration config) {
         LOGGER.info("starting connector task {}", version());
         // TODO resolve schema FIELD_NAME_ADJUSTMENT_MODE to be SchemaNameAdjuster.AVRO_FIELD_NAMER
-        final As400ConnectorConfig connectorConfig = new As400ConnectorConfig(config);
+
         @SuppressWarnings("unchecked")
         final TopicNamingStrategy<TableId> topicNamingStrategy = connectorConfig
                 .getTopicNamingStrategy(As400ConnectorConfig.TOPIC_NAMING_STRATEGY, true);
@@ -75,10 +87,8 @@ public class As400ConnectorTask extends BaseSourceTask<As400Partition, As400Offs
 
         CustomConverterRegistry customConverterRegistry = connectorConfig.getServiceRegistry().tryGetService(CustomConverterRegistry.class);
 
-        this.schema = new As400DatabaseSchema(connectorConfig, jdbcConnection, topicNamingStrategy, schemaNameAdjuster, customConverterRegistry);
+        this.schema = new As400DatabaseSchema(connectorConfig, jdbcConnection, topicNamingStrategy, schemaNameAdjuster, customConverterRegistry, taskContext);
 
-        final CdcSourceTaskContext<As400ConnectorConfig> ctx = new CdcSourceTaskContext<As400ConnectorConfig>(config, connectorConfig,
-                connectorConfig.getCustomMetricTags());
         Offsets<As400Partition, As400OffsetContext> previousOffsetPartition = getPreviousOffsets(
                 new As400Partition.Provider(connectorConfig), new As400OffsetContext.Loader(connectorConfig));
         As400OffsetContext previousOffset = previousOffsetPartition.getTheOnlyOffset();
@@ -87,7 +97,7 @@ public class As400ConnectorTask extends BaseSourceTask<As400Partition, As400Offs
         connectorConfig.getBeanRegistry().add(StandardBeanNames.CONFIGURATION, config);
         connectorConfig.getBeanRegistry().add(StandardBeanNames.CONNECTOR_CONFIG, connectorConfig);
         connectorConfig.getBeanRegistry().add(StandardBeanNames.DATABASE_SCHEMA, schema);
-        connectorConfig.getBeanRegistry().add(StandardBeanNames.CDC_SOURCE_TASK_CONTEXT, ctx);
+        connectorConfig.getBeanRegistry().add(StandardBeanNames.CDC_SOURCE_TASK_CONTEXT, taskContext);
         connectorConfig.getBeanRegistry().add(StandardBeanNames.JDBC_CONNECTION, jdbcConnection);
         connectorConfig.getBeanRegistry().add(StandardBeanNames.OFFSETS, previousOffsetPartition);
 
@@ -99,7 +109,7 @@ public class As400ConnectorTask extends BaseSourceTask<As400Partition, As400Offs
                 .maxQueueSize(connectorConfig.getMaxQueueSize())
                 .queueProvider(new DefaultQueueProvider<>(connectorConfig.getMaxQueueSize()))
                 .pollInterval(connectorConfig.getPollInterval())
-                .loggingContextSupplier(() -> ctx.configureLoggingContext(CONTEXT_NAME)).build();
+                .loggingContextSupplier(() -> taskContext.configureLoggingContext(CONTEXT_NAME)).build();
 
         errorHandler = new ErrorHandler(As400RpcConnector.class, connectorConfig, queue, null);
 
