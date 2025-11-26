@@ -67,7 +67,7 @@
         <dependency>
             <groupId>io.debezium</groupId>
             <artifactId>debezium-embedded</artifactId>
-            <scope>test</scope>
+            <scope>provided</scope>
         </dependency>
         <dependency>
             <groupId>junit</groupId>
