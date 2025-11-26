@@ -183,7 +183,7 @@ public class As400ConnectorTask extends BaseSourceTask<As400Partition, As400Offs
 
     @Override
     protected Optional<ErrorHandler> getErrorHandler() {
-        return Optional.of(errorHandler);
+        return Optional.ofNullable(errorHandler);
     }
 
     @Override
