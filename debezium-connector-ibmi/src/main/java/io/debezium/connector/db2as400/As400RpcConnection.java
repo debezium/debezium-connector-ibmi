@@ -28,7 +28,7 @@ import io.debezium.ibmi.db2.journal.retrieve.JournalInfo;
 import io.debezium.ibmi.db2.journal.retrieve.JournalInfoRetrieval;
 import io.debezium.ibmi.db2.journal.retrieve.JournalPosition;
 import io.debezium.ibmi.db2.journal.retrieve.JournalProcessedPosition;
-import io.debezium.ibmi.db2.journal.retrieve.RetreivalState;
+import io.debezium.ibmi.db2.journal.retrieve.RetrievalState;
 import io.debezium.ibmi.db2.journal.retrieve.RetrieveConfig;
 import io.debezium.ibmi.db2.journal.retrieve.RetrieveConfigBuilder;
 import io.debezium.ibmi.db2.journal.retrieve.RetrieveJournal;
@@ -153,12 +153,12 @@ public class As400RpcConnection implements AutoCloseable, Connect<AS400, IOExcep
         }
     }
 
-    public RetreivalState getJournalEntries(ChangeEventSourceContext context, As400OffsetContext offsetCtx, BlockingReceiverConsumer consumer, WatchDog watchDog)
+    public RetrievalState getJournalEntries(ChangeEventSourceContext context, As400OffsetContext offsetCtx, BlockingReceiverConsumer consumer, WatchDog watchDog)
             throws Exception {
         final JournalProcessedPosition position = offsetCtx.getPosition();
         try {
 
-            RetreivalState state = retrieveJournal.retrieveJournal(position);
+            RetrievalState state = retrieveJournal.retrieveJournal(position);
 
             logOffsets(position, state);
 
@@ -189,10 +189,10 @@ public class As400RpcConnection implements AutoCloseable, Connect<AS400, IOExcep
             offsetCtx.setPosition(new JournalProcessedPosition());
         }
 
-        return RetreivalState.NotCalled;
+        return RetrievalState.NotCalled;
     }
 
-    private void logOffsets(JournalProcessedPosition position, RetreivalState state) throws IOException, Exception {
+    private void logOffsets(JournalProcessedPosition position, RetrievalState state) throws IOException, Exception {
         if (periodic.shouldLogRateLimted("offsets")) {
             final JournalPosition currentReceiver = getCurrentPosition();
             final BigInteger behind = currentReceiver.getOffset().subtract(position.getOffset());
