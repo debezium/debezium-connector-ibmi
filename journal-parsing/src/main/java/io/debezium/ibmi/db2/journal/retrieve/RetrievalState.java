@@ -5,7 +5,7 @@
  */
 package io.debezium.ibmi.db2.journal.retrieve;
 
-public enum RetreivalState {
+public enum RetrievalState {
     Success,
     MoreDataAvailable,
     NotCalled;

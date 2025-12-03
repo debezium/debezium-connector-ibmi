@@ -26,7 +26,7 @@ import io.debezium.ibmi.db2.journal.retrieve.JournalInfo;
 import io.debezium.ibmi.db2.journal.retrieve.JournalInfoRetrieval;
 import io.debezium.ibmi.db2.journal.retrieve.JournalPosition;
 import io.debezium.ibmi.db2.journal.retrieve.JournalProcessedPosition;
-import io.debezium.ibmi.db2.journal.retrieve.RetreivalState;
+import io.debezium.ibmi.db2.journal.retrieve.RetrievalState;
 import io.debezium.ibmi.db2.journal.retrieve.RetrieveConfig;
 import io.debezium.ibmi.db2.journal.retrieve.RetrieveConfigBuilder;
 import io.debezium.ibmi.db2.journal.retrieve.RetrieveJournal;
@@ -72,7 +72,7 @@ public class JournalFilterTimeout {
             final JournalProcessedPosition p = new JournalProcessedPosition(first.start(), first.info().receiver(),
                     Instant.ofEpochSecond(0), false);
             final long start = System.currentTimeMillis();
-            final RetreivalState state = rj.retrieveJournal(p);
+            final RetrievalState state = rj.retrieveJournal(p);
             final long end = System.currentTimeMillis();
 
             log.info("success: {} position: {} time: {} ", state, rj.getPosition(), (end - start) / 1000.0);

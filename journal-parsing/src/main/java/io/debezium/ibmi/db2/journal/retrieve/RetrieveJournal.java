@@ -89,7 +89,7 @@ public class RetrieveJournal {
      *                   be available if the journal is no longer available we need
      *                   to capture this and log an error as we may have missed data
      */
-    public RetreivalState retrieveJournal(JournalProcessedPosition previousPosition) throws Exception {
+    public RetrievalState retrieveJournal(JournalProcessedPosition previousPosition) throws Exception {
 
         final Optional<PositionRange> rangeOpt = journalReceivers.findRange(config.as400().connection(), previousPosition);
         return rangeOpt.map(range -> {
@@ -99,7 +99,7 @@ public class RetrieveJournal {
             catch (Exception e) {
                 throw new RuntimeException(e);
             }
-        }).orElse(RetreivalState.NotCalled);
+        }).orElse(RetrievalState.NotCalled);
     }
 
     public void cancelJob() {
@@ -127,7 +127,7 @@ public class RetrieveJournal {
         }
     }
 
-    public RetreivalState retrieveJournal(JournalProcessedPosition previousPosition, final PositionRange range)
+    public RetrievalState retrieveJournal(JournalProcessedPosition previousPosition, final PositionRange range)
             throws Exception {
         this.offset = -1;
         this.entryHeader = null;
@@ -140,7 +140,7 @@ public class RetrieveJournal {
                     new JournalProcessedPosition(range.end(), Instant.EPOCH, true));
 
             log.debug("start equals end - range {}", range);
-            return RetreivalState.NotCalled;
+            return RetrievalState.NotCalled;
         }
 
         // TODO end could be optional for filtering or use same mechanism as non
@@ -185,12 +185,12 @@ public class RetrieveJournal {
             return reThrowIfFatal(previousPosition, spc, end, builder);
         }
         if (futureDataAvailable()) {
-            return RetreivalState.MoreDataAvailable;
+            return RetrievalState.MoreDataAvailable;
         }
-        return RetreivalState.Success;
+        return RetrievalState.Success;
     }
 
-    private RetreivalState reThrowIfFatal(JournalProcessedPosition retrievePosition, final ServiceProgramCall spc,
+    private RetrievalState reThrowIfFatal(JournalProcessedPosition retrievePosition, final ServiceProgramCall spc,
                                           JournalProcessedPosition latestJournalPosition, final ParameterListBuilder builder)
             throws LostJournalException, FatalException {
         for (final AS400Message id : spc.getMessageList()) {
@@ -224,7 +224,7 @@ public class RetrieveJournal {
                     // if we're filtering we get no continuation offset just an error
                     header = new FirstHeader(0, 0, 0, OffsetStatus.NO_DATA, latestJournalPosition);
                     this.position.setPosition(latestJournalPosition);
-                    return RetreivalState.Success;
+                    return RetrievalState.Success;
                 }
                 default:
                     log.error("Call failed position {} parameters {} with error code {} message {}", retrievePosition, idt,
