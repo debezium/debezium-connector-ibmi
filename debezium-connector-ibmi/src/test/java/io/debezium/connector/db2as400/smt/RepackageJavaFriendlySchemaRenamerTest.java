@@ -17,13 +17,13 @@ import org.apache.kafka.connect.data.SchemaBuilder;
 import org.apache.kafka.connect.data.Struct;
 import org.apache.kafka.connect.source.SourceRecord;
 import org.hamcrest.core.IsNull;
-import org.junit.Before;
-import org.junit.Test;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 
 public class RepackageJavaFriendlySchemaRenamerTest {
     RepackageJavaFriendlySchemaRenamer<SourceRecord> rr = new RepackageJavaFriendlySchemaRenamer<>();
 
-    @Before
+    @BeforeEach
     public void setUp() throws Exception {
 
     }

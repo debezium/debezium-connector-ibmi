@@ -12,8 +12,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import org.apache.kafka.connect.data.Schema;
 import org.apache.kafka.connect.data.SchemaBuilder;
-import org.junit.Before;
-import org.junit.Test;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 
 import io.debezium.config.CommonConnectorConfig;
 import io.debezium.config.Configuration;
@@ -28,7 +28,7 @@ public class SourceInfoTest {
 
     private SourceInfo source;
 
-    @Before
+    @BeforeEach
     public void beforeEach() {
         source = new SourceInfo(new As400ConnectorConfig(
                 Configuration.create()
