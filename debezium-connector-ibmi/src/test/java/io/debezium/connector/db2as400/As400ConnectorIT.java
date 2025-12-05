@@ -7,8 +7,8 @@ package io.debezium.connector.db2as400;
 
 import java.sql.SQLException;
 
-import org.junit.Before;
-import org.junit.Test;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 
 import io.debezium.connector.db2as400.util.TestHelper;
 import io.debezium.embedded.async.AbstractAsyncEngineConnectorTest;
@@ -18,7 +18,7 @@ public class As400ConnectorIT extends AbstractAsyncEngineConnectorTest {
 
     private static final String TABLE = "TESTT";
 
-    @Before
+    @BeforeEach
     public void before() throws SQLException {
         initializeConnectorTestFramework();
         TestHelper.testConnection().execute(
