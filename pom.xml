@@ -32,8 +32,6 @@
 
         <!-- Dependencies -->
         <version.jt400>21.0.4</version.jt400>
-        <version.junit>5.9.1</version.junit>
-        <version.mockito.jupiter>4.6.1</version.mockito.jupiter>
     </properties>
 
     <repositories>
@@ -58,19 +56,6 @@
                 <groupId>net.sf.jt400</groupId>
                 <artifactId>jt400</artifactId>
                 <version>${version.jt400}</version>
-            </dependency>
-
-            <!-- Testing -->
-            <dependency>
-                <groupId>org.junit.jupiter</groupId>
-                <artifactId>junit-jupiter</artifactId>
-                <version>${version.junit}</version>
-            </dependency>
-            <dependency>
-                <groupId>org.mockito</groupId>
-                <artifactId>mockito-junit-jupiter</artifactId>
-                <version>${version.mockito.jupiter}</version>
-                <scope>test</scope>
             </dependency>
         </dependencies>
     </dependencyManagement>
