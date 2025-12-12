@@ -5,7 +5,7 @@
  */
 package io.debezium.connector.db2as400;
 
-import org.fest.assertions.Assertions;
+import org.assertj.core.api.Assertions;
 import org.junit.jupiter.api.Test;
 
 public class WatchDogTest {
