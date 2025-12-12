@@ -253,7 +253,7 @@ main class
 * `org.apache.kafka.connect.cli.ConnectDistributed`
 
 runtime argument of the configuration e.g. for
-* local kafka `src/test/resources/protobuf.properties`
+* local kafka `src/test/resources/connect-distributed.properties`
 * remote confluent `src/test/resources/confluent.properties`
 
 Logging - vm args `-Dlogback.configurationFile=src/test/resources/logback.xml`
@@ -292,7 +292,7 @@ https://bitbucket.org/jhc-systems/kafka-kubernetes/src/master/docker/
 
 ## Running debezium locally
 
-Configure the IP addresses in `conf/local.env`, `src/test/resources/protobuf.properties`, and `src/test/resources/confluent.properties` to be your IP address. If running using localhost, you can use `0.0.0.0` for each of these.
+Configure the IP addresses in `conf/local.env`, `src/test/resources/connect-distributed.properties`, and `src/test/resources/confluent.properties` to be your IP address. If running using localhost, you can use `0.0.0.0` for each of these.
 
 ### VS Code
 
@@ -311,7 +311,7 @@ To run in VS Code, configure the following launch.json file, and run from the Ru
             "mainClass": "org.apache.kafka.connect.cli.ConnectDistributed",
             "projectName": "debezium-connector-ibmi",
             "env": {},
-            "args": "src/test/resources/protobuf.properties",
+            "args": "src/test/resources/connect-distributed.properties",
             "logback.configurationFile": "src/test/resources/logback.xml"
         }
     ]
