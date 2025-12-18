@@ -253,17 +253,46 @@ main class
 * `org.apache.kafka.connect.cli.ConnectDistributed`
 
 runtime argument of the configuration e.g. for
-* local kafka `src/test/resources/protobuf.properties`
+* local kafka `src/test/resources/connect-distributed.properties`
 * remote confluent `src/test/resources/confluent.properties`
 
 Logging - vm args `-Dlogback.configurationFile=src/test/resources/logback.xml`
+
+The properties below are required to run the integration tests.
+
+* `database.hostname` - the IP address or hostname of the IBM i, there is no default
+* `database.port` - the port number of Database Access on IBM i, 8471 for non-secure connections and 9471 for secure connections
+* `database.dbname` - the name of the schema, default value is `DTEST`
+* `database.user` - the user profile of IBM i, default value is `DEBEZIUM`
+* `database.password` - the password of user profile, there is no default
+
+For example, you can define these properties by passing these arguments to the JVM:
+
+```
+-Ddatabase.dbname=xxx -Ddatabase.hostname=xxx -Ddatabase.port=xxx
+```
+
+To run or debug the integration tests in VS Code, you can add the configuration into your workspace settings under the section: `java.test.config`, for exammple:
+
+```json
+    "java.test.config": {
+        "vmArgs": [
+            "-Ddatabase.hostname=xxx",
+            "-Ddatabase.port=xxx",
+            "-Ddatabase.dbname=xxx",
+            "-Ddatabase.user=xxx",
+            "-Ddatabase.password=xxx"
+        ]
+    }
+```
+
 
 ## Running kafka locally
 https://bitbucket.org/jhc-systems/kafka-kubernetes/src/master/docker/
 
 ## Running debezium locally
 
-Configure the IP addresses in `conf/local.env`, `src/test/resources/protobuf.properties`, and `src/test/resources/confluent.properties` to be your IP address. If running using localhost, you can use `0.0.0.0` for each of these.
+Configure the IP addresses in `conf/local.env`, `src/test/resources/connect-distributed.properties`, and `src/test/resources/confluent.properties` to be your IP address. If running using localhost, you can use `0.0.0.0` for each of these.
 
 ### VS Code
 
@@ -282,7 +311,7 @@ To run in VS Code, configure the following launch.json file, and run from the Ru
             "mainClass": "org.apache.kafka.connect.cli.ConnectDistributed",
             "projectName": "debezium-connector-ibmi",
             "env": {},
-            "args": "src/test/resources/protobuf.properties",
+            "args": "src/test/resources/connect-distributed.properties",
             "logback.configurationFile": "src/test/resources/logback.xml"
         }
     ]
