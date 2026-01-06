@@ -40,7 +40,7 @@ public class TestConnector {
         final String fromCcsid = System.getenv("FROM_CCSID");
         final String toCcsid = System.getenv("TO_CCSID");
 
-        url = String.format("jdbc:as400:%s", host);
+        url = String.format("jdbc:as400://%s", host);
 
         props = new Properties();
         props.setProperty("user", user);

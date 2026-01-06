@@ -125,7 +125,8 @@ public class JournalInfoRetrieval {
     }
 
     public static long getJournalCacheDurationInMilliseconds(Connect<Connection, SQLException> jdbcConnection) {
-        try (Connection connection = jdbcConnection.connection()) {
+        try {
+            Connection connection = jdbcConnection.connection();
             String sql = "SELECT JOURNAL_CACHE_WAIT_TIME FROM QSYS2.SYSTEM_STATUS_INFO";
             try (java.sql.PreparedStatement ps = connection.prepareStatement(sql)) {
                 try (java.sql.ResultSet rs = ps.executeQuery()) {
