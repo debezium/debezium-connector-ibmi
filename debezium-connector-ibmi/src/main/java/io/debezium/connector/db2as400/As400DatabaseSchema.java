@@ -41,7 +41,7 @@ public class As400DatabaseSchema extends RelationalDatabaseSchema implements Sch
                 new TableSchemaBuilder(new As400ValueConverters(config.getDecimalMode(), config),
                         new As400DefaultValueConverter(), schemaNameAdjuster,
                         customConverterRegistry, config.getSourceInfoStructMaker().schema(),
-                        config.getFieldNamer(), false),
+                        config.getFieldNamer(), false, config.getEventConvertingFailureHandlingMode()),
                 false, config.getKeyMapper(), taskContext);
 
         this.config = config;
