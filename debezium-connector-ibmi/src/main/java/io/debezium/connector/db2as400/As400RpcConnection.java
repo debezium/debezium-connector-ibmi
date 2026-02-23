@@ -64,11 +64,13 @@ public class As400RpcConnection implements AutoCloseable, Connect<AS400, IOExcep
             System.setProperty("com.ibm.as400.access.AS400.guiAvailable", "False");
             journalInfo = journalInfoRetrieval.getJournal(connection(), config.getSchema(), includes);
 
+            boolean transactionMgt = config.isTransactionMgmtEnabled();
+
             final RetrieveConfig rconfig = new RetrieveConfigBuilder().withAs400(this)
                     .withJournalBufferSize(config.getJournalBufferSize())
                     .withJournalInfo(journalInfo)
                     .withMaxServerSideEntries(config.getMaxServerSideEntries())
-                    .withServerFiltering(true)
+                    .withServerFiltering(!transactionMgt)
                     .withIncludeFiles(includes).withDumpFolder(config.diagnosticsFolder())
                     .build();
             retrieveJournal = new RetrieveJournal(rconfig, journalInfoRetrieval);
