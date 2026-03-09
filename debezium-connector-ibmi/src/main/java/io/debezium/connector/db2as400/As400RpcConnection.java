@@ -179,6 +179,7 @@ public class As400RpcConnection implements AutoCloseable, Connect<AS400, IOExcep
                 offsetCtx.setPosition(retrieveJournal.getPosition());
 
             }
+            return state;
         }
         catch (LostJournalException e) {
             // this is bad, we've probably lost data
