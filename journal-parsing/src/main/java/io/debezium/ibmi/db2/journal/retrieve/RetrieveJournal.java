@@ -15,6 +15,7 @@ import java.text.SimpleDateFormat;
 import java.time.Instant;
 import java.util.Arrays;
 import java.util.Date;
+import java.util.Optional;
 import java.util.concurrent.atomic.AtomicReference;
 
 import org.slf4j.Logger;
@@ -30,8 +31,11 @@ import com.ibm.as400.access.ServiceProgramCall;
 
 import io.debezium.ibmi.db2.journal.retrieve.RetrievalCriteria.JournalCode;
 import io.debezium.ibmi.db2.journal.retrieve.RetrievalCriteria.JournalEntryType;
+import io.debezium.ibmi.db2.journal.retrieve.exception.FatalException;
 import io.debezium.ibmi.db2.journal.retrieve.exception.InvalidJournalFilterException;
 import io.debezium.ibmi.db2.journal.retrieve.exception.InvalidPositionException;
+import io.debezium.ibmi.db2.journal.retrieve.exception.LostJournalException;
+import io.debezium.ibmi.db2.journal.retrieve.exception.RetrieveJournalException;
 import io.debezium.ibmi.db2.journal.retrieve.rjne0200.EntryHeader;
 import io.debezium.ibmi.db2.journal.retrieve.rjne0200.EntryHeaderDecoder;
 import io.debezium.ibmi.db2.journal.retrieve.rjne0200.FirstHeader;
@@ -85,10 +89,17 @@ public class RetrieveJournal {
      *                   be available if the journal is no longer available we need
      *                   to capture this and log an error as we may have missed data
      */
-    public boolean retrieveJournal(JournalProcessedPosition previousPosition) throws Exception {
+    public RetrievalState retrieveJournal(JournalProcessedPosition previousPosition) throws Exception {
 
-        final PositionRange range = journalReceivers.findRange(config.as400().connection(), previousPosition);
-        return retrieveJournal(previousPosition, range);
+        final Optional<PositionRange> rangeOpt = journalReceivers.findRange(config.as400().connection(), previousPosition);
+        return rangeOpt.map(range -> {
+            try {
+                return retrieveJournal(previousPosition, range);
+            }
+            catch (Exception e) {
+                throw new RuntimeException(e);
+            }
+        }).orElse(RetrievalState.NotCalled);
     }
 
     public void cancelJob() {
@@ -116,7 +127,7 @@ public class RetrieveJournal {
         }
     }
 
-    public boolean retrieveJournal(JournalProcessedPosition previousPosition, final PositionRange range)
+    public RetrievalState retrieveJournal(JournalProcessedPosition previousPosition, final PositionRange range)
             throws Exception {
         this.offset = -1;
         this.entryHeader = null;
@@ -129,7 +140,7 @@ public class RetrieveJournal {
                     new JournalProcessedPosition(range.end(), Instant.EPOCH, true));
 
             log.debug("start equals end - range {}", range);
-            return true;
+            return RetrievalState.NotCalled;
         }
 
         // TODO end could be optional for filtering or use same mechanism as non
@@ -173,12 +184,15 @@ public class RetrieveJournal {
             log.debug("retrieve from {} to {} status {}", range.start(), range.end(), success);
             return reThrowIfFatal(previousPosition, spc, end, builder);
         }
-        return success;
+        if (futureDataAvailable()) {
+            return RetrievalState.MoreDataAvailable;
+        }
+        return RetrievalState.Success;
     }
 
-    private boolean reThrowIfFatal(JournalProcessedPosition retrievePosition, final ServiceProgramCall spc,
-                                   JournalProcessedPosition latestJournalPosition, final ParameterListBuilder builder)
-            throws InvalidPositionException, InvalidJournalFilterException, RetrieveJournalException {
+    private RetrievalState reThrowIfFatal(JournalProcessedPosition retrievePosition, final ServiceProgramCall spc,
+                                          JournalProcessedPosition latestJournalPosition, final ParameterListBuilder builder)
+            throws LostJournalException, FatalException {
         for (final AS400Message id : spc.getMessageList()) {
             final String idt = id.getID();
             if (idt == null) {
@@ -187,15 +201,14 @@ public class RetrieveJournal {
             }
             switch (idt) {
                 case "CPF7053": { // sequence number does not exist or break in receivers
-                    throw new InvalidPositionException(
-                            String.format("Call failed position %s parameters %s failed to find sequence or break in receivers: %s",
-                                    retrievePosition, builder, getFullAS400MessageText(id)));
+                    throw new LostJournalException(String.format("Call failed %s position %s parameters %s failed to find sequence or break in receivers: %s",
+                            idt, retrievePosition, builder, getFullAS400MessageText(id)));
                 }
                 case "CPF9801": { // specify invalid receiver
-                    throw new InvalidPositionException(String.format("Call failed position %s parameters %s failed to find receiver: %s",
-                            retrievePosition, builder, getFullAS400MessageText(id)));
+                    throw new LostJournalException(String.format("Call failed %s position %s parameters %s failed to find sequence or break in receivers: %s",
+                            idt, retrievePosition, builder, getFullAS400MessageText(id)));
                 }
-                case "CPF7054": { // e.g. last < first
+                case "CPF7054": { // e.g. last < first or using offset that doesn't belong to journal
                     throw new InvalidPositionException(
                             String.format("Call failed position %s parameters %s failed to find offset or invalid offsets: %s",
                                     retrievePosition, builder, id.getText()));
@@ -211,7 +224,7 @@ public class RetrieveJournal {
                     // if we're filtering we get no continuation offset just an error
                     header = new FirstHeader(0, 0, 0, OffsetStatus.NO_DATA, latestJournalPosition);
                     this.position.setPosition(latestJournalPosition);
-                    return true;
+                    return RetrievalState.Success;
                 }
                 default:
                     log.error("Call failed position {} parameters {} with error code {} message {}", retrievePosition, idt,
@@ -265,6 +278,9 @@ public class RetrieveJournal {
     }
 
     public boolean nextEntry() {
+        if (header == null) {
+            return false;
+        }
         if (offset < 0) {
             if (header.size() > 0) {
                 offset = header.offset();
@@ -401,13 +417,4 @@ public class RetrieveJournal {
     public long getTotalTransferred() {
         return totalTransferred;
     }
-
-    public static class RetrieveJournalException extends Exception {
-        private static final long serialVersionUID = 1L;
-
-        public RetrieveJournalException(String message) {
-            super(message);
-        }
-    }
-
 }

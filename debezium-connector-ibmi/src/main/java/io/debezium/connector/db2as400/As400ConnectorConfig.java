@@ -106,6 +106,11 @@ public class As400ConnectorConfig extends RelationalDatabaseConnectorConfig {
     public static final Field MAX_RETRIEVAL_TIMEOUT = Field.create("max.journal.timeout", "max time to fetch the journal entries",
             "Maximum time to fetch the journal entries in ms", DEFAULT_MAX_JOURNAL_TIMEOUT);
 
+    public static final long DEFAULT_CACHE_ADDITIONAL_DELAY = 5000;
+
+    public static final Field JOURNAL_CACHE_ADDITIONAL_DELAY = Field.create("journal.additional.delay", "additional delay when journal caching is enabled",
+            "additional journal cache delay in ms used when journal caching is enabled", DEFAULT_CACHE_ADDITIONAL_DELAY);
+
     public static final Field TOPIC_NAMING_STRATEGY = Field.create("topic.naming.strategy")
             .withDisplayName("Topic naming strategy class")
             .withType(Type.CLASS)
@@ -198,6 +203,10 @@ public class As400ConnectorConfig extends RelationalDatabaseConnectorConfig {
         return config.getString(DIAGNOSTICS_FOLDER);
     }
 
+    public Long cacheAdditionalDelay() {
+        return config.getLong(JOURNAL_CACHE_ADDITIONAL_DELAY);
+    }
+
     public JournalProcessedPosition getOffset() {
         final String receiver = config.getString(As400OffsetContext.RECEIVER);
         final String lib = config.getString(As400OffsetContext.RECEIVER_LIBRARY);
@@ -234,7 +243,7 @@ public class As400ConnectorConfig extends RelationalDatabaseConnectorConfig {
     public static Field.Set ALL_FIELDS = Field.setOf(JdbcConfiguration.HOSTNAME, USER, PASSWORD, SCHEMA, BUFFER_SIZE,
             RelationalDatabaseConnectorConfig.SNAPSHOT_SELECT_STATEMENT_OVERRIDES_BY_TABLE, SOCKET_TIMEOUT,
             MAX_SERVER_SIDE_ENTRIES, TOPIC_NAMING_STRATEGY, FROM_CCSID, TO_CCSID, SECURE,
-            DIAGNOSTICS_FOLDER, TRIM_NON_XML_CHARSEQUENCE_FIELD_MODE);
+            DIAGNOSTICS_FOLDER, TRIM_NON_XML_CHARSEQUENCE_FIELD_MODE, JOURNAL_CACHE_ADDITIONAL_DELAY);
 
     public static ConfigDef configDef() {
         final ConfigDef c = RelationalDatabaseConnectorConfig.CONFIG_DEFINITION.edit()
@@ -242,7 +251,7 @@ public class As400ConnectorConfig extends RelationalDatabaseConnectorConfig {
                 .type(
                         HOSTNAME, USER, PASSWORD, SCHEMA, BUFFER_SIZE,
                         SOCKET_TIMEOUT, FROM_CCSID, TO_CCSID, SECURE,
-                        DIAGNOSTICS_FOLDER, TRIM_NON_XML_CHARSEQUENCE_FIELD_MODE)
+                        DIAGNOSTICS_FOLDER, TRIM_NON_XML_CHARSEQUENCE_FIELD_MODE, JOURNAL_CACHE_ADDITIONAL_DELAY)
                 .connector(
                         SCHEMA_NAME_ADJUSTMENT_MODE)
                 .events(

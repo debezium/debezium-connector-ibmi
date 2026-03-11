@@ -5,7 +5,7 @@
  */
 package io.debezium.ibmi.db2.journal.retrieve.exception;
 
-public class InvalidPositionException extends Exception {
+public class InvalidPositionException extends FatalException {
 
     public InvalidPositionException(String message) {
         super(message);

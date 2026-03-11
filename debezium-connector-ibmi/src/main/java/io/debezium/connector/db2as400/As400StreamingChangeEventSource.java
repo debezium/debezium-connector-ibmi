@@ -23,7 +23,6 @@ import io.debezium.DebeziumException;
 import io.debezium.connector.db2as400.As400RpcConnection.BlockingReceiverConsumer;
 import io.debezium.data.Envelope.Operation;
 import io.debezium.ibmi.db2.journal.retrieve.JournalEntryType;
-import io.debezium.ibmi.db2.journal.retrieve.JournalProcessedPosition;
 import io.debezium.ibmi.db2.journal.retrieve.exception.FatalException;
 import io.debezium.ibmi.db2.journal.retrieve.exception.InvalidPositionException;
 import io.debezium.pipeline.ErrorHandler;
@@ -122,21 +121,28 @@ public class As400StreamingChangeEventSource implements StreamingChangeEventSour
             while (context.isRunning()) {
                 try {
                     try {
-                        final JournalProcessedPosition before = new JournalProcessedPosition(offsetContext.getPosition());
-                        if (!dataConnection.getJournalEntries(context, offsetContext,
+                        switch (dataConnection.getJournalEntries(context, offsetContext,
                                 processJournalEntries(partition, offsetContext), watchDog)) {
-                            metronome.pause();
-                        }
-                        if (!offsetContext.getPosition().equals(before)) {
-                            dispatcher.dispatchHeartbeatEventAlsoToIncrementalSnapshot(partition, offsetContext);
+                            case Success:
+                                break;
+                            case MoreDataAvailable:
+                                break;
+                            case NotCalled:
+                                metronome.pause();
+                                dispatcher.dispatchHeartbeatEventAlsoToIncrementalSnapshot(partition, offsetContext);
+                                break;
+                            default:
+                                metronome.pause();
+                                break;
                         }
                         retries = 0;
                     }
+                    catch (final InvalidPositionException e) {
+                        throw new DebeziumException("Invalid journal receiver/sequence are we using the wrong offset for the receiver: " + offsetContext.getPosition(),
+                                e);
+                    }
                     catch (final FatalException e) {
                         throw new DebeziumException("Unable to process offset " + offsetContext.getPosition(), e);
-                    }
-                    catch (final InvalidPositionException e) {
-                        throw new DebeziumException("Invalid journal receiver/sequence has the receiver been deleted? position was: " + offsetContext.getPosition(), e);
                     }
                     catch (final InterruptedException e) {
                         if (context.isRunning()) {

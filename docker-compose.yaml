@@ -44,7 +44,7 @@ services:
 
   redpanda-console:
     container_name: redpanda-console
-    image: docker.redpanda.com/vectorized/console:v2.3.5
+    image: docker.redpanda.com/redpandadata/console:latest
     networks:
       - kafkastreams-network
     entrypoint: /bin/sh
@@ -67,7 +67,7 @@ services:
       - mskafka
 
   ibmi-connector:
-   image: silllencem/debezium-connector-ibmi:latest
+   image: quay.io/debezium/connect:latest
    container_name: ibmi-connector
    environment:
      - DEBEZIUM_BOOTSTRAP_SERVERS=mskafka:9092
