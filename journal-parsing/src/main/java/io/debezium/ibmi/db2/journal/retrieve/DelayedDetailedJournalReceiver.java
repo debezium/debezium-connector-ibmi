@@ -95,7 +95,6 @@ public class DelayedDetailedJournalReceiver {
                 getPosition = nextPosition;
                 tp = nextTp;
             }
-            lastPosition = getPosition;
         } while (nextTp != null && now >= nextTp.timestamp + delayMs);
         return tp.position;
     }
