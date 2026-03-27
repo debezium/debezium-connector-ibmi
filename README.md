@@ -200,7 +200,7 @@ Notes
     "transforms.unwrap.delete.handling.mode": "rewrite",
     "transforms.unwrap.drop.tombstones": "false",
     "transforms.unwrap.type": "io.debezium.transforms.ExtractNewRecordState",
-    "table.include.list": "SCHEMA.TABLE1",
+    "table.include.list": "SCHEMA.TABLE1,SCHEMA.TABLE2",
     "snapshot.mode": "initial",
 
     "key.converter.schema.registry.url": "http://schema-registry:8081",
