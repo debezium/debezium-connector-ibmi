@@ -147,7 +147,6 @@ public class As400OffsetContext extends CommonOffsetContext<SourceInfo> {
 
     @Override
     public void event(DataCollectionId collectionId, Instant timestamp) {
-        // public void event(DataCollectionId collectionId, Instant timestamp, BigInteger rrn) {
         sourceInfo.setSourceTime(timestamp);
         sourceInfo.setReceiver(position.getReceiver().name());
         sourceInfo.setReceiverLib(position.getReceiver().library());
