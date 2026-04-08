@@ -137,7 +137,7 @@ public class EntryHeaderDecoder {
         }
         Instant time = (timestamp == null) ? Instant.ofEpochSecond(0) : timestamp.toInstant();
         return new EntryHeader(nextEntryOffset.intValue(), nullEntryOffset.intValue(), entrySpecificDataOffset, sequenceNumber, systemSequenceNumber,
-            time, journalCode, entryType, objectName, commitCycle, endOffset, pointerHandle, receiver[0], receiver[1], relativeRecordNumber);
+                time, journalCode, entryType, objectName, commitCycle, endOffset, pointerHandle, receiver[0], receiver[1], relativeRecordNumber);
 
     }
 

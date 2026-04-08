@@ -5,7 +5,9 @@
  */
 package io.debezium.connector.db2as400;
 
-import static io.debezium.connector.db2as400.SourceInfo.*;
+import static io.debezium.connector.db2as400.SourceInfo.RECEIVER_KEY;
+import static io.debezium.connector.db2as400.SourceInfo.RECEIVER_LIBRARY_KEY;
+import static io.debezium.connector.db2as400.SourceInfo.RRN_KEY;
 
 import org.apache.kafka.connect.data.Schema;
 import org.apache.kafka.connect.data.Struct;
