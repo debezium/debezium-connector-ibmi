@@ -1,28 +1,28 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <Configuration status="warn">
-	<Appenders>
-		<Console name="console">
-			<PatternLayout
-				pattern="%d{HH:mm:ss.SSS} [%t] [%level] %logger - %msg%n" />
-		</Console>
+    <Appenders>
+        <Console name="console">
+            <PatternLayout
+                pattern="%d{HH:mm:ss.SSS} [%t] [%level] %logger - %msg%n" />
+        </Console>
 
-		<RollingFile name="fileLog" fileName="logs/journalParsing.log"
-			filePattern="logs/archive/ibmi.log-%d{yyyy-MM-dd}.gz">
-			<PatternLayout
-				pattern="%d{HH:mm:ss.SSS} [%t] [%level] %logger - %msg%n" />
-			<Policies>
-				<TimeBasedTriggeringPolicy interval="1" />
-			</Policies>
-		</RollingFile>
-	</Appenders>
+        <RollingFile name="fileLog" fileName="logs/journalParsing.log"
+            filePattern="logs/archive/ibmi.log-%d{yyyy-MM-dd}.gz">
+            <PatternLayout
+                pattern="%d{HH:mm:ss.SSS} [%t] [%level] %logger - %msg%n" />
+            <Policies>
+                <TimeBasedTriggeringPolicy interval="1" />
+            </Policies>
+        </RollingFile>
+    </Appenders>
 
-	<Loggers>
-		<Logger name="com.fnz.db2.journal.retrieve.RetrieveJournal" level="debug" additivity="true"/>
-		<Logger name="com.fnz.db2.journal.retrieve.rjne0200.FirstHeaderDecoder" level="debug" additivity="true"/>
-		
-		<Root level="debug">
-			<AppenderRef ref="console" />
-			<AppenderRef ref="fileLog" />
-		</Root>
-	</Loggers>
+    <Loggers>
+        <Logger name="com.fnz.db2.journal.retrieve.RetrieveJournal" level="debug" additivity="true"/>
+        <Logger name="com.fnz.db2.journal.retrieve.rjne0200.FirstHeaderDecoder" level="debug" additivity="true"/>
+        
+        <Root level="debug">
+            <AppenderRef ref="console" />
+            <AppenderRef ref="fileLog" />
+        </Root>
+    </Loggers>
 </Configuration>

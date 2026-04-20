@@ -7,6 +7,7 @@ package io.debezium.ibmi.db2.journal.retrieve;
 
 import java.math.BigInteger;
 import java.time.Instant;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Optional;
 
@@ -78,12 +79,11 @@ public class ReceiverPagination {
             cachedEndPosition = endPosition;
         }
 
-        Optional<PositionRange> endOpt = findPosition(startPosition, maxServerSideEntriesBI, cachedReceivers,
-                cachedEndPosition);
+        Optional<PositionRange> endOpt = findPosition(startPosition, maxServerSideEntriesBI, cachedReceivers);
         if (endOpt.isEmpty()) {
             log.warn("retrying to find end offset");
             cachedReceivers = journalInfoRetrieval.getReceivers(as400, journalInfo);
-            endOpt = findPosition(startPosition, maxServerSideEntriesBI, cachedReceivers, endPosition);
+            endOpt = findPosition(startPosition, maxServerSideEntriesBI, cachedReceivers);
             if (endOpt.isEmpty()) {
                 throw new InvalidPositionException("unable to find receiver " + startPosition + " in " + cachedReceivers);
             }
@@ -112,24 +112,24 @@ public class ReceiverPagination {
     /**
      * only valid when startPosition and endJournalPosition are the same receiver and library
      * @param startPosition
-     * @param endJournalPosition
+     * @param receiver
      * @param maxServerSideEntriesBI
      * @return
      * @throws Exception
      */
-    PositionRange paginateInSameReceiver(JournalProcessedPosition startPosition, DetailedJournalReceiver endJournalPosition, BigInteger maxServerSideEntriesBI)
+    PositionRange paginateInSameReceiver(JournalProcessedPosition startPosition, DetailedJournalReceiver receiver, BigInteger maxServerSideEntriesBI)
             throws Exception {
-        if (!startPosition.isSameReceiver(endJournalPosition)) {
-            throw new Exception(String.format("Error this method is only valid for same receiver start %s, end %s", startPosition, endJournalPosition));
+        if (!startPosition.isSameReceiver(receiver)) {
+            throw new Exception(String.format("Error this method is only valid for same receiver start %s, end %s", startPosition, receiver));
         }
-        final BigInteger diff = endJournalPosition.end().subtract(startPosition.getOffset());
-        if (diff.compareTo(maxServerSideEntriesBI) > 0) {
+        final BigInteger diff = receiver.end().subtract(startPosition.getOffset());
+        if (diff.compareTo(maxServerSideEntriesBI) > 0) { // check
             final BigInteger restricted = startPosition.getOffset().add(maxServerSideEntriesBI);
             return new PositionRange(false, startPosition,
                     new JournalPosition(restricted, startPosition.getReceiver()));
         }
         return new PositionRange(false, startPosition,
-                new JournalPosition(endJournalPosition.end(), startPosition.getReceiver()));
+                new JournalPosition(receiver.end(), startPosition.getReceiver()));
     }
 
     /**
@@ -140,25 +140,36 @@ public class ReceiverPagination {
      * @return try and find end position at most offsetFromStart from start using the receiver list
      */
     Optional<PositionRange> findPosition(JournalProcessedPosition startPosition, BigInteger maxEntries,
-                                         List<DetailedJournalReceiver> receivers, DetailedJournalReceiver endPosition) {
+                                         List<DetailedJournalReceiver> receivers)
+            throws Exception {
 
-        if (!containsEndPosition(receivers, endPosition)) {
-            log.warn("unable to find active journal {} in receiver list", endPosition);
-            return Optional.empty();
-        }
-
-        final RangeFinder finder = new RangeFinder(startPosition, maxEntries);
-        for (int i = 0; i < receivers.size(); i++) {
-            final Optional<PositionRange> range = finder.next(receivers.get(i));
-            if (range.isPresent()) {
-                return range;
+        for (Iterator<DetailedJournalReceiver> it = receivers.iterator(); it.hasNext();) {
+            DetailedJournalReceiver nextReceiver = it.next();
+            if (nextReceiver.isSameReceiver(startPosition)) {
+                if (startEqualsEndAndProcessed(startPosition, nextReceiver)) {
+                    if (it.hasNext()) {
+                        nextReceiver = it.next();
+                        startPosition.setPosition(new JournalPosition(nextReceiver.start(), nextReceiver.info().receiver()), false);
+                        return Optional.of(
+                                paginateInSameReceiver(startPosition, nextReceiver, maxEntries));
+                    }
+                    else {
+                        // we're at the end and we've processed everything
+                        return Optional.of(
+                                paginateInSameReceiver(startPosition, nextReceiver, maxEntries));
+                    }
+                }
+                return Optional.of(
+                        paginateInSameReceiver(startPosition, nextReceiver, maxEntries));
             }
         }
-        final Optional<PositionRange> range = finder.endRange();
-        if (!finder.startFound()) {
-            log.warn("Current position {} not found in available receivers {}", startPosition, receivers);
-        }
-        return range;
+
+        log.error("Current position {} not found in available receivers {}", startPosition, receivers);
+        return Optional.empty();
+    }
+
+    private boolean startEqualsEndAndProcessed(JournalProcessedPosition start, DetailedJournalReceiver last) {
+        return start.processed() && start.getOffset().equals(last.end());
     }
 
     boolean containsEndPosition(List<DetailedJournalReceiver> receivers, DetailedJournalReceiver endPosition) {
@@ -171,79 +182,4 @@ public class ReceiverPagination {
         return containsEndPosition;
     }
 
-    static class RangeFinder {
-        private boolean found = false;
-        private DetailedJournalReceiver lastReceiver = null;
-        private BigInteger remaining;
-        private final JournalProcessedPosition startPosition;
-
-        RangeFinder(JournalProcessedPosition startPosition, BigInteger maxEntries) {
-            this.remaining = maxEntries;
-            this.startPosition = startPosition;
-        }
-
-        public Optional<PositionRange> next(DetailedJournalReceiver nextReceiver) {
-            if (found) {
-                // if the next journal has wrapped use just go to the end of the previous one
-                if (lastReceiver != null && nextReceiver.start().compareTo(lastReceiver.end()) < 0) {
-                    // we're at the end and we've processed it move start on to next receiver
-                    if (startEqualsEndAndProcessed(startPosition, lastReceiver)) {
-                        startPosition.setPosition(new JournalPosition(nextReceiver.start(), nextReceiver.info().receiver()), false);
-                    }
-                    else {
-                        // the only way we can get here is if we have already checked for pagination
-                        return Optional.of(new PositionRange(false, startPosition,
-                                new JournalPosition(lastReceiver.end(), lastReceiver.info().receiver())));
-                    }
-                }
-
-                final Optional<PositionRange> r = rangeWithinCurrentPosition(nextReceiver, nextReceiver.start());
-                lastReceiver = nextReceiver;
-                return r;
-            }
-            else {
-                if (nextReceiver.isSameReceiver(startPosition)) {
-                    found = true;
-                    final Optional<PositionRange> r = rangeWithinCurrentPosition(nextReceiver, startPosition.getOffset());
-                    lastReceiver = nextReceiver;
-                    return r;
-                }
-            }
-            lastReceiver = nextReceiver;
-            return Optional.empty();
-        }
-
-        // adding one to the range and then adding as we include both ends
-        // but we must not use the add one when setting the end point
-        // i.e. 1-> 10 is a total of 10 entries but the range can only go to 10
-        private Optional<PositionRange> rangeWithinCurrentPosition(DetailedJournalReceiver nextReceiver,
-                                                                   BigInteger currentOffset) {
-            final BigInteger difference = nextReceiver.end().subtract(currentOffset);
-            final BigInteger entriesInJournal = difference.add(BigInteger.ONE); // add one as range is inclusive
-            if (remaining.compareTo(difference) <= 0) { // range is inclusive but don't go past end when adding
-                // remaining
-                final BigInteger offset = currentOffset.add(remaining);
-                return Optional.of(new PositionRange(false, startPosition,
-                        new JournalPosition(offset, nextReceiver.info().receiver())));
-            }
-            remaining = remaining.subtract(entriesInJournal);
-            return Optional.empty();
-        }
-
-        public Optional<PositionRange> endRange() {
-            if (found && lastReceiver != null) {
-                return Optional.of(
-                        new PositionRange(false, startPosition, JournalPosition.endPosition(lastReceiver)));
-            }
-            return Optional.empty();
-        }
-
-        public boolean startFound() {
-            return found;
-        }
-
-        private boolean startEqualsEndAndProcessed(JournalProcessedPosition start, DetailedJournalReceiver last) {
-            return start.processed() && start.getOffset().equals(last.end());
-        }
-    }
 }

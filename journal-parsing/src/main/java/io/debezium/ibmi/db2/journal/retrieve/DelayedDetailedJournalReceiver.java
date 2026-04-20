@@ -84,11 +84,17 @@ public class DelayedDetailedJournalReceiver {
             return null;
         }
         TimedPosition nextTp = tp;
+        int lastPosition = -1;
+        int nextPosition = getPosition;
         do {
-            timedPositions[getPosition] = null;
-            getPosition = (getPosition + 1) % entries;
-            tp = nextTp;
-            nextTp = timedPositions[getPosition];
+            lastPosition = nextPosition;
+            nextPosition = (nextPosition + 1) % entries;
+            nextTp = timedPositions[nextPosition];
+            if (nextTp != null && now >= nextTp.timestamp + delayMs) {
+                timedPositions[lastPosition] = null;
+                getPosition = nextPosition;
+                tp = nextTp;
+            }
         } while (nextTp != null && now >= nextTp.timestamp + delayMs);
         return tp.position;
     }

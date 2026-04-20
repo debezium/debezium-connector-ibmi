@@ -67,7 +67,7 @@ class DelayedDetailedJournalReceiverTest {
         fakeTime.addAndGet(2); // Now at 2001ms since r1
         DetailedJournalReceiver result1 = buffer.getDelayedReceiver();
         assertEquals(r1, result1, "Should return r1 after delay");
-        assertNull(buffer.getDelayedReceiver(), "Should be null before delay for r2");
+        assertEquals(r1, buffer.getDelayedReceiver(), "Should stay r1 before delay for r2");
         fakeTime.addAndGet(999); // Now at 2000ms since r2
         fakeTime.addAndGet(2); // Now at 2001ms since r2
         DetailedJournalReceiver result2 = buffer.getDelayedReceiver();
@@ -84,7 +84,7 @@ class DelayedDetailedJournalReceiverTest {
         fakeTime.addAndGet(2001);
         DetailedJournalReceiver result = buffer.getDelayedReceiver();
         assertEquals(r1, result, "Should return r1 after delay");
-        assertNull(buffer.getDelayedReceiver(), "Should be null after r1 consumed");
+        assertEquals(r1, buffer.getDelayedReceiver(), "Should remain as r1 until r2");
     }
 
     @Test
@@ -111,9 +111,12 @@ class DelayedDetailedJournalReceiverTest {
         // Advance time to allow retrieval
         fakeTime.addAndGet(2000);
 
+        fakeTime.set(0);
+        assertNull(buffer.getDelayedReceiver(), "no receiver if too quick");
+
         fakeTime.set(2000 + 1); // Ensure enough time has passed for first receiver
         DetailedJournalReceiver firstResult = buffer.getDelayedReceiver();
-        assertNull(buffer.getDelayedReceiver(), "Should return first receiver");
+        assertEquals(receiver1, buffer.getDelayedReceiver(), "Should return first receiver");
 
         fakeTime.addAndGet(minInterval - 1);
         assertEquals(receiver1, firstResult, "nothing there for the too fast");
