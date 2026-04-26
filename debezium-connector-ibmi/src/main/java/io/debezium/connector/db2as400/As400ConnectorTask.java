@@ -110,6 +110,7 @@ public class As400ConnectorTask extends BaseSourceTask<As400Partition, As400Offs
                 .maxQueueSize(connectorConfig.getMaxQueueSize())
                 .queueProvider(new DefaultQueueProvider<>(connectorConfig.getMaxQueueSize()))
                 .pollInterval(connectorConfig.getPollInterval())
+                .pollDispatchInterval(connectorConfig.getPollDispatchInterval())
                 .loggingContextSupplier(() -> taskContext.configureLoggingContext(CONTEXT_NAME)).build();
 
         errorHandler = new ErrorHandler(As400RpcConnector.class, connectorConfig, queue, null);
