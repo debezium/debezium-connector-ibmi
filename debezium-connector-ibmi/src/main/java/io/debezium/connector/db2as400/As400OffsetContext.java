@@ -52,7 +52,7 @@ public class As400OffsetContext extends CommonOffsetContext<SourceInfo> {
     private final SourceInfo sourceInfo;
     private final JournalProcessedPosition position;
     private boolean hasNewTables = false;
-    private final IncrementalSnapshotContext<TableId> incrementalSnapshotContext = new SignalBasedIncrementalSnapshotContext<>(true);
+    private final IncrementalSnapshotContext<TableId> incrementalSnapshotContext;
 
     public As400OffsetContext(As400ConnectorConfig connectorConfig) {
         super(new SourceInfo(connectorConfig), false);
@@ -60,6 +60,7 @@ public class As400OffsetContext extends CommonOffsetContext<SourceInfo> {
         this.position = connectorConfig.getOffset();
         this.connectorConfig = connectorConfig;
         sourceInfo = new SourceInfo(connectorConfig);
+        this.incrementalSnapshotContext = new SignalBasedIncrementalSnapshotContext<>(true);
     }
 
     public As400OffsetContext(As400ConnectorConfig connectorConfig, JournalProcessedPosition position) {
@@ -68,6 +69,7 @@ public class As400OffsetContext extends CommonOffsetContext<SourceInfo> {
         this.position = position;
         this.connectorConfig = connectorConfig;
         sourceInfo = new SourceInfo(connectorConfig);
+        this.incrementalSnapshotContext = new SignalBasedIncrementalSnapshotContext<>(true);
     }
 
     public As400OffsetContext(As400ConnectorConfig connectorConfig, JournalProcessedPosition position,
@@ -77,6 +79,7 @@ public class As400OffsetContext extends CommonOffsetContext<SourceInfo> {
         this.position = position;
         this.connectorConfig = connectorConfig;
         sourceInfo = new SourceInfo(connectorConfig);
+        this.incrementalSnapshotContext = incrementalSnapshotContext;
     }
 
     public void setPosition(JournalProcessedPosition newPosition) {
@@ -112,19 +115,21 @@ public class As400OffsetContext extends CommonOffsetContext<SourceInfo> {
             log.debug("new offset {}", position);
 
         }
-        final BigInteger offset = position.getOffset();
+        final BigInteger seq = position.getOffset();
         String offsetStr = "null";
-        if (null != offset) {
-            offsetStr = offset.toString();
+        if (null != seq) {
+            offsetStr = seq.toString();
         }
         Instant last = position.getTimeOfLastProcessed();
         String time = last == null ? "" : Long.toString(last.getEpochSecond());
-        return new HashMap<>(Map.of(As400OffsetContext.EVENT_SEQUENCE, offsetStr,
+        final Map<String, Object> offset = new HashMap<>(Map.of(As400OffsetContext.EVENT_SEQUENCE, offsetStr,
                 As400OffsetContext.EVENT_TIME, time,
                 As400OffsetContext.RECEIVER, position.getReceiver().name(),
                 As400OffsetContext.PROCESSED, Boolean.toString(position.processed()),
                 As400OffsetContext.RECEIVER_LIBRARY, position.getReceiver().library(),
                 As400OffsetContext.SNAPSHOT_COMPLETED_KEY, Boolean.toString(snapshotCompleted)));
+        incrementalSnapshotContext.store(offset);
+        return offset;
     }
 
     @Override

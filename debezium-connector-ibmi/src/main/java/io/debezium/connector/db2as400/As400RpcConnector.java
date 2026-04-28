@@ -21,6 +21,7 @@ import io.debezium.connector.common.RelationalBaseSourceConnector;
 import io.debezium.jdbc.JdbcConfiguration;
 import io.debezium.jdbc.JdbcConnection;
 import io.debezium.relational.RelationalDatabaseConnectorConfig;
+import io.debezium.spi.schema.DataCollectionId;
 
 public class As400RpcConnector extends RelationalBaseSourceConnector {
     private static final Logger log = LoggerFactory.getLogger(As400RpcConnector.class);
@@ -84,6 +85,11 @@ public class As400RpcConnector extends RelationalBaseSourceConnector {
     @Override
     protected Map<String, ConfigValue> validateAllFields(Configuration config) {
         return config.validate(As400ConnectorConfig.ALL_FIELDS);
+    }
+
+    @Override
+    public <T extends DataCollectionId> List<T> getMatchingCollections(Configuration config) {
+        return List.of();
     }
 
 }
