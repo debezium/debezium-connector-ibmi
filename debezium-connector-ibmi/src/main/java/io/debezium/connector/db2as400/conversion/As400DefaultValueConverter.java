@@ -11,10 +11,9 @@ import java.math.RoundingMode;
 import java.sql.Types;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
-import java.time.ZoneId;
+import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
-import java.time.format.DateTimeFormatterBuilder;
-import java.time.temporal.ChronoField;
+import java.time.format.DateTimeParseException;
 import java.util.Optional;
 import java.util.Set;
 
@@ -77,7 +76,7 @@ public class As400DefaultValueConverter implements DefaultValueConverter {
      */
     public Object convert(Column column, String value) {
         if (value == null || "NULL".equals(value)) {
-            return value;
+            return null;
         }
 
         // trim non varchar data types before converting
@@ -93,26 +92,34 @@ public class As400DefaultValueConverter implements DefaultValueConverter {
         }
         switch (column.jdbcType()) {
             case Types.DATE: {
-                if ("CURRENT_DATE".equals(value)) {
-                    return null; // can't represent this as a timestamp type
-                }
                 DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd");
-                return (int) (LocalDate.parse(stripQuotes(value), formatter).toEpochDay());
-            }
-            case Types.TIMESTAMP: {
-                if ("CURRENT_TIMESTAMP".equals(value)) {
-                    return null; // can't represent this as a timestamp type
+                try {
+                    return (LocalDate.parse(stripQuotes(value), formatter).toEpochDay());
                 }
-                DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd-HH.mm.ss.SSSSSS");
-                return toEpoc(LocalDateTime.parse(stripQuotes(value), formatter));
-            }
-            case Types.TIMESTAMP_WITH_TIMEZONE:
-                throw new UnsupportedOperationException("not yet implemented to default to timestamp and timezone, value was: " + value);
-            case Types.TIME:
-                if ("CURRENT_TIME".equals(value)) {
+                catch (DateTimeParseException e) {
+                    log.debug("Failed to parse date default value: {}", value);
                     return null;
                 }
-                throw new UnsupportedOperationException("not yet implemented to default to duration, value was: " + value);
+            }
+            case Types.TIMESTAMP: {
+                DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd-HH.mm.ss.SSSSSS");
+                try {
+                    return (LocalDateTime.parse(stripQuotes(value), formatter));
+                }
+                catch (DateTimeParseException e) {
+                    log.debug("Failed to parse timestamp default value: {}", value);
+                    return null;
+                }
+            }
+            case Types.TIME:
+                try {
+                    DateTimeFormatter formatter = DateTimeFormatter.ofPattern("HH.mm.ss");
+                    return LocalTime.parse(stripQuotes(value), formatter);
+                }
+                catch (DateTimeParseException e) {
+                    log.debug("Failed to parse time default value: {}", value);
+                    return null;
+                }
             case Types.BOOLEAN:
                 return convertToBoolean(value);
             case Types.BIT:
@@ -121,22 +128,44 @@ public class As400DefaultValueConverter implements DefaultValueConverter {
             case Types.BIGINT:
             case Types.NUMERIC:
             case Types.DECIMAL:
-                return convertToDecimal(column, value);
+                try {
+                    return convertToDecimal(column, value);
+                }
+                catch (NumberFormatException e) {
+                    log.debug("Failed to parse decimal default value: {}", value);
+                    return null;
+                }
 
             case Types.FLOAT:
             case Types.DOUBLE:
             case Types.REAL:
-                return convertToDouble(value);
+                try {
+                    return convertToDouble(value);
+                }
+                catch (NumberFormatException e) {
+                    log.debug("Failed to parse double default value: {}", value);
+                    return null;
+                }
             case Types.VARCHAR:
             case Types.CHAR:
             case Types.NVARCHAR:
             case Types.NCHAR:
+                // no quotes implies this is a special register
+                if (!value.contains("'")) {
+                    return null;
+                }
                 return stripQuotes(value);
             case Types.INTEGER:
             case Types.SMALLINT:
-                return Integer.parseInt(value);
+                try {
+                    return Integer.parseInt(value);
+                }
+                catch (NumberFormatException e) {
+                    log.debug("Failed to parse integer default value: {}", value);
+                    return null;
+                }
         }
-        return value;
+        return null;
     }
 
     private String stripQuotes(String value) {
@@ -144,11 +173,6 @@ public class As400DefaultValueConverter implements DefaultValueConverter {
             return value.substring(1, value.length() - 1);
         }
         return value;
-    }
-
-    private Long toEpoc(LocalDateTime date) {
-        ZoneId zoneId = ZoneId.systemDefault();
-        return date.atZone(zoneId).toEpochSecond();
     }
 
     /**
@@ -228,17 +252,6 @@ public class As400DefaultValueConverter implements DefaultValueConverter {
         catch (NumberFormatException ignore) {
             return Boolean.parseBoolean(value);
         }
-    }
-
-    private DateTimeFormatter timestampFormat(int length) {
-        final DateTimeFormatterBuilder dtf = new DateTimeFormatterBuilder().appendPattern("yyyy-MM-dd").optionalStart()
-                .appendLiteral(" ").append(DateTimeFormatter.ISO_LOCAL_TIME).optionalEnd()
-                .parseDefaulting(ChronoField.HOUR_OF_DAY, 0).parseDefaulting(ChronoField.MINUTE_OF_HOUR, 0)
-                .parseDefaulting(ChronoField.SECOND_OF_MINUTE, 0);
-        if (length > 0) {
-            dtf.appendFraction(ChronoField.MICRO_OF_SECOND, 0, length, true);
-        }
-        return dtf.toFormatter();
     }
 
 }
