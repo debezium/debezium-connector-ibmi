@@ -215,7 +215,7 @@ Here we've added TABLE2 to the list.
 
 # monitoring
 
-prometheus stats are avaialble on port 7071
+prometheus stats are available on port 7071
 
 sample prometheus stats are in
 
