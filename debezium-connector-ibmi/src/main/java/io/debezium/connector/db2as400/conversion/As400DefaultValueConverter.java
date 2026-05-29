@@ -92,6 +92,9 @@ public class As400DefaultValueConverter implements DefaultValueConverter {
         }
         switch (column.jdbcType()) {
             case Types.DATE: {
+                if ("CURRENT_DATE".equals(value)) {
+                    return LocalDate.EPOCH; // default debezium connector behaviour
+                }            	
                 DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd");
                 try {
                     return (LocalDate.parse(stripQuotes(value), formatter).toEpochDay());
