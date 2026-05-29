@@ -105,6 +105,9 @@ public class As400DefaultValueConverter implements DefaultValueConverter {
                 }
             }
             case Types.TIMESTAMP: {
+            	if ("CURRENT_TIMESTAMP".equals(value)) {
+            		return LocalDateTime.of(LocalDate.EPOCH, LocalTime.MIDNIGHT);
+            	}
                 DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd-HH.mm.ss.SSSSSS");
                 try {
                     return (LocalDateTime.parse(stripQuotes(value), formatter));
@@ -118,6 +121,9 @@ public class As400DefaultValueConverter implements DefaultValueConverter {
                 throw new UnsupportedOperationException("not yet implemented no ibmi support at time of writing see https://www.ibm.com/docs/en/i/7.6.0?topic=statements-create-table, value was: " + value);
             }
             case Types.TIME:
+            	if ("CURRENT_TIME".equals(value)) {
+            		return LocalTime.MIDNIGHT; 
+            	}
                 try {
                     DateTimeFormatter formatter = DateTimeFormatter.ofPattern("HH.mm.ss");
                     return LocalTime.parse(stripQuotes(value), formatter);
