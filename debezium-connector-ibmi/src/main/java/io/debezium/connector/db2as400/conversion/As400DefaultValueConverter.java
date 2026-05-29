@@ -114,6 +114,9 @@ public class As400DefaultValueConverter implements DefaultValueConverter {
                     return null;
                 }
             }
+            case Types.TIMESTAMP_WITH_TIMEZONE: {
+                throw new UnsupportedOperationException("not yet implemented no ibmi support at time of writing see https://www.ibm.com/docs/en/i/7.6.0?topic=statements-create-table, value was: " + value);
+            }
             case Types.TIME:
                 try {
                     DateTimeFormatter formatter = DateTimeFormatter.ofPattern("HH.mm.ss");
