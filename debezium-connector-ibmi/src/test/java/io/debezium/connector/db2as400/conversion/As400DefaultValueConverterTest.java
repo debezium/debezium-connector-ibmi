@@ -5,7 +5,8 @@
  */
 package io.debezium.connector.db2as400.conversion;
 
-import static org.fest.assertions.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatObject;
 
 import java.math.BigDecimal;
 import java.sql.Types;
@@ -14,16 +15,18 @@ import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.util.Optional;
 
-import org.junit.Before;
-import org.junit.Test;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Tag;
+import org.junit.jupiter.api.Test;
 
 import io.debezium.relational.Column;
 
+@Tag("UnitTests")
 public class As400DefaultValueConverterTest {
 
     private As400DefaultValueConverter converter;
 
-    @Before
+    @BeforeEach
     public void setUp() {
         converter = new As400DefaultValueConverter();
     }
@@ -37,7 +40,8 @@ public class As400DefaultValueConverterTest {
                 .create();
 
         Object result = converter.convert(column, "'2023-10-15'");
-        assertThat(result).isEqualTo(LocalDate.of(2023, 10, 15).toEpochDay());
+
+        assertThatObject(result).isEqualTo(LocalDate.of(2023, 10, 15).toEpochDay());
     }
 
     @Test
@@ -49,7 +53,7 @@ public class As400DefaultValueConverterTest {
                 .create();
 
         Object result = converter.convert(column, "2023-10-15");
-        assertThat(result).isEqualTo(LocalDate.of(2023, 10, 15).toEpochDay());
+        assertThatObject(result).isEqualTo(LocalDate.of(2023, 10, 15).toEpochDay());
     }
 
     @Test
@@ -61,7 +65,7 @@ public class As400DefaultValueConverterTest {
                 .create();
 
         Object result = converter.convert(column, "invalid-date");
-        assertThat(result).isNull();
+        assertThatObject(result).isNull();
     }
 
     @Test
@@ -74,7 +78,7 @@ public class As400DefaultValueConverterTest {
 
         Object result = converter.convert(column, "'2023-10-15-14.30.45.123456'");
         LocalDateTime expected = LocalDateTime.of(2023, 10, 15, 14, 30, 45, 123456000);
-        assertThat(result).isEqualTo(expected);
+        assertThatObject(result).isEqualTo(expected);
     }
 
     @Test
@@ -86,7 +90,7 @@ public class As400DefaultValueConverterTest {
                 .create();
 
         Object result = converter.convert(column, "invalid-timestamp");
-        assertThat(result).isNull();
+        assertThatObject(result).isNull();
     }
 
     @Test
@@ -99,7 +103,7 @@ public class As400DefaultValueConverterTest {
 
         Object result = converter.convert(column, "'14.30.45'");
         LocalTime expected = LocalTime.of(14, 30, 45);
-        assertThat(result).isEqualTo(expected);
+        assertThatObject(result).isEqualTo(expected);
     }
 
     @Test
@@ -112,7 +116,7 @@ public class As400DefaultValueConverterTest {
 
         Object result = converter.convert(column, "14.30.45");
         LocalTime expected = LocalTime.of(14, 30, 45);
-        assertThat(result).isEqualTo(expected);
+        assertThatObject(result).isEqualTo(expected);
     }
 
     @Test
@@ -124,7 +128,7 @@ public class As400DefaultValueConverterTest {
                 .create();
 
         Object result = converter.convert(column, "invalid-time");
-        assertThat(result).isNull();
+        assertThatObject(result).isNull();
     }
 
     @Test
@@ -135,10 +139,10 @@ public class As400DefaultValueConverterTest {
                 .jdbcType(Types.BOOLEAN)
                 .create();
 
-        assertThat(converter.convert(column, "1")).isEqualTo(true);
-        assertThat(converter.convert(column, "0")).isEqualTo(false);
-        assertThat(converter.convert(column, "true")).isEqualTo(true);
-        assertThat(converter.convert(column, "false")).isEqualTo(false);
+        assertThatObject(converter.convert(column, "1")).isEqualTo(true);
+        assertThatObject(converter.convert(column, "0")).isEqualTo(false);
+        assertThatObject(converter.convert(column, "true")).isEqualTo(true);
+        assertThatObject(converter.convert(column, "false")).isEqualTo(false);
     }
 
     @Test
@@ -150,7 +154,7 @@ public class As400DefaultValueConverterTest {
                 .create();
 
         Object result = converter.convert(column, "42");
-        assertThat(result).isEqualTo(42);
+        assertThatObject(result).isEqualTo(42);
     }
 
     @Test
@@ -162,7 +166,7 @@ public class As400DefaultValueConverterTest {
                 .create();
 
         Object result = converter.convert(column, "not-a-number");
-        assertThat(result).isNull();
+        assertThatObject(result).isNull();
     }
 
     @Test
@@ -174,7 +178,7 @@ public class As400DefaultValueConverterTest {
                 .create();
 
         Object result = converter.convert(column, "123");
-        assertThat(result).isEqualTo(123);
+        assertThatObject(result).isEqualTo(123);
     }
 
     @Test
@@ -187,7 +191,7 @@ public class As400DefaultValueConverterTest {
                 .create();
 
         Object result = converter.convert(column, "123.456");
-        assertThat(result).isEqualTo(new BigDecimal("123.46"));
+        assertThatObject(result).isEqualTo(new BigDecimal("123.46"));
     }
 
     @Test
@@ -199,7 +203,7 @@ public class As400DefaultValueConverterTest {
                 .create();
 
         Object result = converter.convert(column, "123.456");
-        assertThat(result).isEqualTo(new BigDecimal("123.456"));
+        assertThatObject(result).isEqualTo(new BigDecimal("123.456"));
     }
 
     @Test
@@ -211,7 +215,7 @@ public class As400DefaultValueConverterTest {
                 .create();
 
         Object result = converter.convert(column, "not-a-decimal");
-        assertThat(result).isNull();
+        assertThatObject(result).isNull();
     }
 
     @Test
@@ -223,7 +227,7 @@ public class As400DefaultValueConverterTest {
                 .create();
 
         Object result = converter.convert(column, "123.456");
-        assertThat(result).isEqualTo(123.456);
+        assertThatObject(result).isEqualTo(123.456);
     }
 
     @Test
@@ -235,7 +239,7 @@ public class As400DefaultValueConverterTest {
                 .create();
 
         Object result = converter.convert(column, "not-a-double");
-        assertThat(result).isNull();
+        assertThatObject(result).isNull();
     }
 
     @Test
@@ -247,7 +251,7 @@ public class As400DefaultValueConverterTest {
                 .create();
 
         Object result = converter.convert(column, "'test value'");
-        assertThat(result).isEqualTo("test value");
+        assertThatObject(result).isEqualTo("test value");
     }
 
     @Test
@@ -260,7 +264,7 @@ public class As400DefaultValueConverterTest {
 
         // No quotes implies special register - should return null
         Object result = converter.convert(column, "CURRENT_USER");
-        assertThat(result).isNull();
+        assertThatObject(result).isNull();
     }
 
     @Test
@@ -272,7 +276,7 @@ public class As400DefaultValueConverterTest {
                 .create();
 
         Object result = converter.convert(column, "'A'");
-        assertThat(result).isEqualTo("A");
+        assertThatObject(result).isEqualTo("A");
     }
 
     @Test
@@ -284,8 +288,8 @@ public class As400DefaultValueConverterTest {
                 .length(1)
                 .create();
 
-        assertThat(converter.convert(column, "1")).isEqualTo(true);
-        assertThat(converter.convert(column, "0")).isEqualTo(false);
+        assertThatObject(converter.convert(column, "1")).isEqualTo(true);
+        assertThatObject(converter.convert(column, "0")).isEqualTo(false);
     }
 
     @Test
@@ -298,7 +302,7 @@ public class As400DefaultValueConverterTest {
                 .create();
 
         Object result = converter.convert(column, "10101010");
-        assertThat(result).isInstanceOf(byte[].class);
+        assertThatObject(result).isInstanceOf(byte[].class);
         byte[] bytes = (byte[]) result;
         assertThat(bytes).hasSize(1);
         assertThat(bytes[0]).isEqualTo((byte) 0xAA);
@@ -312,8 +316,8 @@ public class As400DefaultValueConverterTest {
                 .jdbcType(Types.VARCHAR)
                 .create();
 
-        assertThat(converter.convert(column, null)).isNull();
-        assertThat(converter.convert(column, "NULL")).isNull();
+        assertThatObject(converter.convert(column, null)).isNull();
+        assertThatObject(converter.convert(column, "NULL")).isNull();
     }
 
     @Test
@@ -325,7 +329,7 @@ public class As400DefaultValueConverterTest {
                 .create();
 
         Optional<Object> result = converter.parseDefaultValue(column, null);
-        assertThat(result).isEqualTo(Optional.empty());
+        assertThatObject(result).isEqualTo(Optional.empty());
     }
 
     @Test
@@ -338,7 +342,7 @@ public class As400DefaultValueConverterTest {
 
         Optional<Object> result = converter.parseDefaultValue(column, "42");
         assertThat(result.isPresent()).isTrue();
-        assertThat(result.get()).isEqualTo(42);
+        assertThatObject(result.get()).isEqualTo(42);
     }
 
     @Test
@@ -349,8 +353,8 @@ public class As400DefaultValueConverterTest {
                 .jdbcType(Types.TINYINT)
                 .create();
 
-        assertThat(converter.convert(column, "true")).isEqualTo(true);
-        assertThat(converter.convert(column, "false")).isEqualTo(false);
+        assertThatObject(converter.convert(column, "true")).isEqualTo(true);
+        assertThatObject(converter.convert(column, "false")).isEqualTo(false);
     }
 
     @Test
@@ -361,8 +365,8 @@ public class As400DefaultValueConverterTest {
                 .jdbcType(Types.INTEGER)
                 .create();
 
-        assertThat(converter.convert(column, "true")).isEqualTo(true);
-        assertThat(converter.convert(column, "false")).isEqualTo(false);
+        assertThatObject(converter.convert(column, "true")).isEqualTo(true);
+        assertThatObject(converter.convert(column, "false")).isEqualTo(false);
     }
 
     @Test
@@ -375,7 +379,7 @@ public class As400DefaultValueConverterTest {
 
         // Should trim whitespace for integer types
         Object result = converter.convert(column, "  42  ");
-        assertThat(result).isEqualTo(42);
+        assertThatObject(result).isEqualTo(42);
     }
 
     @Test
@@ -387,6 +391,6 @@ public class As400DefaultValueConverterTest {
                 .create();
 
         Object result = converter.convert(column, "some value");
-        assertThat(result).isNull();
+        assertThatObject(result).isNull();
     }
 }

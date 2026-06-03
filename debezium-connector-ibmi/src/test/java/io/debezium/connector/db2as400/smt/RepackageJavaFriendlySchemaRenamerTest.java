@@ -5,9 +5,7 @@
  */
 package io.debezium.connector.db2as400.smt;
 
-import static org.hamcrest.MatcherAssert.assertThat;
-import static org.hamcrest.Matchers.is;
-import static org.hamcrest.Matchers.nullValue;
+import static org.assertj.core.api.Assertions.assertThat;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -16,10 +14,11 @@ import org.apache.kafka.connect.data.Schema;
 import org.apache.kafka.connect.data.SchemaBuilder;
 import org.apache.kafka.connect.data.Struct;
 import org.apache.kafka.connect.source.SourceRecord;
-import org.hamcrest.core.IsNull;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
+@Tag("UnitTests")
 public class RepackageJavaFriendlySchemaRenamerTest {
     RepackageJavaFriendlySchemaRenamer<SourceRecord> rr = new RepackageJavaFriendlySchemaRenamer<>();
 
@@ -37,8 +36,8 @@ public class RepackageJavaFriendlySchemaRenamerTest {
         SourceRecord cr = structRecord();
         SourceRecord newSchemaRecord = rr.apply(cr);
 
-        assertThat(newSchemaRecord.keySchema().name(), is("com.fnz.debezium.TableKey"));
-        assertThat(newSchemaRecord.valueSchema().name(), is("com.fnz.debezium.TableValue"));
+        assertThat(newSchemaRecord.keySchema().name()).isEqualTo("com.fnz.debezium.TableKey");
+        assertThat(newSchemaRecord.valueSchema().name()).isEqualTo("com.fnz.debezium.TableValue");
     }
 
     @Test
@@ -50,8 +49,8 @@ public class RepackageJavaFriendlySchemaRenamerTest {
         SourceRecord cr = nullSchemaKeyRecord();
         SourceRecord newSchemaRecord = rr.apply(cr);
 
-        assertThat(newSchemaRecord.keySchema(), IsNull.nullValue());
-        assertThat(newSchemaRecord.valueSchema().name(), is("com.fnz.debezium.TableValue"));
+        assertThat(newSchemaRecord.keySchema()).isNull();
+        assertThat(newSchemaRecord.valueSchema().name()).isEqualTo("com.fnz.debezium.TableValue");
     }
 
     @Test
@@ -63,8 +62,8 @@ public class RepackageJavaFriendlySchemaRenamerTest {
         SourceRecord cr = simpleScheamKeyRecord();
         SourceRecord newSchemaRecord = rr.apply(cr);
 
-        assertThat(newSchemaRecord.keySchema(), is(Schema.INT64_SCHEMA));
-        assertThat(newSchemaRecord.valueSchema().name(), is("com.fnz.debezium.TableValue"));
+        assertThat(newSchemaRecord.keySchema()).isEqualTo(Schema.INT64_SCHEMA);
+        assertThat(newSchemaRecord.valueSchema().name()).isEqualTo("com.fnz.debezium.TableValue");
     }
 
     private SourceRecord nullSchemaKeyRecord() {
@@ -109,21 +108,21 @@ public class RepackageJavaFriendlySchemaRenamerTest {
 
     @Test
     public void testToCamelCaseNoUnderscores() {
-        assertThat(RepackageJavaFriendlySchemaRenamer.toCamelCase("abcdef"), is("Abcdef"));
-        assertThat(RepackageJavaFriendlySchemaRenamer.toCamelCase("ABCDEF"), is("Abcdef"));
+        assertThat(RepackageJavaFriendlySchemaRenamer.toCamelCase("abcdef")).isEqualTo("Abcdef");
+        assertThat(RepackageJavaFriendlySchemaRenamer.toCamelCase("ABCDEF")).isEqualTo("Abcdef");
     }
 
     @Test
     public void testToCamelCaseUnderscores() {
-        assertThat(RepackageJavaFriendlySchemaRenamer.toCamelCase("abcdef_"), is("Abcdef"));
-        assertThat(RepackageJavaFriendlySchemaRenamer.toCamelCase("ABCDEF_GHI"), is("AbcdefGhi"));
-        assertThat(RepackageJavaFriendlySchemaRenamer.toCamelCase("_abc"), is("Abc"));
+        assertThat(RepackageJavaFriendlySchemaRenamer.toCamelCase("abcdef_")).isEqualTo("Abcdef");
+        assertThat(RepackageJavaFriendlySchemaRenamer.toCamelCase("ABCDEF_GHI")).isEqualTo("AbcdefGhi");
+        assertThat(RepackageJavaFriendlySchemaRenamer.toCamelCase("_abc")).isEqualTo("Abc");
     }
 
     @Test
     public void testToCamelCaseUnderscoresSingleChar() {
-        assertThat(RepackageJavaFriendlySchemaRenamer.toCamelCase("a"), is("A"));
-        assertThat(RepackageJavaFriendlySchemaRenamer.toCamelCase("_"), is("_"));
-        assertThat(RepackageJavaFriendlySchemaRenamer.toCamelCase(null), is(nullValue()));
+        assertThat(RepackageJavaFriendlySchemaRenamer.toCamelCase("a")).isEqualTo("A");
+        assertThat(RepackageJavaFriendlySchemaRenamer.toCamelCase("_")).isEqualTo("_");
+        assertThat(RepackageJavaFriendlySchemaRenamer.toCamelCase(null)).isNull();
     }
 }
