@@ -87,7 +87,7 @@ public class JdbcFileDecoder extends JournalFileEntryDecoder {
     private static final Object[] EMPTY = new Object[]{};
 
     @Override
-    public Object[] decodeFile(EntryHeader entryHeader, byte[] data, int offset) throws Exception {
+    public Object[] decodeFile(EntryHeader entryHeader, byte[] data, int offset, boolean[] isNull) throws Exception {
         final Optional<TableInfo> tableInfoOpt = getRecordFormat(entryHeader.getFile(), entryHeader.getLibrary());
 
         return tableInfoOpt.map(tableInfo -> {
@@ -96,7 +96,7 @@ public class JdbcFileDecoder extends JournalFileEntryDecoder {
             final int length = Integer.parseInt(lengthStr);
             if (length > 0) {
                 final Object[] os = decodeEntry(tableInfo.getAs400Structure(), data,
-                        offset + entryHeader.getEntrySpecificDataOffset() + ENTRY_SPECIFIC_DATA_OFFSET);
+                        offset + entryHeader.getEntrySpecificDataOffset() + ENTRY_SPECIFIC_DATA_OFFSET, isNull);
                 return os;
             }
             else {
@@ -107,8 +107,26 @@ public class JdbcFileDecoder extends JournalFileEntryDecoder {
         }).orElse(EMPTY);
     }
 
-    public Object[] decodeEntry(AS400Structure entryDetailStructure, byte[] data, int offset) {
-        final Object[] result = (Object[]) entryDetailStructure.toObject(data, offset);
+    /**
+     * Decodes the structure field-by-field, mirroring {@link AS400Structure#toObject(byte[], int)}
+     * (sequential decode advancing the offset by each member's byte length, no alignment), with one
+     * difference: fields flagged as null by {@code isNull} are not decoded. Their slot in the record
+     * image is skipped (the offset is still advanced) and the value is left null, because a null
+     * column's bytes are not a valid encoding for strict types (e.g. blank-filled packed decimal),
+     * which would otherwise throw and abort the whole record.
+     */
+    public Object[] decodeEntry(AS400Structure entryDetailStructure, byte[] data, int offset, boolean[] isNull) {
+        final AS400DataType[] members = entryDetailStructure.getMembers();
+        final Object[] result = new Object[members.length];
+        int fieldOffset = offset;
+        for (int i = 0; i < members.length; i++) {
+            final AS400DataType member = members[i];
+            final boolean fieldIsNull = isNull != null && i < isNull.length && isNull[i];
+            if (!fieldIsNull) {
+                result[i] = member.toObject(data, fieldOffset);
+            }
+            fieldOffset += member.getByteLength();
+        }
         return result;
     }
 
