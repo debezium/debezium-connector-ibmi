@@ -17,29 +17,18 @@ public abstract class JournalFileEntryDecoder implements JournalEntryDeocder<Obj
     public JournalFileEntryDecoder() {
     }
 
-    public abstract Object[] decodeFile(EntryHeader entryHeader, byte[] data, int offset) throws Exception;
+    public abstract Object[] decodeFile(EntryHeader entryHeader, byte[] data, int offset, boolean[] isNull) throws Exception;
 
     @Override
     public Object[] decode(EntryHeader entryHeader, byte[] data, int offset) throws Exception {
-        Object[] objs = decodeFile(entryHeader, data, offset);
-        Object[] nullified = nullify(objs, entryHeader, data, offset);
-        return nullified;
-    }
-
-    Object[] nullify(Object[] objs, EntryHeader entryHeader, byte[] data, int offset) {
-        boolean[] isNull = getNullFieldIndicators(data, entryHeader.getNullValueOffest(), offset);
-        if (isNull == null) {
-            return objs;
-        }
-        else {
-            int length = Math.min(objs.length, isNull.length);
-            for (int i = 0; i < length; i++) {
-                if (isNull[i]) {
-                    objs[i] = null;
-                }
-            }
-        }
-        return objs;
+        // Resolve the null field indicators before decoding so that null fields can be skipped.
+        // A null column carries no valid value in the journal entry image (its slot is typically
+        // filled with EBCDIC blanks, 0x40), which would otherwise make strict types such as
+        // packed/zoned decimal or date/time fail to decode and abort the whole record. Decoding
+        // field-by-field and skipping the null ones avoids handing the driver bytes for a field
+        // we already know is null. See JdbcFileDecoder.decodeEntry.
+        final boolean[] isNull = getNullFieldIndicators(data, entryHeader.getNullValueOffest(), offset);
+        return decodeFile(entryHeader, data, offset, isNull);
     }
 
     static final Logger log = LoggerFactory.getLogger(JournalEntryDeocder.class);
