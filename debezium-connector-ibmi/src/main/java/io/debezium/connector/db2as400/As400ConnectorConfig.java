@@ -248,13 +248,14 @@ public class As400ConnectorConfig extends RelationalDatabaseConnectorConfig {
     public static ConfigDef configDef() {
         final ConfigDef c = RelationalDatabaseConnectorConfig.CONFIG_DEFINITION.edit()
                 .name("ibmi")
-                .type(
+                .group(Field.Group.CONNECTION,
                         HOSTNAME, USER, PASSWORD, SCHEMA, BUFFER_SIZE,
                         SOCKET_TIMEOUT, FROM_CCSID, TO_CCSID, SECURE,
                         DIAGNOSTICS_FOLDER, TRIM_NON_XML_CHARSEQUENCE_FIELD_MODE, JOURNAL_CACHE_ADDITIONAL_DELAY)
-                .connector(
-                        SCHEMA_NAME_ADJUSTMENT_MODE)
-                .events(
+                .group(Field.Group.CONNECTOR_SNAPSHOT,
+                        SNAPSHOT_MODE)
+                .group(Field.Group.CONNECTOR,
+                        SCHEMA_NAME_ADJUSTMENT_MODE,
                         As400OffsetContext.EVENT_SEQUENCE_FIELD,
                         As400OffsetContext.RECEIVER_FIELD,
                         As400OffsetContext.RECEIVER_LIBRARY_FIELD,
@@ -265,7 +266,7 @@ public class As400ConnectorConfig extends RelationalDatabaseConnectorConfig {
 
     public static final Field SNAPSHOT_MODE = Field.create("snapshot.mode")
             .withDisplayName("Snapshot mode")
-            .withGroup(Field.createGroupEntry(Field.Group.CONNECTOR_SNAPSHOT, 0))
+            .withGroup(Field.createGroupEntry(Field.Group.CONNECTOR_SNAPSHOT))
             .withEnum(SnapshotMode.class, SnapshotMode.INITIAL)
             .withWidth(Width.SHORT)
             .withImportance(Importance.MEDIUM)
