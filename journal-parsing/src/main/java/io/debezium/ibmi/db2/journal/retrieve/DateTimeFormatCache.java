@@ -32,9 +32,12 @@ import com.ibm.as400.access.AS400Time;
  * {@link CcsidCache} and {@link BytesPerChar}.
  */
 public class DateTimeFormatCache {
+    // SYSCOLUMNS2 (not SYSCOLUMNS) exposes the DDS-derived date/time format and separator columns; they were added in
+    // IBM i 7.4 TR5 / 7.3 TR11. On older releases the prepare fails, lookup() swallows it and the decoder falls back to
+    // the default *ISO behaviour. SYSCOLUMNS2 is a superset of SYSCOLUMNS and IBM recommends it for performance.
     private static final String GET_FORMATS = "select table_name, system_table_name, column_name, system_column_name, "
             + "date_format, date_separator, time_format, time_separator "
-            + "FROM qsys2.SYSCOLUMNS where table_schema=? and (system_table_name = ? or table_name = ?)";
+            + "FROM qsys2.SYSCOLUMNS2 where table_schema=? and (system_table_name = ? or table_name = ?)";
 
     static final Logger log = LoggerFactory.getLogger(DateTimeFormatCache.class);
 
@@ -55,7 +58,9 @@ public class DateTimeFormatCache {
      */
     public Optional<AS400Date> getDate(String schema, String table, String columnName) {
         return lookup(dateMap, schema, table, columnName)
-                .map(fs -> new AS400Date(fs.format(), fs.separator()));
+                .map(fs -> fs.separator() == null
+                        ? new AS400Date(fs.format())
+                        : new AS400Date(fs.format(), fs.separator()));
     }
 
     /**
@@ -63,7 +68,9 @@ public class DateTimeFormatCache {
      */
     public Optional<AS400Time> getTime(String schema, String table, String columnName) {
         return lookup(timeMap, schema, table, columnName)
-                .map(fs -> new AS400Time(fs.format(), fs.separator()));
+                .map(fs -> fs.separator() == null
+                        ? new AS400Time(fs.format())
+                        : new AS400Time(fs.format(), fs.separator()));
     }
 
     private Optional<FormatAndSeparator> lookup(Map<String, Optional<FormatAndSeparator>> map, String schema,
@@ -166,8 +173,11 @@ public class DateTimeFormatCache {
     }
 
     /**
-     * The catalog stores the separator as a single character; a blank or empty value means "no separator" and is left
-     * to the jt400 default for the format (returned as {@code null}).
+     * The catalog stores the separator as a single character. A null/blank/empty value means the DDS did not specify a
+     * {@code DATSEP}/{@code TIMSEP}, i.e. "use the format's default separator" (e.g. {@code .} for {@code *EUR}); this
+     * is returned as {@code null} so {@link #getDate}/{@link #getTime} construct with the single-argument
+     * {@code AS400Date}/{@code AS400Time} constructor, which applies that default. It must NOT be treated as
+     * "no separator" — that would size the column 2 bytes short (e.g. {@code *EUR} 8 vs 10) and corrupt the record.
      */
     private static Character separator(String separator) {
         if (separator == null || separator.isEmpty() || separator.isBlank()) {

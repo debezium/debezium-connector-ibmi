@@ -101,6 +101,33 @@ public class DateTimeFormatCacheTest {
     }
 
     @Test
+    public void nullCatalogSeparatorUsesFormatDefaultNotNoSeparator() throws Exception {
+        // Mirrors a real PUB400 DDS DATFMT(*EUR) column with no DATSEP: catalog returns DATE_FORMAT=EUR but a
+        // null DATE_SEPARATOR. A null separator must mean "format default" (.) -> 10 bytes, NOT "no separator" -> 8,
+        // which would mis-size the column and corrupt every subsequent field in the record.
+        final ResultSet rs = mock(ResultSet.class);
+        when(rs.next()).thenReturn(true, false);
+        when(rs.getString(1)).thenReturn("DATEPF");
+        when(rs.getString(2)).thenReturn("DATEPF");
+        when(rs.getString(3)).thenReturn("EURDATE");
+        when(rs.getString(4)).thenReturn("EURDATE");
+        when(rs.getString(5)).thenReturn("EUR"); // date_format
+        when(rs.getString(6)).thenReturn(null); // date_separator: not specified in DDS
+        when(rs.getString(7)).thenReturn(null);
+        when(rs.getString(8)).thenReturn(null);
+
+        final PreparedStatement ps = mock(PreparedStatement.class);
+        when(ps.executeQuery()).thenReturn(rs);
+        final Connection con = mock(Connection.class);
+        when(con.prepareStatement(anyString())).thenReturn(ps);
+
+        final AS400Date date = new DateTimeFormatCache(() -> con).getDate("PYP31", "DATEPF", "EURDATE").orElseThrow();
+        assertEquals(AS400Date.FORMAT_EUR, date.getFormat());
+        assertEquals(Character.valueOf('.'), date.getSeparator());
+        assertEquals(10, date.getByteLength());
+    }
+
+    @Test
     public void lookupFailureReturnsEmpty() {
         // null connection supplier -> NPE inside fetch is swallowed, caller falls back to default
         final DateTimeFormatCache cache = new DateTimeFormatCache(() -> {
