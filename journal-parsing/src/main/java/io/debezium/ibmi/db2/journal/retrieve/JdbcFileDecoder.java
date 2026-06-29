@@ -46,8 +46,6 @@ public class JdbcFileDecoder extends JournalFileEntryDecoder {
 
     private final AS400Float8 as400Float8 = new AS400Float8();
     private final AS400Float4 as400Float4 = new AS400Float4();
-    private final AS400Time as400Time = new AS400Time();
-    private final AS400Date as400Date = new AS400Date();
     private final AS400Timestamp as400Timestamp = new AS400Timestamp();
     private final AS400Xml as400Xml = new AS400Xml();
     private final AS400Bin8 as400Bin8 = new AS400Bin8();
@@ -66,6 +64,7 @@ public class JdbcFileDecoder extends JournalFileEntryDecoder {
     private final SchemaCacheIF schemaCache;
     private final CcsidCache ccsidCache;
     private final BytesPerChar octetLengthCache;
+    private final DateTimeFormatCache dateTimeFormatCache;
 
     public JdbcFileDecoder(Connect<Connection, SQLException> con, String database, SchemaCacheIF schemaCache,
                            int fromCcsid, int toCcsid) {
@@ -75,6 +74,7 @@ public class JdbcFileDecoder extends JournalFileEntryDecoder {
         this.databaseName = database;
         ccsidCache = new CcsidCache(con, fromCcsid, toCcsid);
         octetLengthCache = new BytesPerChar(con);
+        dateTimeFormatCache = new DateTimeFormatCache(con);
     }
 
     /*
@@ -335,9 +335,21 @@ public class JdbcFileDecoder extends JournalFileEntryDecoder {
             case "NUMERIC":
                 return new AS400ZonedDecimal(length, precision);
             case "DATE":
-                return as400Date;
+                return dateTimeFormatCache.getDate(schema, table, columnName)
+                        .map(AS400DataType.class::cast)
+                        .orElseGet(() -> {
+                            log.warn("No DATFMT found for DATE column {}.{}.{}, defaulting to *ISO", schema, table,
+                                    columnName);
+                            return new AS400Date();
+                        });
             case "TIME":
-                return as400Time;
+                return dateTimeFormatCache.getTime(schema, table, columnName)
+                        .map(AS400DataType.class::cast)
+                        .orElseGet(() -> {
+                            log.warn("No TIMFMT found for TIME column {}.{}.{}, defaulting to *ISO", schema, table,
+                                    columnName);
+                            return new AS400Time();
+                        });
             case "REAL":
                 return as400Float4;
             case "DOUBLE":

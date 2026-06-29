@@ -203,4 +203,18 @@ public class JdbcFileDecoderTest {
         assertEquals(0, new BigDecimal(123).compareTo((BigDecimal) result[1]));
         assertEquals("ZZ", result[2]);
     }
+
+    @Test
+    public void dateAndTimeFallBackToIsoWhenFormatUnknown() throws Exception {
+        // null connection -> the format cache lookup fails and is swallowed; DATE/TIME must default to *ISO
+        // rather than throwing (preserves prior behaviour for ISO files and never NPEs the decoder).
+        final JdbcFileDecoder decoder = new JdbcFileDecoder(null, null, new SchemaCacheHash(), -1, -1);
+
+        final AS400DataType date = decoder.toDataType("schem", "table", "d", "DATE", 10, 0);
+        assertEquals(AS400DataType.TYPE_DATE, date.getInstanceType());
+        assertEquals(com.ibm.as400.access.AS400Date.FORMAT_ISO, ((com.ibm.as400.access.AS400Date) date).getFormat());
+
+        final AS400DataType time = decoder.toDataType("schem", "table", "t", "TIME", 8, 0);
+        assertEquals(AS400DataType.TYPE_TIME, time.getInstanceType());
+    }
 }
