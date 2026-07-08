@@ -334,7 +334,7 @@ public class As400JdbcConnection extends JdbcConnection implements Connect<Conne
         if (!conn.isValid(3)) {
             log.info("connection dead closing");
             try {
-                conn.close();
+                super.close();
             }
             catch (final Exception e) {
                 // we can ignore this we just need a new connection
