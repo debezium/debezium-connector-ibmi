@@ -13,7 +13,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import io.debezium.jdbc.JdbcValueConverters;
-import io.debezium.jdbc.TemporalPrecisionMode;
 import io.debezium.relational.Column;
 
 /**
@@ -25,8 +24,17 @@ public class As400ValueConverters extends JdbcValueConverters {
     private final As400ConnectorConfig config;
 
     public As400ValueConverters(DecimalMode decimalMode, As400ConnectorConfig config) {
-        super(decimalMode, TemporalPrecisionMode.ADAPTIVE, ZoneOffset.UTC, null, null, null);
+        super(decimalMode, config.getTemporalPrecisionMode(), ZoneOffset.UTC, null, null, null);
         this.config = config;
+    }
+
+    /**
+     * Time precision in AS400 DB2 is defined in scale. When not explicitly
+     * declared, scale is 6 (microseconds).
+     */
+    @Override
+    protected int getTimePrecision(Column column) {
+        return column.scale().orElse(-1);
     }
 
     @Override
