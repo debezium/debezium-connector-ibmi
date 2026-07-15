@@ -30,13 +30,11 @@ public class As400ValueConverters extends JdbcValueConverters {
 
     /**
      * Time precision in AS400 DB2 is defined in scale. When not explicitly
-     * declared, scale is 6 (microseconds).  When no scale is present, we
-     * return a scale of 0 (no fractional seconds) to handle the case of
-     * TIMESTAMP(0) declarations.
+     * declared, scale is 6 (microseconds).
      */
     @Override
     protected int getTimePrecision(Column column) {
-        return column.scale().orElse(0);
+        return column.scale().orElse(-1);
     }
 
     @Override
