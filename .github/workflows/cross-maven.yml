@@ -43,14 +43,29 @@ jobs:
         env:
           branch_name: ${{ github.head_ref }}
         run: |
-          curl --silent -X "GET" https://api.github.com/repos/debezium/debezium/pulls | jq '.[] | {branch: .head.ref}' | jq -r '.branch' >> SORTED_PULLS.txt
+          response=$(curl -si -X "GET" --url "https://api.github.com/repos/debezium/debezium/pulls?per_page=100&sort=updated")
+          link_next=$(echo "$response" | grep -oP '(?<=link: <).*(?=>; rel="next")')
+          echo "$response" | sed -n '/\[/,$ p' | jq '.[] | {branch: .head.ref}' | jq -r '.branch' >> SORTED_PULLS.TXT
 
-          while IFS=" " read -r BRANCH;
-          do
-            if grep -q "$branch_name" <<< "$BRANCH"; then
-              echo "BRANCH_FOUND=true" >> $GITHUB_OUTPUT
-            fi
-          done < SORTED_PULLS.txt
+          branch_found=false
+          has_next=true
+          while ! $branch_found && $has_next; do
+              while IFS=" " read -r BRANCH; do
+              if grep -q "$branch_name" <<< "$BRANCH"; then
+                  branch_found=true
+                  echo "BRANCH_FOUND=true" >> $GITHUB_OUTPUT
+              fi
+              done < SORTED_PULLS.txt
+
+              if ! $branch_found && $has_next; then
+                  response=$(curl -si -X "GET" --url "$link_next")
+                  link_next=$(echo "$response" | grep -oP '(?<=rel="prev", <).*(?=>; rel="next")')
+                  if [[ -z $link_next ]]; then
+                      has_next=false
+                  fi
+                  echo "$response" | sed -n '/\[/,$ p' | jq '.[] | {branch: .head.ref}' | jq -r '.branch' > SORTED_PULLS.TXT
+              fi
+          done
       - name: Checkout core repository with pull request branch
         if: ${{ steps.branch.outputs.BRANCH_FOUND == 'true' }}
         uses: actions/checkout@v6
