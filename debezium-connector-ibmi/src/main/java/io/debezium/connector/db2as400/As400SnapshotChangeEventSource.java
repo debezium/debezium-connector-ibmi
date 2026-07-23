@@ -7,6 +7,7 @@ package io.debezium.connector.db2as400;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -73,8 +74,13 @@ public class As400SnapshotChangeEventSource
     @Override
     protected Set<TableId> getAllTableIds(RelationalSnapshotContext<As400Partition, As400OffsetContext> snapshotContext)
             throws Exception {
-        final Set<TableId> tables = jdbcConnection.readTableNames(jdbcConnection.getRealDatabaseName(),
-                connectorConfig.getSchema(), null, new String[]{ "TABLE" });
+        // A single connector may capture tables across several libraries (sharing one journal),
+        // so discover tables in every library referenced by the include list, not just the default.
+        final String databaseName = jdbcConnection.getRealDatabaseName();
+        final Set<TableId> tables = new LinkedHashSet<>();
+        for (final String schema : connectorConfig.getCaptureSchemas()) {
+            tables.addAll(jdbcConnection.readTableNames(databaseName, schema, null, new String[]{ "TABLE" }));
+        }
         return tables;
     }
 
