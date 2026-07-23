@@ -126,14 +126,14 @@ public class As400ConnectorTask extends BaseSourceTask<As400Partition, As400Offs
         final As400StreamingChangeEventSourceMetrics streamingMetrics = new As400StreamingChangeEventSourceMetrics(
                 taskContext, queue, metadataProvider, schema::tableIds);
 
-        String configuredIncludes = newConfig.tableIncludeList();
-        String signalDataCollection = config.getString(RelationalDatabaseConnectorConfig.SIGNAL_DATA_COLLECTION);
+        final Map<String, List<String>> captured = connectorConfig.getCaptured();
+        final String signalDataCollection = config.getString(RelationalDatabaseConnectorConfig.SIGNAL_DATA_COLLECTION);
         if (!Strings.isNullOrBlank(signalDataCollection)) {
-            configuredIncludes = configuredIncludes.length() > 0 ? String.format("%s,%s", configuredIncludes, signalDataCollection) : "";
+            // Ensure the signal table is journalled alongside the captured tables.
+            connectorConfig.addIncludes(captured, signalDataCollection);
         }
 
-        final List<FileFilter> shortIncludes = jdbcConnection.shortIncludes(schema.getSchemaName(),
-                configuredIncludes);
+        final List<FileFilter> shortIncludes = jdbcConnection.shortIncludes(captured);
 
         final long cacheWait = JournalInfoRetrieval.getJournalCacheDurationInMilliseconds(jdbcConnection);
 

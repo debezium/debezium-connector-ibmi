@@ -6,6 +6,10 @@
 package io.debezium.connector.db2as400;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.entry;
+
+import java.util.List;
+import java.util.Map;
 
 import org.junit.jupiter.api.Test;
 
@@ -70,5 +74,69 @@ public class As400ConnectorConfigCaptureSchemasTest {
 
         // Then only the default schema is captured
         assertThat(config.getCaptureSchemas()).containsExactly("LIB1");
+    }
+
+    @Test
+    public void capturesTablesPerLibraryWithFullTableName() {
+        // Given qualified entries across two libraries
+        final As400ConnectorConfig config = configWith("LIB1", "LIB1.T1,LIB2.T2");
+
+        // Then each library keeps its full (untruncated) table name
+        assertThat(config.getCaptured()).containsOnly(
+                entry("LIB1", List.of("T1")),
+                entry("LIB2", List.of("T2")));
+    }
+
+    @Test
+    public void capturesUnqualifiedTablesUnderDefaultSchema() {
+        // Given an include list with no library prefixes
+        final As400ConnectorConfig config = configWith("MYLIB", "T1,T2");
+
+        // Then both tables are captured under the default schema
+        assertThat(config.getCaptured()).containsOnly(entry("MYLIB", List.of("T1", "T2")));
+    }
+
+    @Test
+    public void mixedQualifiedAndUnqualifiedUnderDefaultSchemaAreKept() {
+        // Given a qualified and an unqualified table that both resolve to the default schema
+        final As400ConnectorConfig config = configWith("LIB1", "LIB1.T1,T2");
+
+        // Then neither entry clobbers the other
+        assertThat(config.getCaptured()).containsOnly(entry("LIB1", List.of("T1", "T2")));
+    }
+
+    @Test
+    public void databaseSchemaTableFormKeepsTableName() {
+        // Given a fully-qualified database.schema.table entry
+        final As400ConnectorConfig config = configWith("LIB1", "MYDB.LIB3.T1");
+
+        // Then the library is the schema segment and the table name is preserved
+        assertThat(config.getCaptured()).containsOnly(
+                entry("LIB1", List.of()),
+                entry("LIB3", List.of("T1")));
+    }
+
+    @Test
+    public void uppercasesLibraryButPreservesRawTableCasing() {
+        // Given a lowercase library and a mixed-case table name
+        final As400ConnectorConfig config = configWith("LIB1", "lib2.myTable");
+
+        // Then the library is uppercased (for dedup) but the table name is looked up verbatim
+        assertThat(config.getCaptured()).containsOnly(
+                entry("LIB1", List.of()),
+                entry("LIB2", List.of("myTable")));
+    }
+
+    @Test
+    public void addIncludesFoldsInSignalDataCollection() {
+        // Given a captured map and a separately-configured signal data collection
+        final As400ConnectorConfig config = configWith("LIB1", "LIB1.T1");
+        final Map<String, List<String>> captured = config.getCaptured();
+
+        // When the signal table is folded in
+        config.addIncludes(captured, "LIB1.SIGNALS");
+
+        // Then it is journalled alongside the captured tables
+        assertThat(captured).containsOnly(entry("LIB1", List.of("T1", "SIGNALS")));
     }
 }

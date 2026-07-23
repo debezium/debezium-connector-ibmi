@@ -6,7 +6,10 @@
 package io.debezium.connector.db2as400;
 
 import java.time.Instant;
-import java.util.LinkedHashSet;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 
@@ -182,14 +185,21 @@ public class As400ConnectorConfig extends RelationalDatabaseConnectorConfig {
      *
      */
     public Set<String> getCaptureSchemas() {
-        final Set<String> schemas = new LinkedHashSet<>();
-        final String defaultSchema = getSchema();
-        schemas.add(defaultSchema);
+        return getCaptured().keySet();
+    }
 
-        final String includeList = config.getString(TABLE_INCLUDE_LIST);
+    public Map<String, List<String>> getCaptured() {
+        final Map<String, List<String>> map = new LinkedHashMap<>();
+        map.put(getSchema(), new ArrayList<>());
+        addIncludes(map, config.getString(TABLE_INCLUDE_LIST));
+        return map;
+    }
+
+    public void addIncludes(Map<String, List<String>> map, String includeList) {
         if (includeList == null || includeList.isBlank()) {
-            return schemas;
+            return;
         }
+        final String defaultSchema = getSchema();
         for (String entry : includeList.split(",")) {
             entry = entry.trim();
             if (entry.isEmpty()) {
@@ -197,18 +207,18 @@ public class As400ConnectorConfig extends RelationalDatabaseConnectorConfig {
             }
             int o = entry.lastIndexOf('.');
             if (o <= 0) {
-                schemas.add(defaultSchema);
+                map.computeIfAbsent(defaultSchema, k -> new ArrayList<>()).add(entry);
                 continue;
             }
             String schemaName = entry.substring(0, o);
+            final String tableName = entry.substring(o + 1);
             // Handle the "database.schema.table" form: keep only the schema segment.
             o = schemaName.lastIndexOf('.');
             if (o > 0) {
                 schemaName = schemaName.substring(o + 1);
             }
-            schemas.add(schemaName.toUpperCase());
+            map.computeIfAbsent(schemaName.toUpperCase(), k -> new ArrayList<>()).add(tableName);
         }
-        return schemas;
     }
 
     public Integer getJournalBufferSize() {

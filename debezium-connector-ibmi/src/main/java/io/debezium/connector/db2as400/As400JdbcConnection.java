@@ -13,7 +13,6 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.time.Instant;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -109,34 +108,13 @@ public class As400JdbcConnection extends JdbcConnection implements Connect<Conne
         return this.connectionString(URL_PATTERN);
     }
 
-    public List<FileFilter> shortIncludes(String schema, String includes) {
-        if (includes == null || includes.isBlank()) {
-            return Collections.<FileFilter> emptyList();
-        }
-        final String[] incs = includes.split(",");
-        final List<FileFilter> r = new ArrayList<>();
-        for (String tableName : incs) {
-            String schemaName = "";
-            int o = tableName.lastIndexOf('.');
-            if (o > 0) {
-                schemaName = tableName.substring(0, o);
-                tableName = tableName.substring(o + 1);
+    public List<FileFilter> shortIncludes(Map<String, List<String>> captured) {
+        List<FileFilter> r = new ArrayList<>();
+        for (Map.Entry<String, List<String>> e : captured.entrySet()) {
+            String schema = e.getKey();
+            for (String table : e.getValue()) {
+                getSystemName(schema, table).map(x -> r.add(new FileFilter(schema, x)));
             }
-
-            // This handles the case where the table name has been specified as "database.schema.table"
-            if (!"".equals(schemaName)) {
-                o = schemaName.lastIndexOf('.');
-                if (o > 0) {
-                    schemaName = schemaName.substring(o + 1);
-                }
-            }
-
-            if ("".equals(schemaName)) {
-                schemaName = schema;
-            }
-
-            final String tableSchema = schemaName;
-            getSystemName(tableSchema, tableName).map(x -> r.add(new FileFilter(tableSchema, x)));
         }
         return r;
     }
