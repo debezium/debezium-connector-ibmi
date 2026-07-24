@@ -43,35 +43,32 @@ jobs:
         env:
           branch_name: ${{ github.head_ref }}
         run: |
-          response=$(curl -si -X "GET" --url "https://api.github.com/repos/debezium/debezium/pulls?per_page=100&sort=updated")
-          link_next=$(echo "$response" | grep -oP '(?<=<)[^>]*(?=>; rel="next")' || true)
-          echo "$response" | sed -n '/\[/,$ p' | jq '.[] | {branch: .head.ref}' | jq -r '.branch' >> SORTED_PULLS.txt
+          function get_response {
+              response=$(curl -si -X "GET" --url $1)
+              link_next=$(echo "$response" | grep -oP '(?<=<)[^>]*(?=>; rel="next")' || true)
+              echo "$response" | sed -n '/\[/,$ p' | jq '.[] | {branch: .head.ref}' | jq -r '.branch' >> SORTED_PULLS.txt
+
+              if [[ ! -z $link_next ]]; then
+                  has_next=true
+              else
+                  has_next=false
+              fi
+          }
+
+          get_response "https://api.github.com/repos/debezium/debezium/pulls?per_page=100&sort=updated"
 
           branch_found=false
-          if [[ ! -z $link_next ]]; then
-            has_next=true
-          else
-            has_next=false
-          fi
-
           while ! $branch_found && $has_next; do
-              while IFS=" " read -r BRANCH; do
+            while IFS=" " read -r BRANCH; do
               if [ "$branch_name" = "$BRANCH" ]; then
                 branch_found=true
                 echo "BRANCH_FOUND=true" >> $GITHUB_OUTPUT
               fi
-              done < SORTED_PULLS.txt
+            done < SORTED_PULLS.txt
 
-              if ! $branch_found && $has_next; then
-                  response=$(curl -si -X "GET" --url "$link_next")
-                  link_next=$(echo "$response" | grep -oP '(?<=rel="prev", <).*(?=>; rel="next")' || true)
-                  if [[ ! -z $link_next ]]; then
-                    has_next=true
-                  else
-                    has_next=false
-                  fi
-                  echo "$response" | sed -n '/\[/,$ p' | jq '.[] | {branch: .head.ref}' | jq -r '.branch' >> SORTED_PULLS.txt
-              fi
+            if ! $branch_found && $has_next; then
+              get_response "$link_next"
+            fi
           done
       - name: Checkout core repository with pull request branch
         if: ${{ steps.branch.outputs.BRANCH_FOUND == 'true' }}
