@@ -64,7 +64,7 @@ jobs:
 
               if ! $branch_found && $has_next; then
                   response=$(curl -si -X "GET" --url "$link_next")
-                  link_next=$(echo "$response" | grep -oP '(?<=rel="prev", <).*(?=>; rel="next")')
+                  link_next=$(echo "$response" | grep -oP '(?<=rel="prev", <).*(?=>; rel="next")' || true)
                   if [[ ! -z $link_next ]]; then
                     has_next=true
                   else
