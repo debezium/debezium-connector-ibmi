@@ -5,6 +5,7 @@
  */
 package io.debezium.connector.db2as400;
 
+import java.sql.SQLException;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -56,6 +57,8 @@ public class As400ConnectorTask extends BaseSourceTask<As400Partition, As400Offs
     private ErrorHandler errorHandler;
     private As400ConnectorConfig connectorConfig;
     private CdcSourceTaskContext<As400ConnectorConfig> taskContext;
+    private As400JdbcConnection jdbcConnection;
+    private As400RpcConnection rpcConnection;
 
     @Override
     public String version() {
@@ -84,7 +87,7 @@ public class As400ConnectorTask extends BaseSourceTask<As400Partition, As400Offs
 
         final MainConnectionProvidingConnectionFactory<As400JdbcConnection> jdbcConnectionFactory = new DefaultMainConnectionProvidingConnectionFactory<>(
                 () -> new As400JdbcConnection(connectorConfig.getJdbcConfig()));
-        final As400JdbcConnection jdbcConnection = jdbcConnectionFactory.mainConnection();
+        this.jdbcConnection = jdbcConnectionFactory.mainConnection();
         registerServiceProviders(connectorConfig.getServiceRegistry());
 
         CustomConverterRegistry customConverterRegistry = connectorConfig.getServiceRegistry().tryGetService(CustomConverterRegistry.class);
@@ -139,7 +142,7 @@ public class As400ConnectorTask extends BaseSourceTask<As400Partition, As400Offs
 
         final long cacheWait = JournalInfoRetrieval.getJournalCacheDurationInMilliseconds(jdbcConnection);
 
-        final As400RpcConnection rpcConnection = new As400RpcConnection(connectorConfig, streamingMetrics,
+        this.rpcConnection = new As400RpcConnection(connectorConfig, streamingMetrics,
                 shortIncludes, cacheWait);
 
         // Detect and recover from a stored position whose receiver has been pruned, before Debezium
@@ -245,6 +248,25 @@ public class As400ConnectorTask extends BaseSourceTask<As400Partition, As400Offs
 
     @Override
     protected void doStop() {
+        if (rpcConnection != null) {
+            rpcConnection.close();
+            rpcConnection = null;
+        }
+
+        try {
+            if (jdbcConnection != null) {
+                jdbcConnection.close();
+                jdbcConnection = null;
+            }
+        }
+        catch (final SQLException e) {
+            LOGGER.error("Exception while closing JDBC connection", e);
+        }
+
+        if (schema != null) {
+            schema.close();
+            schema = null;
+        }
     }
 
     @Override

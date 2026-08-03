@@ -122,7 +122,7 @@ public class RetrieveJournal {
                 killer.end(0);
             }
         }
-        catch (Exception e) {
+        catch (Throwable e) {
             log.error("Failed to cancel job name {} user {} number {}", job.getName(), job.getUser(), job.getNumber(), e);
         }
     }
@@ -164,8 +164,13 @@ public class RetrieveJournal {
         spc.setAlignOn16Bytes(true);
         spc.setReturnValueFormat(ServiceProgramCall.RETURN_INTEGER);
         ibmiJob.set(spc.getServerJob()); // capture so we can asynchronously cancel it
-        final boolean success = spc.run();
-        ibmiJob.set(null); // job finished
+        boolean success;
+        try {
+            success = spc.run();
+        }
+        finally {
+            ibmiJob.set(null); // job finished
+        }
         if (success) {
             outputData = parameters[0].getOutputData();
             header = firstHeaderDecoder.decode(outputData, end);

@@ -87,7 +87,9 @@ public class As400RpcConnection implements AutoCloseable, Connect<AS400, IOExcep
         try {
             if (as400 != null) {
                 log.info("Disconnecting");
-                retrieveJournal.cancelJob();
+                if (retrieveJournal != null) {
+                    retrieveJournal.cancelJob();
+                }
                 this.as400.disconnectAllServices();
             }
         }
