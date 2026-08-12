@@ -12,6 +12,7 @@ import java.util.Date;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
@@ -27,6 +28,8 @@ import io.debezium.ibmi.db2.journal.retrieve.exception.FatalException;
 import io.debezium.ibmi.db2.journal.retrieve.exception.InvalidPositionException;
 import io.debezium.pipeline.ErrorHandler;
 import io.debezium.pipeline.EventDispatcher;
+import io.debezium.pipeline.monitor.OffsetActivityMonitor;
+import io.debezium.pipeline.monitor.OffsetActivityMonitorService;
 import io.debezium.pipeline.source.spi.StreamingChangeEventSource;
 import io.debezium.pipeline.txmetadata.TransactionContext;
 import io.debezium.relational.TableId;
@@ -68,6 +71,8 @@ public class As400StreamingChangeEventSource implements StreamingChangeEventSour
     private final Map<String, TransactionContext> txMap = new HashMap<>();
     private final String database;
     private As400OffsetContext offsetContext;
+    private final OffsetActivityMonitorService offsetActivityMonitorService;
+    private OffsetActivityMonitor<As400Partition, As400OffsetContext> offsetActivityMonitor;
 
     public As400StreamingChangeEventSource(As400ConnectorConfig connectorConfig, As400RpcConnection dataConnection,
                                            As400JdbcConnection jdbcConnection, EventDispatcher<As400Partition, TableId> dispatcher,
@@ -81,6 +86,7 @@ public class As400StreamingChangeEventSource implements StreamingChangeEventSour
         this.schema = schema;
         this.pollInterval = connectorConfig.getPollInterval();
         this.database = jdbcConnection.getRealDatabaseName();
+        this.offsetActivityMonitorService = OffsetActivityMonitorService.lookup(connectorConfig.getServiceRegistry());
     }
 
     @Override
@@ -119,6 +125,8 @@ public class As400StreamingChangeEventSource implements StreamingChangeEventSour
         watchDog.start();
         try {
             while (context.isRunning()) {
+                offsetActivityMonitorService.pulse(partition, offsetContext);
+
                 try {
                     try {
                         switch (dataConnection.getJournalEntries(context, offsetContext,
@@ -355,5 +363,13 @@ public class As400StreamingChangeEventSource implements StreamingChangeEventSour
     @Override
     public As400OffsetContext getOffsetContext() {
         return offsetContext;
+    }
+
+    @Override
+    public Optional<OffsetActivityMonitor<As400Partition, As400OffsetContext>> getOffsetActivityMonitor() {
+        if (offsetActivityMonitor == null) {
+            offsetActivityMonitor = new As400OffsetActivityMonitor(connectorConfig.getOffsetActivityMonitorInterval());
+        }
+        return Optional.of(offsetActivityMonitor);
     }
 }
