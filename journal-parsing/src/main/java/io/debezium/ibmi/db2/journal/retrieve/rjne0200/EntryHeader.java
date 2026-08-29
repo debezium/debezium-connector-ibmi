@@ -29,10 +29,11 @@ public class EntryHeader {
     private final long pointerHandle;
     private final String receiver;
     private final String receiverLibrary;
+    private final BigInteger relativeRecordNumber;
 
     public EntryHeader(int nextEntryOffset, int nullValueOffest, long entrySpecificDataOffset, BigInteger sequenceNumber, BigInteger systemSequenceNumber,
                        Instant timestamp, char journalCode, String entryType, String objectName, BigInteger commitCycle, int endOffset, long pointerHandle,
-                       String receiver, String receiverLibrary) {
+                       String receiver, String receiverLibrary, BigInteger relativeRecordNumber) {
         super();
         this.nextEntryOffset = nextEntryOffset;
         this.nullValueOffest = nullValueOffest;
@@ -48,15 +49,16 @@ public class EntryHeader {
         this.pointerHandle = pointerHandle;
         this.receiver = StringHelpers.safeTrim(receiver);
         this.receiverLibrary = StringHelpers.safeTrim(receiverLibrary);
+        this.relativeRecordNumber = relativeRecordNumber;
     }
 
     @Override
     public String toString() {
         return String.format(
-                "EntryHeader [nextEntryOffset=%s, nullValueOffest=%s, entrySpecificDataOffset=%s, sequenceNumber=%s, systemSequenceNumber=%s, timestamp=%s, journalCode=%s, entryType=%s, objectName=%s, commitCycle=%s, endOffset=%s, pointerHandle=%s, receiver=%s, receiverLibrary=%s]",
+                "EntryHeader [nextEntryOffset=%s, nullValueOffest=%s, entrySpecificDataOffset=%s, sequenceNumber=%s, systemSequenceNumber=%s, timestamp=%s, journalCode=%s, entryType=%s, objectName=%s, commitCycle=%s, endOffset=%s, pointerHandle=%s, receiver=%s, receiverLibrary=%s, rrn=%s]",
                 nextEntryOffset, nullValueOffest, entrySpecificDataOffset, sequenceNumber, systemSequenceNumber,
                 timestamp, journalCode, entryType, objectName, commitCycle, endOffset, pointerHandle, receiver,
-                receiverLibrary);
+                receiverLibrary, relativeRecordNumber);
     }
 
     public int getLength() {
@@ -146,5 +148,9 @@ public class EntryHeader {
 
     public String getReceiverLibrary() {
         return receiverLibrary;
+    }
+
+    public BigInteger getRelativeRecordNumber() {
+        return relativeRecordNumber;
     }
 }
