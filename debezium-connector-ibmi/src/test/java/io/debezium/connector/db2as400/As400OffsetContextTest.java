@@ -12,6 +12,7 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 
+import org.apache.kafka.connect.data.Struct;
 import org.junit.jupiter.api.Test;
 
 import io.debezium.config.CommonConnectorConfig;
@@ -26,12 +27,17 @@ import io.debezium.relational.TableId;
 /**
  * Verifies that an in-progress incremental snapshot survives the
  * {@link As400OffsetContext#getOffset()} → {@link As400OffsetContext.Loader#load(Map)}
- * round-trip, so that connector restarts resume the snapshot instead of dropping its state.
+ * round-trip, so that connector restarts resume the snapshot instead of dropping its state,
+ * and that {@code updateSourceInfo} and {@code event} stamp {@code source.sequence} from the
+ * correct source.
  */
 public class As400OffsetContextTest {
 
     private static final String CORRELATION_ID = "test-correlation-id";
     private static final String DATA_COLLECTION = "MYDB.MYSCHEMA.MYTABLE";
+
+    private static final BigInteger CHECKPOINT = BigInteger.valueOf(100L);
+    private static final BigInteger ENTRY_SEQUENCE = BigInteger.valueOf(101L);
 
     private As400ConnectorConfig newConfig() {
         return new As400ConnectorConfig(Configuration.create()
@@ -40,9 +46,9 @@ public class As400OffsetContextTest {
                 .build());
     }
 
-    private JournalProcessedPosition newPosition() {
+    private JournalProcessedPosition newPosition(BigInteger offset) {
         return new JournalProcessedPosition(
-                BigInteger.valueOf(82),
+                offset,
                 new JournalReceiver("RECV008", "RCV_LIB"),
                 Instant.ofEpochSecond(123_456L),
                 true);
@@ -51,7 +57,7 @@ public class As400OffsetContextTest {
     @Test
     public void inProgressIncrementalSnapshotSurvivesOffsetRoundTrip() {
         final As400ConnectorConfig config = newConfig();
-        final As400OffsetContext original = new As400OffsetContext(config, newPosition());
+        final As400OffsetContext original = new As400OffsetContext(config, newPosition(BigInteger.valueOf(82)));
 
         @SuppressWarnings("unchecked")
         final IncrementalSnapshotContext<TableId> snapshot = (IncrementalSnapshotContext<TableId>) original
@@ -93,7 +99,7 @@ public class As400OffsetContextTest {
     @Test
     public void noIncrementalSnapshotKeysWhenSnapshotNotRunning() {
         final As400ConnectorConfig config = newConfig();
-        final As400OffsetContext original = new As400OffsetContext(config, newPosition());
+        final As400OffsetContext original = new As400OffsetContext(config, newPosition(BigInteger.valueOf(82)));
 
         final Map<String, ?> offset = original.getOffset();
 
@@ -105,5 +111,36 @@ public class As400OffsetContextTest {
 
         final As400OffsetContext reloaded = new As400OffsetContext.Loader(config).load(offset);
         assertThat(reloaded.getIncrementalSnapshotContext().snapshotRunning()).isFalse();
+    }
+
+    @Test
+    public void updateSourceInfoStampsGivenSequenceNotCheckpoint() {
+        final As400ConnectorConfig config = newConfig();
+        final As400OffsetContext offsetContext = new As400OffsetContext(config, newPosition(CHECKPOINT));
+
+        offsetContext.updateSourceInfo(ENTRY_SEQUENCE, Instant.ofEpochSecond(200_000L));
+
+        final Struct source = offsetContext.getSourceInfo();
+        assertThat(source.getString("sequence"))
+                .as("source.sequence must be the dispatched entry's own sequence")
+                .isEqualTo(ENTRY_SEQUENCE.toString());
+        assertThat(source.getString("sequence"))
+                .as("source.sequence must not echo the lagging checkpoint (position.getOffset())")
+                .isNotEqualTo(CHECKPOINT.toString());
+        assertThat(offsetContext.getOffset().get(As400OffsetContext.EVENT_SEQUENCE))
+                .as("the committed checkpoint offset is left untouched by updateSourceInfo")
+                .isEqualTo(CHECKPOINT.toString());
+    }
+
+    @Test
+    public void eventStampsCheckpointSequenceForSnapshotPath() {
+        final As400ConnectorConfig config = newConfig();
+        final As400OffsetContext offsetContext = new As400OffsetContext(config, newPosition(CHECKPOINT));
+
+        offsetContext.event(new TableId("MYDB", "MYSCHEMA", "MYTABLE"), Instant.ofEpochSecond(200_000L));
+
+        assertThat(offsetContext.getSourceInfo().getString("sequence"))
+                .as("event() (snapshot) stamps source.sequence from the processed offset by design")
+                .isEqualTo(CHECKPOINT.toString());
     }
 }
