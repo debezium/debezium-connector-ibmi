@@ -137,11 +137,13 @@ public class As400OffsetContext extends CommonOffsetContext<SourceInfo> {
         return sourceInfo.schema();
     }
 
-    public void updateSourceInfo(Instant timestamp) {
+    // mirrors event() but stamps the emitted entry's own sequence, not the lagging position
+    // (event() keeps position: snapshot rows have no sequence of their own). Keep the two in sync.
+    public void updateSourceInfo(BigInteger sequence, Instant timestamp) {
         sourceInfo.setSourceTime(timestamp);
         sourceInfo.setReceiver(position.getReceiver().name());
         sourceInfo.setReceiverLib(position.getReceiver().library());
-        sourceInfo.setSequence(position.getOffset().toString());
+        sourceInfo.setSequence(sequence.toString());
     }
 
     @Override
