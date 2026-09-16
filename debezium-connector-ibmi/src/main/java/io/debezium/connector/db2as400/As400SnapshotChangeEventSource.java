@@ -151,7 +151,7 @@ public class As400SnapshotChangeEventSource
 
             jdbcConnection.readSchema(snapshotContext.tables, // use snapshotContext.capturedSchemaTables?
                     jdbcConnection.getRealDatabaseName(), schema,
-                    connectorConfig.getTableFilters().eligibleDataCollectionFilter(), null, false);
+                    connectorConfig.getTableFilters().eligibleDataCollectionFilter(), connectorConfig.getColumnFilter(), false);
 
             try {
                 jdbcConnection.getAllSystemNames(schema);
