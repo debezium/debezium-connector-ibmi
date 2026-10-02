@@ -182,6 +182,8 @@ public class JournalInfoRetrieval {
         final int rcvLen = 32768;
         final String filename = padRight(table.toUpperCase(), 10) + padRight(schema.toUpperCase(), 10);
 
+        log.info("Retrieving journal info for table: {}, schema: {}", table, schema);
+
         final ProgramParameter[] parameters = new ProgramParameter[]{
                 new ProgramParameter(ProgramParameter.PASS_BY_REFERENCE, rcvLen), // 1
                                                                                   // Receiver
