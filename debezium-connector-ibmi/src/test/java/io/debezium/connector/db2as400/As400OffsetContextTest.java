@@ -19,6 +19,7 @@ import io.debezium.config.CommonConnectorConfig;
 import io.debezium.config.Configuration;
 import io.debezium.ibmi.db2.journal.retrieve.JournalProcessedPosition;
 import io.debezium.ibmi.db2.journal.retrieve.JournalReceiver;
+import io.debezium.ibmi.db2.journal.retrieve.rjne0200.EntryHeader;
 import io.debezium.pipeline.source.snapshot.incremental.AbstractIncrementalSnapshotContext;
 import io.debezium.pipeline.source.snapshot.incremental.DataCollection;
 import io.debezium.pipeline.source.snapshot.incremental.IncrementalSnapshotContext;
@@ -118,7 +119,10 @@ public class As400OffsetContextTest {
         final As400ConnectorConfig config = newConfig();
         final As400OffsetContext offsetContext = new As400OffsetContext(config, newPosition(CHECKPOINT));
 
-        offsetContext.updateSourceInfo(ENTRY_SEQUENCE, Instant.ofEpochSecond(200_000L));
+        // entry without its own receiver (the common case): sequence comes from the entry, receiver falls back to position
+        final EntryHeader entryHeader = new EntryHeader(-1, -1, -1L, ENTRY_SEQUENCE, BigInteger.TWO,
+                Instant.ofEpochSecond(200_000L), 'R', "UP", "OBJECT", BigInteger.TEN, -1, -1, "", "");
+        offsetContext.updateSourceInfo(entryHeader);
 
         final Struct source = offsetContext.getSourceInfo();
         assertThat(source.getString("sequence"))
@@ -130,6 +134,25 @@ public class As400OffsetContextTest {
         assertThat(offsetContext.getOffset().get(As400OffsetContext.EVENT_SEQUENCE))
                 .as("the committed checkpoint offset is left untouched by updateSourceInfo")
                 .isEqualTo(CHECKPOINT.toString());
+    }
+
+    @Test
+    public void updateSourceInfoStampsReceiverFromEntryAcrossRollover() {
+        final As400ConnectorConfig config = newConfig();
+        final As400OffsetContext offsetContext = new As400OffsetContext(config, newPosition(CHECKPOINT));
+
+        // the position (RECV008/RCV_LIB) has not yet been advanced past the rollover boundary,
+        // but the dispatched entry already names the new receiver
+        final EntryHeader entryHeader = new EntryHeader(-1, -1, -1L, BigInteger.valueOf(101L), BigInteger.TWO,
+                Instant.ofEpochSecond(200_000L), 'R', "UP", "OBJECT", BigInteger.TEN, -1, -1, "RECV009", "RCV_LIB");
+        offsetContext.updateSourceInfo(entryHeader);
+
+        final Struct source = offsetContext.getSourceInfo();
+        assertThat(source.getString("sequence")).isEqualTo("101");
+        assertThat(source.getString("receiver"))
+                .as("receiver must follow the entry across a rollover, not the lagging position")
+                .isEqualTo("RECV009");
+        assertThat(source.getString("receiver_library")).isEqualTo("RCV_LIB");
     }
 
     @Test
