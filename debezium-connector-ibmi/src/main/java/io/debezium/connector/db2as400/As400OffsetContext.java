@@ -20,6 +20,7 @@ import io.debezium.config.Field;
 import io.debezium.connector.SnapshotRecord;
 import io.debezium.ibmi.db2.journal.retrieve.JournalProcessedPosition;
 import io.debezium.ibmi.db2.journal.retrieve.JournalReceiver;
+import io.debezium.ibmi.db2.journal.retrieve.rjne0200.EntryHeader;
 import io.debezium.pipeline.CommonOffsetContext;
 import io.debezium.pipeline.source.snapshot.incremental.IncrementalSnapshotContext;
 import io.debezium.pipeline.source.snapshot.incremental.SignalBasedIncrementalSnapshotContext;
@@ -137,12 +138,26 @@ public class As400OffsetContext extends CommonOffsetContext<SourceInfo> {
         return sourceInfo.schema();
     }
 
-    // mirrors event() but stamps the emitted entry's own sequence, not the lagging position
-    // (event() keeps position: snapshot rows have no sequence of their own). Keep the two in sync.
-    public void updateSourceInfo(BigInteger sequence, Instant timestamp) {
+    /**
+     * Stamps the source info block from the journal entry being dispatched. The read position
+     * lags by one scanned entry at dispatch time, so the entry itself is the only correct source
+     * for {@code source.sequence} and, across a receiver rollover, for the receiver name and
+     * library. Entries that do not name a receiver, which is the common case, fall back to the
+     * position's receiver.
+     */
+    public void updateSourceInfo(EntryHeader entryHeader) {
+        if (entryHeader.hasReceiver()) {
+            updateSourceInfo(entryHeader.getSequenceNumber(), entryHeader.getReceiver(), entryHeader.getReceiverLibrary(), entryHeader.getTime());
+        }
+        else {
+            updateSourceInfo(entryHeader.getSequenceNumber(), position.getReceiver().name(), position.getReceiver().library(), entryHeader.getTime());
+        }
+    }
+
+    private void updateSourceInfo(BigInteger sequence, String receiver, String receiverLibrary, Instant timestamp) {
         sourceInfo.setSourceTime(timestamp);
-        sourceInfo.setReceiver(position.getReceiver().name());
-        sourceInfo.setReceiverLib(position.getReceiver().library());
+        sourceInfo.setReceiver(receiver);
+        sourceInfo.setReceiverLib(receiverLibrary);
         sourceInfo.setSequence(sequence.toString());
     }
 
@@ -153,10 +168,9 @@ public class As400OffsetContext extends CommonOffsetContext<SourceInfo> {
 
     @Override
     public void event(DataCollectionId collectionId, Instant timestamp) {
-        sourceInfo.setSourceTime(timestamp);
-        sourceInfo.setReceiver(position.getReceiver().name());
-        sourceInfo.setReceiverLib(position.getReceiver().library());
-        sourceInfo.setSequence(position.getOffset().toString());
+        // snapshot rows are read via SELECT and have no journal entry of their own,
+        // so the processed position is the correct source here
+        updateSourceInfo(position.getOffset(), position.getReceiver().name(), position.getReceiver().library(), timestamp);
         // sourceInfo.tableEvent((TableId) collectionId);
     }
 
