@@ -144,7 +144,6 @@ public class JournalInfoRetrieval {
             log.error("unable to retrieve journal cache wait time defaulting to 30 seconds", e);
             return 30000L;
         }
-
     }
 
     public DetailedJournalReceiver getCurrentDetailedJournalReceiver(AS400 as400, JournalInfo journalLib)
@@ -164,7 +163,13 @@ public class JournalInfoRetrieval {
                     throw new IllegalArgumentException(
                             String.format("schema %s does not match for filter: %s", schema, f));
                 }
-                final JournalInfo ji = getJournal(as400, f.schema(), f.table());
+                final JournalInfo ji;
+                try {
+                    ji = getJournal(as400, f.schema(), f.table());
+                }
+                catch (final Exception e) {
+                    throw new IllegalStateException("Unable to retrieve journal details for %s.%s".formatted(f.schema(), f.table()), e);
+                }
                 jis.add(ji);
             }
             if (jis.size() > 1) {
@@ -181,8 +186,6 @@ public class JournalInfoRetrieval {
     public JournalInfo getJournal(AS400 as400, String schema, String table) throws Exception {
         final int rcvLen = 32768;
         final String filename = padRight(table.toUpperCase(), 10) + padRight(schema.toUpperCase(), 10);
-
-        log.info("Retrieving journal info for table: {}, schema: {}", table, schema);
 
         final ProgramParameter[] parameters = new ProgramParameter[]{
                 new ProgramParameter(ProgramParameter.PASS_BY_REFERENCE, rcvLen), // 1
