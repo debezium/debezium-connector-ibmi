@@ -8,20 +8,26 @@ package io.debezium.connector.db2as400.conversion;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.sql.Date;
+import java.sql.Time;
+import java.sql.Timestamp;
 import java.sql.Types;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
-import java.time.ZoneId;
+import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
-import java.time.format.DateTimeFormatterBuilder;
-import java.time.temporal.ChronoField;
+import java.time.format.DateTimeParseException;
 import java.util.Optional;
 import java.util.Set;
 
+import org.apache.kafka.connect.data.Field;
+import org.apache.kafka.connect.data.Schema;
+import org.apache.kafka.connect.data.SchemaBuilder;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import io.debezium.annotation.Immutable;
+import io.debezium.jdbc.JdbcValueConverters;
 import io.debezium.relational.Column;
 import io.debezium.relational.DefaultValueConverter;
 import io.debezium.util.Collect;
@@ -34,13 +40,16 @@ import io.debezium.util.Collect;
 public class As400DefaultValueConverter implements DefaultValueConverter {
 
     private static final Logger log = LoggerFactory.getLogger(As400DefaultValueConverter.class);
+    private final JdbcValueConverters valueConverters;
 
     @Immutable
     private static final Set<Integer> TRIM_DATA_TYPES = Collect.unmodifiableSet(Types.TINYINT, Types.INTEGER,
             Types.DATE, Types.TIMESTAMP, Types.TIMESTAMP_WITH_TIMEZONE, Types.TIME, Types.BOOLEAN, Types.BIT,
-            Types.NUMERIC, Types.DECIMAL, Types.FLOAT, Types.DOUBLE, Types.REAL);
+            Types.NUMERIC, Types.DECIMAL, Types.FLOAT, Types.DOUBLE, Types.REAL, Types.BINARY, Types.VARBINARY,
+            Types.LONGVARBINARY);
 
-    public As400DefaultValueConverter() {
+    public As400DefaultValueConverter(JdbcValueConverters valueConverters) {
+        this.valueConverters = valueConverters;
     }
 
     /**
@@ -55,11 +64,18 @@ public class As400DefaultValueConverter implements DefaultValueConverter {
     @Override
     public Optional<Object> parseDefaultValue(Column column, String defaultValueExpression) {
         try {
-            Object logicalDefaultValue = convert(column, defaultValueExpression);
-            if (logicalDefaultValue == null) {
+            Object parsed = convert(column, defaultValueExpression);
+            if (parsed == null) {
                 return Optional.empty();
             }
-            return Optional.of(logicalDefaultValue);
+            // delegate so the default always matches the schema of the field value
+            SchemaBuilder schemaBuilder = valueConverters.schemaBuilder(column);
+            if (schemaBuilder == null) {
+                return Optional.of(parsed);
+            }
+            Schema schema = schemaBuilder.build();
+            Field field = new Field(column.name(), -1, schema);
+            return Optional.ofNullable(valueConverters.converter(column, field).convert(parsed));
         }
         catch (Exception e) {
             log.error("default conversion failed, please report", e);
@@ -68,8 +84,8 @@ public class As400DefaultValueConverter implements DefaultValueConverter {
     }
 
     /**
-     * Converts a default value from the expected format to a logical object
-     * acceptable by the main JDBC converter.
+     * Parses a default value into the Java type the JDBC driver returns for the
+     * column (e.g. {@link Timestamp}), which the value converters accept as input.
      *
      * @param column column definition
      * @param value  string formatted default value
@@ -77,7 +93,7 @@ public class As400DefaultValueConverter implements DefaultValueConverter {
      */
     public Object convert(Column column, String value) {
         if (value == null || "NULL".equals(value)) {
-            return value;
+            return null;
         }
 
         // trim non varchar data types before converting
@@ -94,49 +110,118 @@ public class As400DefaultValueConverter implements DefaultValueConverter {
         switch (column.jdbcType()) {
             case Types.DATE: {
                 if ("CURRENT_DATE".equals(value)) {
-                    return null; // can't represent this as a timestamp type
+                    return Date.valueOf(LocalDate.EPOCH); // default debezium connector behaviour
                 }
                 DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd");
-                return (int) (LocalDate.parse(stripQuotes(value), formatter).toEpochDay());
+                try {
+                    return Date.valueOf(LocalDate.parse(stripQuotes(value), formatter));
+                }
+                catch (DateTimeParseException e) {
+                    log.debug("Failed to parse date default value: {}", value);
+                    return null;
+                }
             }
             case Types.TIMESTAMP: {
                 if ("CURRENT_TIMESTAMP".equals(value)) {
-                    return null; // can't represent this as a timestamp type
+                    return Timestamp.valueOf(LocalDateTime.of(LocalDate.EPOCH, LocalTime.MIDNIGHT));
                 }
                 DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd-HH.mm.ss.SSSSSS");
-                return toEpoc(LocalDateTime.parse(stripQuotes(value), formatter));
-            }
-            case Types.TIMESTAMP_WITH_TIMEZONE:
-                throw new UnsupportedOperationException("not yet implemented to default to timestamp and timezone, value was: " + value);
-            case Types.TIME:
-                if ("CURRENT_TIME".equals(value)) {
+                try {
+                    return Timestamp.valueOf(LocalDateTime.parse(stripQuotes(value), formatter));
+                }
+                catch (DateTimeParseException e) {
+                    log.debug("Failed to parse timestamp default value: {}", value);
                     return null;
                 }
-                throw new UnsupportedOperationException("not yet implemented to default to duration, value was: " + value);
+            }
+            case Types.TIMESTAMP_WITH_TIMEZONE: {
+                throw new UnsupportedOperationException(
+                        "not yet implemented no ibmi support at time of writing see https://www.ibm.com/docs/en/i/7.6.0?topic=statements-create-table, value was: "
+                                + value);
+            }
+            case Types.TIME:
+                if ("CURRENT_TIME".equals(value)) {
+                    return Time.valueOf(LocalTime.MIDNIGHT);
+                }
+                try {
+                    DateTimeFormatter formatter = DateTimeFormatter.ofPattern("HH.mm.ss");
+                    return Time.valueOf(LocalTime.parse(stripQuotes(value), formatter));
+                }
+                catch (DateTimeParseException e) {
+                    log.debug("Failed to parse time default value: {}", value);
+                    return null;
+                }
             case Types.BOOLEAN:
                 return convertToBoolean(value);
             case Types.BIT:
                 return convertToBits(column, value);
+            case Types.BINARY:
+            case Types.VARBINARY:
+            case Types.LONGVARBINARY:
+                return convertToBinary(value);
 
             case Types.BIGINT:
+                try {
+                    return Long.parseLong(value);
+                }
+                catch (NumberFormatException e) {
+                    log.debug("Failed to parse bigint default value: {}", value);
+                    return null;
+                }
             case Types.NUMERIC:
             case Types.DECIMAL:
-                return convertToDecimal(column, value);
+                try {
+                    return convertToDecimal(column, value);
+                }
+                catch (NumberFormatException e) {
+                    log.debug("Failed to parse decimal default value: {}", value);
+                    return null;
+                }
 
             case Types.FLOAT:
-            case Types.DOUBLE:
             case Types.REAL:
-                return convertToDouble(value);
+                try {
+                    return Float.valueOf(value);
+                }
+                catch (NumberFormatException e) {
+                    log.debug("Failed to parse float default value: {}", value);
+                    return null;
+                }
+            case Types.DOUBLE:
+                try {
+                    return convertToDouble(value);
+                }
+                catch (NumberFormatException e) {
+                    log.debug("Failed to parse double default value: {}", value);
+                    return null;
+                }
             case Types.VARCHAR:
             case Types.CHAR:
             case Types.NVARCHAR:
             case Types.NCHAR:
+                // no quotes implies this is a special register
+                if (!value.contains("'")) {
+                    return null;
+                }
                 return stripQuotes(value);
             case Types.INTEGER:
+                try {
+                    return Integer.parseInt(value);
+                }
+                catch (NumberFormatException e) {
+                    log.debug("Failed to parse integer default value: {}", value);
+                    return null;
+                }
             case Types.SMALLINT:
-                return Integer.parseInt(value);
+                try {
+                    return Short.parseShort(value);
+                }
+                catch (NumberFormatException e) {
+                    log.debug("Failed to parse integer default value: {}", value);
+                    return null;
+                }
         }
-        return value;
+        return null;
     }
 
     private String stripQuotes(String value) {
@@ -144,11 +229,6 @@ public class As400DefaultValueConverter implements DefaultValueConverter {
             return value.substring(1, value.length() - 1);
         }
         return value;
-    }
-
-    private Long toEpoc(LocalDateTime date) {
-        ZoneId zoneId = ZoneId.systemDefault();
-        return date.atZone(zoneId).toEpochSecond();
     }
 
     /**
@@ -172,8 +252,10 @@ public class As400DefaultValueConverter implements DefaultValueConverter {
      * @return the converted value;
      */
     private Object convertToDecimal(Column column, String value) {
-        return column.scale().isPresent() ? new BigDecimal(value).setScale(column.scale().get(), RoundingMode.HALF_UP)
+        BigDecimal decimal = column.scale().isPresent()
+                ? new BigDecimal(value).setScale(column.scale().get(), RoundingMode.HALF_UP)
                 : new BigDecimal(value);
+        return decimal;
     }
 
     /**
@@ -213,6 +295,32 @@ public class As400DefaultValueConverter implements DefaultValueConverter {
         return bytes;
     }
 
+    private Object convertToBinary(String value) {
+        String hex = stripBinaryLiteralPrefix(value);
+        if (hex == null || hex.length() % 2 != 0) {
+            return null;
+        }
+
+        byte[] bytes = new byte[hex.length() / 2];
+        try {
+            for (int i = 0; i < bytes.length; i++) {
+                bytes[i] = (byte) Integer.parseInt(hex.substring(i * 2, i * 2 + 2), 16);
+            }
+            return bytes;
+        }
+        catch (NumberFormatException e) {
+            log.debug("Failed to parse binary default value: {}", value);
+            return null;
+        }
+    }
+
+    private String stripBinaryLiteralPrefix(String value) {
+        if ((value.startsWith("BX'") || value.startsWith("X'")) && value.endsWith("'")) {
+            return value.substring(value.indexOf('\'') + 1, value.length() - 1);
+        }
+        return null;
+    }
+
     /**
      * Converts a string object for an expected JDBC type of {@link Types#BOOLEAN}.
      *
@@ -228,17 +336,6 @@ public class As400DefaultValueConverter implements DefaultValueConverter {
         catch (NumberFormatException ignore) {
             return Boolean.parseBoolean(value);
         }
-    }
-
-    private DateTimeFormatter timestampFormat(int length) {
-        final DateTimeFormatterBuilder dtf = new DateTimeFormatterBuilder().appendPattern("yyyy-MM-dd").optionalStart()
-                .appendLiteral(" ").append(DateTimeFormatter.ISO_LOCAL_TIME).optionalEnd()
-                .parseDefaulting(ChronoField.HOUR_OF_DAY, 0).parseDefaulting(ChronoField.MINUTE_OF_HOUR, 0)
-                .parseDefaulting(ChronoField.SECOND_OF_MINUTE, 0);
-        if (length > 0) {
-            dtf.appendFraction(ChronoField.MICRO_OF_SECOND, 0, length, true);
-        }
-        return dtf.toFormatter();
     }
 
 }

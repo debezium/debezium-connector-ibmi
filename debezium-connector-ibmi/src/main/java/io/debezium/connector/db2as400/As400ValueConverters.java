@@ -12,7 +12,9 @@ import org.apache.kafka.connect.data.Field;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import io.debezium.connector.db2as400.As400ConnectorConfig.CharSequenceTrimMode;
 import io.debezium.jdbc.JdbcValueConverters;
+import io.debezium.jdbc.TemporalPrecisionMode;
 import io.debezium.relational.Column;
 
 /**
@@ -21,20 +23,22 @@ import io.debezium.relational.Column;
  */
 public class As400ValueConverters extends JdbcValueConverters {
     private static final Logger log = LoggerFactory.getLogger(As400ValueConverters.class);
-    private final As400ConnectorConfig config;
+    private final CharSequenceTrimMode trimMode;
 
-    public As400ValueConverters(DecimalMode decimalMode, As400ConnectorConfig config) {
-        super(decimalMode, config.getTemporalPrecisionMode(), ZoneOffset.UTC, null, null, null);
-        this.config = config;
+    public As400ValueConverters(DecimalMode decimalMode, TemporalPrecisionMode temporalPrecisionMode, CharSequenceTrimMode trimMode) {
+        super(decimalMode, temporalPrecisionMode, ZoneOffset.UTC, null, null, null);
+        this.trimMode = trimMode;
     }
 
     /**
-     * Time precision in AS400 DB2 is defined in scale. When not explicitly
-     * declared, scale is 6 (microseconds).
+     * Db2 for i TIME/TIMESTAMP precision is expressed via the column's scale (fractional seconds digits), not its
+     * total length; the base class default of column.length() picks up the full display width (e.g. 26 for
+     * TIMESTAMP(26, 6)) and incorrectly routes values into nanosecond conversion, which overflows for dates outside
+     * roughly 1677-2262.
      */
     @Override
     protected int getTimePrecision(Column column) {
-        return column.scale().orElse(-1);
+        return column.scale().orElse(column.length());
     }
 
     @Override
@@ -50,7 +54,7 @@ public class As400ValueConverters extends JdbcValueConverters {
                 String fname = (fieldDefn == null) ? "" : String.format(" fieldDefn name %s", fieldDefn.name());
                 log.warn("removed binary data from{}{}", cname, fname);
             }
-            return super.convertString(column, fieldDefn, config.getCharSequenceTrimMode().strip(fixed.value));
+            return super.convertString(column, fieldDefn, trimMode.strip(fixed.value));
         }
         return super.convertString(column, fieldDefn, data);
     }
