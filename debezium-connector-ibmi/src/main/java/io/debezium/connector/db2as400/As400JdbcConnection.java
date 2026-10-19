@@ -372,11 +372,11 @@ public class As400JdbcConnection extends JdbcConnection implements Connect<Conne
 
             column.nativeType(resolveNativeType(column.typeName()));
             column.jdbcType(resolveJdbcType(columnMetadata.getInt(5), column.nativeType()));
+            column.defaultValueExpression(columnMetadata.getString(13));
 
             // Allow implementation to make column changes if required before being added to table
             column = overrideColumn(column);
 
-            // don't fetch defaults or we will send the default value when not set even though the database value is not set
             return Optional.of(column);
         }
 

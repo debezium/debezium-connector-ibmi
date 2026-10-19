@@ -5,9 +5,12 @@
  */
 package io.debezium.connector.db2as400;
 
-import org.assertj.core.api.Assertions;
+import static org.assertj.core.api.Assertions.assertThat;
+
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
+@Tag("UnitTests")
 public class WatchDogTest {
     private WatchDog createTestSubject() {
         return new WatchDog(Thread.currentThread(), 10);
@@ -24,7 +27,7 @@ public class WatchDogTest {
         catch (final Exception e) {
             thrown = e;
         }
-        Assertions.assertThat(thrown).isInstanceOf(InterruptedException.class);
+        assertThat(thrown).isInstanceOf(InterruptedException.class);
         testSubject.stop();
     }
 }
