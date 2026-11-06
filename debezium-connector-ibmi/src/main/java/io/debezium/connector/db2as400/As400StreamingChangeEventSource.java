@@ -23,6 +23,8 @@ import org.slf4j.LoggerFactory;
 import io.debezium.DebeziumException;
 import io.debezium.connector.db2as400.As400RpcConnection.BlockingReceiverConsumer;
 import io.debezium.data.Envelope.Operation;
+import io.debezium.ibmi.db2.journal.retrieve.FileChangeEntryDecoder;
+import io.debezium.ibmi.db2.journal.retrieve.FileChangeEntryDecoder.FileChange;
 import io.debezium.ibmi.db2.journal.retrieve.JournalEntryType;
 import io.debezium.ibmi.db2.journal.retrieve.exception.FatalException;
 import io.debezium.ibmi.db2.journal.retrieve.exception.InvalidPositionException;
@@ -51,6 +53,7 @@ public class As400StreamingChangeEventSource implements StreamingChangeEventSour
     private static final Logger log = LoggerFactory.getLogger(As400StreamingChangeEventSource.class);
 
     private final HashMap<String, Object[]> beforeMap = new HashMap<>();
+    private final FileChangeEntryDecoder fileChangeDecoder = new FileChangeEntryDecoder();
     private static Set<Character> alwaysProcess = Stream.of('J', 'C').collect(Collectors.toCollection(HashSet::new));
 
     /**
@@ -237,9 +240,19 @@ public class As400StreamingChangeEventSource implements StreamingChangeEventSour
                 if (journalEntryType == JournalEntryType.MEMBER_CLEARED && !captureTruncates) {
                     return;
                 }
-                final String file = eheader.getFile();
-                final String library = eheader.getLibrary();
-                if (journalEntryType == JournalEntryType.MEMBER_CLEARED && (file.isEmpty() || library.isEmpty())) {
+                FileChange fileChange = null;
+                if (journalEntryType == JournalEntryType.FILE_CHANGE && captureTruncates) {
+                    try {
+                        fileChange = r.decode(fileChangeDecoder);
+                    }
+                    catch (Exception e) {
+                        throw new TruncateException("Cannot classify D/CG journal entry " + eheader.getSequenceNumber(), e);
+                    }
+                }
+                final String file = fileChange == null ? eheader.getFile() : fileChange.file();
+                final String library = fileChange == null ? eheader.getLibrary() : fileChange.library();
+                if ((journalEntryType == JournalEntryType.MEMBER_CLEARED || (fileChange != null && fileChange.clearsRows()))
+                        && (file.isEmpty() || library.isEmpty())) {
                     throw new TruncateException("Missing table identity for clear at journal entry " + eheader.getSequenceNumber());
                 }
                 String longName = file;
@@ -290,6 +303,10 @@ public class As400StreamingChangeEventSource implements StreamingChangeEventSour
                     }
                         break;
                     case FILE_CHANGE, FILE_CREATED: {
+                        if (fileChange != null && fileChange.clearsRows()) {
+                            dispatchTruncate(partition, offsetContext, tableId, eheader, file, library, fileChange.member());
+                            break;
+                        }
                         // table has changed - reload schema
                         schema.clearCache(tableId.table(), tableId.schema());
                         schema.getRecordFormat(tableId.table(), tableId.schema());

@@ -23,15 +23,15 @@ import io.debezium.jdbc.JdbcConnection.StatementPreparer;
 
 class As400MemberScopeTest {
     @Test
-    void acceptsOnlyMatchingSingleMember() throws Exception {
+    void acceptsOnlyMatchingSingleMemberOrWholeSingleMemberTable() throws Exception {
         assertThat(check("MEMBER", true, false)).isTrue();
+        assertThat(check("", true, false)).isTrue();
     }
 
     @Test
     void rejectsMissingMismatchedOrMultipleMembers() throws Exception {
         assertThat(check("MEMBER", false, false)).isFalse();
         assertThat(check("OTHER", true, false)).isFalse();
-        assertThat(check("", true, false)).isFalse();
         assertThat(check("MEMBER", true, true)).isFalse();
         assertThat(check("", true, true)).isFalse();
     }

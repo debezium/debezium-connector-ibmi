@@ -16,10 +16,13 @@ import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import java.io.IOException;
 import java.lang.reflect.Field;
+import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -34,10 +37,14 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.ArgumentCaptor;
 
+import com.ibm.as400.access.AS400Text;
+import com.ibm.as400.access.AS400ZonedDecimal;
+
 import io.debezium.config.Configuration;
 import io.debezium.connector.db2as400.As400StreamingChangeEventSource.TruncateException;
 import io.debezium.data.Envelope;
 import io.debezium.data.Envelope.Operation;
+import io.debezium.ibmi.db2.journal.retrieve.FileChangeEntryDecoder;
 import io.debezium.ibmi.db2.journal.retrieve.JdbcFileDecoder;
 import io.debezium.ibmi.db2.journal.retrieve.JournalProcessedPosition;
 import io.debezium.ibmi.db2.journal.retrieve.JournalReceiver;
@@ -106,24 +113,47 @@ class As400TruncateTest {
 
     @Test
     void nativeClearEmitsKeylessTruncateWithJournalMetadata() throws Exception {
-        accept('F', "CR", 42, 0, "TEST");
+        accept('F', "CR", ' ', 42, 0, "TEST");
         assertTruncate();
         verify(journal, never()).decode(any());
     }
 
     @Test
+    void sqlTruncateEmitsTruncateFromObjectLevelData() throws Exception {
+        accept('D', "CG", '8', 42, 0, "TEST");
+        assertTruncate();
+        verify(schema, never()).clearCache(anyString(), anyString());
+    }
+
+    @Test
+    void optimizedDeleteEmitsTruncate() throws Exception {
+        accept('D', "CG", '3', 42, 0, "TEST");
+        assertTruncate();
+    }
+
+    @Test
+    void schemaChangesOnlyRefreshSchema() throws Exception {
+        for (char subtype : "01245679ABCJ?".toCharArray()) {
+            accept('D', "CG", subtype, 42, 0, "TEST");
+        }
+        assertThat(values).isEmpty();
+        verify(schema, times(13)).clearCache("TEST", "LIB");
+        verify(jdbc, never()).isOnlyMember(anyString(), anyString(), anyString());
+    }
+
+    @Test
     void truncatesRemainSkippedByDefault() throws Exception {
         configure(null);
-        accept('F', "CR", 42, 0, "TEST");
+        accept('F', "CR", ' ', 42, 0, "TEST");
+        accept('D', "CG", '8', 43, 0, "TEST");
         assertThat(values).isEmpty();
         verify(journal, never()).decode(any());
         verify(jdbc, never()).isOnlyMember(anyString(), anyString(), anyString());
     }
 
-    @ParameterizedTest
-    @ValueSource(strings = { "t", "none" })
-    void fileChangesKeepExistingSchemaRefreshBehavior(String skipped) throws Exception {
-        configure(skipped);
+    @Test
+    void schemaChangesKeepExistingBehaviorByDefault() throws Exception {
+        configure(null);
         EntryHeader entry = new EntryHeader(0, 0, 240, BigInteger.valueOf(42), BigInteger.valueOf(42),
                 SOURCE_TIME, 'D', "CG", String.format("%-10s%-10s%-10s", "TEST", "LIB", "TEST"),
                 BigInteger.ZERO, 365, 0, "RCV", "LIB");
@@ -135,25 +165,33 @@ class As400TruncateTest {
     }
 
     @Test
+    void sqlTruncatePrecedesReloadInsert() throws Exception {
+        accept('D', "CG", '8', 42, 0, "TEST");
+        accept('R', "PT", ' ', 43, 0, "TEST");
+        assertThat(values).extracting(v -> v.getString("op")).containsExactly("t", "c");
+    }
+
+    @Test
     void metadataFailureIsNotSwallowed() throws Exception {
         when(jdbc.isOnlyMember("LIB", "TEST", "TEST")).thenThrow(new java.sql.SQLException("catalog unavailable"));
-        assertThatThrownBy(() -> accept('F', "CR", 42, 0, "TEST"))
+        assertThatThrownBy(() -> accept('F', "CR", ' ', 42, 0, "TEST"))
                 .isInstanceOf(TruncateException.class).hasMessageContaining("Failed to capture clear");
         assertThat(values).isEmpty();
     }
 
     @Test
     void excludedTablesDoNotEmitTruncates() throws Exception {
-        accept('F', "CR", 42, 0, "OTHER");
+        accept('F', "CR", ' ', 42, 0, "OTHER");
+        accept('D', "CG", '8', 43, 0, "OTHER");
         assertThat(values).isEmpty();
         verify(jdbc, never()).isOnlyMember(anyString(), anyString(), anyString());
     }
 
     @Test
     void preservesInsertClearReloadOrder() throws Exception {
-        accept('R', "PT", 41, 0, "TEST");
-        accept('F', "CR", 42, 0, "TEST");
-        accept('R', "PT", 43, 0, "TEST");
+        accept('R', "PT", ' ', 41, 0, "TEST");
+        accept('F', "CR", ' ', 42, 0, "TEST");
+        accept('R', "PT", ' ', 43, 0, "TEST");
         assertThat(values).extracting(v -> v.getString("op")).containsExactly("c", "t", "c");
         assertThat(values).extracting(v -> v.getStruct("source").getString("sequence")).containsExactly("41", "42", "43");
         assertThat(keys.get(0)).isNotNull();
@@ -163,9 +201,9 @@ class As400TruncateTest {
 
     @Test
     void clearDiscardsCachedBeforeImage() throws Exception {
-        accept('R', "UB", 41, 0, "TEST");
-        accept('F', "CR", 42, 0, "TEST");
-        accept('R', "UP", 43, 0, "TEST");
+        accept('R', "UB", ' ', 41, 0, "TEST");
+        accept('F', "CR", ' ', 42, 0, "TEST");
+        accept('R', "UP", ' ', 43, 0, "TEST");
         assertThat(values).extracting(v -> v.getString("op")).containsExactly("t", "u");
         assertThat(values.get(1).get("before")).isNull();
         assertThat(values.get(1).getStruct("after").getInt32("ID")).isEqualTo(1);
@@ -186,9 +224,10 @@ class As400TruncateTest {
         verify(jdbc, never()).isOnlyMember(anyString(), anyString(), anyString());
     }
 
-    @Test
-    void rejectsTransactionalClearWithoutEmittingOrAdvancingOffset() {
-        assertThatThrownBy(() -> accept('F', "CR", 42, 7, "TEST"))
+    @ParameterizedTest
+    @ValueSource(chars = { '3', '8' })
+    void rejectsTransactionalClearWithoutEmittingOrAdvancingOffset(char subtype) {
+        assertThatThrownBy(() -> accept('D', "CG", subtype, 42, 7, "TEST"))
                 .isInstanceOf(TruncateException.class).hasMessageContaining("commitment control");
         assertThat(values).isEmpty();
         assertThat(offset.getPosition().getOffset()).isEqualTo(BigInteger.ONE);
@@ -197,22 +236,37 @@ class As400TruncateTest {
     @Test
     void rejectsAmbiguousMemberScope() throws Exception {
         when(jdbc.isOnlyMember("LIB", "TEST", "TEST")).thenReturn(false);
-        assertThatThrownBy(() -> accept('F', "CR", 42, 0, "TEST"))
+        assertThatThrownBy(() -> accept('F', "CR", ' ', 42, 0, "TEST"))
                 .isInstanceOf(TruncateException.class).hasMessageContaining("one matching file member");
+        assertThat(values).isEmpty();
+    }
+
+    @Test
+    void propagatesDecodeFailure() throws Exception {
+        EntryHeader entry = entry('D', "CG", 42, 0, "TEST");
+        when(journal.decode(any(FileChangeEntryDecoder.class))).thenThrow(new IOException("short payload"));
+        assertThatThrownBy(() -> source.processJournalEntries(partition, offset).accept(BigInteger.valueOf(42), journal, entry))
+                .isInstanceOf(TruncateException.class).hasMessageContaining("Cannot classify");
         assertThat(values).isEmpty();
     }
 
     @Test
     void dispatchFailureIsNotSwallowed() throws Exception {
         doThrow(new IllegalStateException("queue failed")).when(dispatcher).dispatchDataChangeEvent(any(), any(), any());
-        assertThatThrownBy(() -> accept('F', "CR", 42, 0, "TEST"))
+        assertThatThrownBy(() -> accept('F', "CR", ' ', 42, 0, "TEST"))
                 .isInstanceOf(TruncateException.class).hasMessageContaining("Failed to capture clear");
         assertThat(offset.getPosition().getOffset()).isEqualTo(BigInteger.ONE);
     }
 
-    @Test
-    void falseDispatchStopsStreamingBeforeJournalPositionAdvances() throws Exception {
-        EntryHeader clear = entry('F', "CR", 42, 0, "TEST");
+    @ParameterizedTest
+    @ValueSource(strings = { "F.CR", "D.CG.8", "D.CG.3" })
+    void falseDispatchStopsStreamingBeforeJournalPositionAdvances(String operation) throws Exception {
+        String[] parts = operation.split("\\.");
+        EntryHeader clear = entry(parts[0].charAt(0), parts[1], 42, 0, "TEST");
+        if (parts.length == 3) {
+            when(journal.decode(any(FileChangeEntryDecoder.class)))
+                    .thenReturn(new FileChangeEntryDecoder.FileChange("TEST", "LIB", "TEST", parts[2].charAt(0)));
+        }
         doReturn(false).when(dispatcher).dispatchDataChangeEvent(any(), any(), any());
 
         // Exercise the real RPC consumption loop, including its offset advancement.
@@ -270,13 +324,22 @@ class As400TruncateTest {
         assertThat(offset.getTransactionContext()).isNull();
     }
 
-    private void accept(char code, String type, int sequence, int transaction, String file) throws Exception {
+    private void accept(char code, String type, char subtype, int sequence, int transaction, String file) throws Exception {
         EntryHeader entry = entry(code, type, sequence, transaction, file);
+        if (code == 'D') {
+            byte[] data = new byte[240 + 16 + 109];
+            new AS400ZonedDecimal(5, 0).toBytes(BigDecimal.valueOf(109), data, 240);
+            new AS400Text(30).toBytes(String.format("%-10s%-10s%-10s", file, "LIB", file), data, 256);
+            new AS400Text(1).toBytes(String.valueOf(subtype), data, 256 + 108);
+            when(journal.decode(any(FileChangeEntryDecoder.class)))
+                    .thenAnswer(i -> ((FileChangeEntryDecoder) i.getArgument(0)).decode(entry, data, 0));
+        }
         source.processJournalEntries(partition, offset).accept(BigInteger.valueOf(sequence), journal, entry);
     }
 
     private EntryHeader entry(char code, String type, int sequence, int transaction, String file) {
-        String object = String.format("%-10s%-10s%-10s", file, "LIB", file);
+        // Object-level entries are routed from the ESD, even when the header is blank.
+        String object = code == 'D' ? " ".repeat(30) : String.format("%-10s%-10s%-10s", file, "LIB", file);
         return new EntryHeader(0, 0, 240, BigInteger.valueOf(sequence), BigInteger.valueOf(sequence),
                 SOURCE_TIME, code, type, object, BigInteger.valueOf(transaction), 365, 0, "RCV", "LIB");
     }

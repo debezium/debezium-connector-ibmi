@@ -305,7 +305,7 @@ public class As400JdbcConnection extends JdbcConnection implements Connect<Conne
                         return false;
                     }
                     String onlyMember = rs.getString(1);
-                    return member.equals(onlyMember) && !rs.next();
+                    return (member.isEmpty() || member.equals(onlyMember)) && !rs.next();
                 });
     }
 

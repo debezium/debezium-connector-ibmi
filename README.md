@@ -51,13 +51,16 @@ REPLICATION_FACTOR=3
 ## Table clears and truncate events
 
 The connector can emit a standard Debezium truncate event (`op=t`, null key,
-null `before` and `after`) for an `F/CR` journal entry, such as a physical-file
-member cleared by `CLRPFM`.
+null `before` and `after`) for `F/CR` member clears. This follow-up also classifies
+`D/CG` subtype `8` (SQL truncate) and subtype `3` (optimized bulk DELETE) using
+the object-level entry-specific data. Other D/CG subtypes refresh the schema.
 
-SQL `TRUNCATE TABLE ... IMMEDIATE` can also produce `F/CR`; capture applies only
-when that journal representation is used. `D/CG` entries retain the existing
-schema-refresh behavior. Capturing `D/CG` SQL truncates and optimized bulk deletes
-is outside this implementation's scope.
+[D/CG validation findings](docs/dcg-validation.md) describe the observed commit and
+rollback behavior and the work remaining in debezium/dbz#3027.
+
+D/CG capture remains limited to commit cycle zero and single-member files. The
+presence of a clear subtype does not prove that the operation has committed;
+transaction buffering and rollback handling are outside this follow-up.
 
 Truncate capture is **opt-in**. The inherited `skipped.operations` default is `t`.
 Set `skipped.operations=none`, or a list that does not contain `t`, to enable it.
@@ -67,7 +70,7 @@ single-member files**. It queries `QSYS2.SYSPARTITIONSTAT` before emitting a cle
 and requires one matching member. The connector does not currently buffer
 transactions, so an enabled clear with a nonzero commit-cycle identifier stops
 the connector through its error handler. It also stops for ambiguous member
-scope, missing object identity, or failed truncate dispatch, rather than silently
+scope, malformed D/CG data, missing object identity, or failed truncate dispatch, rather than silently
 acknowledging the clear. Transactional truncates, including rolled-back truncates,
 require transaction buffering and restart-safe replay before they can be supported.
 Auto-commit alone does not guarantee a zero commit-cycle identifier; verify the
