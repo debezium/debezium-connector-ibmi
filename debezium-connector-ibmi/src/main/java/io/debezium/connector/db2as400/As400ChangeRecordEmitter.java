@@ -5,10 +5,13 @@
  */
 package io.debezium.connector.db2as400;
 
+import org.apache.kafka.connect.data.Struct;
+
 import io.debezium.data.Envelope.Operation;
 import io.debezium.pipeline.spi.OffsetContext;
 import io.debezium.relational.RelationalChangeRecordEmitter;
 import io.debezium.relational.RelationalDatabaseConnectorConfig;
+import io.debezium.relational.TableSchema;
 import io.debezium.util.Clock;
 
 public class As400ChangeRecordEmitter extends RelationalChangeRecordEmitter<As400Partition> {
@@ -39,6 +42,12 @@ public class As400ChangeRecordEmitter extends RelationalChangeRecordEmitter<As40
     @Override
     protected Object[] getNewColumnValues() {
         return dataNext;
+    }
+
+    @Override
+    protected void emitTruncateRecord(Receiver<As400Partition> receiver, TableSchema tableSchema) throws InterruptedException {
+        Struct envelope = tableSchema.getEnvelopeSchema().truncate(getOffset().getSourceInfo(), getClock().currentTimeAsInstant());
+        receiver.changeRecord(getPartition(), tableSchema, Operation.TRUNCATE, null, envelope, getOffset(), null);
     }
 
 }

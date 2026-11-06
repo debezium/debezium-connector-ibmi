@@ -20,6 +20,7 @@ public enum JournalEntryType {
     ROLLBACK_DELETE_ROW("R.DR"),
     FILE_CREATED("D.CT"),
     FILE_CHANGE("D.CG"),
+    MEMBER_CLEARED("F.CR"),
     START_COMMIT("C.SC"),
     END_COMMIT("C.CM"),
     OPEN("F.OP"),
