@@ -368,6 +368,9 @@ public class RetrievalCriteria {
         CT("CT", "file created"),
         CG("CG", "file changed"),
 
+        // F journal types member operations
+        CR("CR", "physical file member cleared"),
+
         // C journal type commit control
         SC("SC", "start commit"),
         CM("CM", "end commit");
