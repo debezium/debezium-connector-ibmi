@@ -133,17 +133,21 @@ public class RetrievalCriteria {
     /**
      * Add retrieval criteria 07: journal codes. Input parameter must be one of the
      * below: - *ALL (String). - *CTL (String). - JournalCode[] to hold all the
-     * desired journal codes to retrieve. Currently only '*ALLSLT' is implemented if
-     * JournalCode[] is passed in.
+     * desired journal codes to retrieve, applying file selection to all codes.
      *
      * @param value
      */
     public void withJrnCde(JournalCode[] value) {
+        withJrnCde(value, false);
+    }
+
+    /** Retrieve C controls without file selection while leaving other code filters intact. */
+    public void withJrnCde(JournalCode[] value, boolean transactionControls) {
         JournalCode[] range = (JournalCode[]) value;
         StringBuilder code = new StringBuilder();
         for (int i = 0; i < range.length; i++) {
             code.append(StringHelpers.padRight(range[i].getKey(), 10));
-            code.append(StringHelpers.padRight("*ALLSLT", 10));
+            code.append(StringHelpers.padRight(transactionControls && range[i] == JournalCode.C ? "*IGNFILSLT" : "*ALLSLT", 10));
         }
         _withJrnCde(range.length, code.toString());
     }

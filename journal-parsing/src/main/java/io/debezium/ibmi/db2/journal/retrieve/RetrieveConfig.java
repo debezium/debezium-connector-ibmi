@@ -15,7 +15,13 @@ import io.debezium.ibmi.db2.journal.retrieve.RetrievalCriteria.JournalCode;
 
 public record RetrieveConfig(Connect<AS400, IOException> as400, JournalInfo journalInfo, int journalBufferSize,
         boolean filtering, JournalCode[] filterCodes, List<FileFilter> includeFiles, int maxServerSideEntries,
-        File dumpFolder) {
+        File dumpFolder, boolean transactionControls) {
+
+    public RetrieveConfig(Connect<AS400, IOException> as400, JournalInfo journalInfo, int journalBufferSize,
+                          boolean filtering, JournalCode[] filterCodes, List<FileFilter> includeFiles, int maxServerSideEntries,
+                          File dumpFolder) {
+        this(as400, journalInfo, journalBufferSize, filtering, filterCodes, includeFiles, maxServerSideEntries, dumpFolder, false);
+    }
 
     public static final int DEFAULT_MAX_SERVER_SIDE_ENTRIES = 1000000;
 }
