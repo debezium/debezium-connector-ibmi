@@ -1,0 +1,275 @@
+{
+  "scope": "Fixture-only candidate observations; not native startup/history proof",
+  "tables": [
+    {
+      "library": "DCTG1107",
+      "file": "DC",
+      "member": "DC",
+      "fileJournalId": "0000000000000000001a",
+      "memberJournalId": "00000000000000000004",
+      "fileObservation": {
+        "sequence": "35",
+        "type": "D/CT"
+      },
+      "memberObservation": {
+        "sequence": "37",
+        "type": "F/JM"
+      }
+    },
+    {
+      "library": "DCTG1107",
+      "file": "DC2",
+      "member": "DC2",
+      "fileJournalId": "00000000000000000011",
+      "memberJournalId": "00000000000000000010",
+      "fileObservation": {
+        "sequence": "257",
+        "type": "D/CT"
+      },
+      "memberObservation": {
+        "sequence": "259",
+        "type": "F/JM"
+      }
+    },
+    {
+      "library": "DCTG1107",
+      "file": "DR",
+      "member": "DR",
+      "fileJournalId": "0000000000000000001b",
+      "memberJournalId": "00000000000000000005",
+      "fileObservation": {
+        "sequence": "45",
+        "type": "D/CT"
+      },
+      "memberObservation": {
+        "sequence": "47",
+        "type": "F/JM"
+      }
+    },
+    {
+      "library": "DCTG1107",
+      "file": "DR2",
+      "member": "DR2",
+      "fileJournalId": "00000000000000000013",
+      "memberJournalId": "00000000000000000012",
+      "fileObservation": {
+        "sequence": "267",
+        "type": "D/CT"
+      },
+      "memberObservation": {
+        "sequence": "269",
+        "type": "F/JM"
+      }
+    },
+    {
+      "library": "DCTG1107",
+      "file": "DS",
+      "member": "DS",
+      "fileJournalId": "0000000000000000001c",
+      "memberJournalId": "00000000000000000006",
+      "fileObservation": {
+        "sequence": "55",
+        "type": "D/CT"
+      },
+      "memberObservation": {
+        "sequence": "57",
+        "type": "F/JM"
+      }
+    },
+    {
+      "library": "DCTG1107",
+      "file": "DS2",
+      "member": "DS2",
+      "fileJournalId": "00000000000000000015",
+      "memberJournalId": "00000000000000000014",
+      "fileObservation": {
+        "sequence": "277",
+        "type": "D/CT"
+      },
+      "memberObservation": {
+        "sequence": "279",
+        "type": "F/JM"
+      }
+    },
+    {
+      "library": "DCTG1107",
+      "file": "IA",
+      "member": "IA",
+      "fileJournalId": "0000000000000000001d",
+      "memberJournalId": "00000000000000000007",
+      "fileObservation": {
+        "sequence": "65",
+        "type": "D/CT"
+      },
+      "memberObservation": {
+        "sequence": "67",
+        "type": "F/JM"
+      }
+    },
+    {
+      "library": "DCTG1107",
+      "file": "IA2",
+      "member": "IA2",
+      "fileJournalId": "00000000000000000017",
+      "memberJournalId": "00000000000000000016",
+      "fileObservation": {
+        "sequence": "287",
+        "type": "D/CT"
+      },
+      "memberObservation": {
+        "sequence": "289",
+        "type": "F/JM"
+      }
+    },
+    {
+      "library": "DCTG1107",
+      "file": "IB",
+      "member": "IB",
+      "fileJournalId": "0000000000000000001e",
+      "memberJournalId": "0000000000000000001f",
+      "fileObservation": {
+        "sequence": "75",
+        "type": "D/CT"
+      },
+      "memberObservation": {
+        "sequence": "77",
+        "type": "F/JM"
+      }
+    },
+    {
+      "library": "DCTG1107",
+      "file": "IB2",
+      "member": "IB2",
+      "fileJournalId": "00000000000000000019",
+      "memberJournalId": "00000000000000000018",
+      "fileObservation": {
+        "sequence": "297",
+        "type": "D/CT"
+      },
+      "memberObservation": {
+        "sequence": "299",
+        "type": "F/JM"
+      }
+    },
+    {
+      "library": "DCTG1107",
+      "file": "MARK",
+      "member": "MARK",
+      "fileJournalId": "00000000000000000020",
+      "memberJournalId": "00000000000000000009",
+      "fileObservation": {
+        "sequence": "307",
+        "type": "D/CT"
+      },
+      "memberObservation": {
+        "sequence": "309",
+        "type": "F/JM"
+      }
+    },
+    {
+      "library": "DCTG1107",
+      "file": "TC",
+      "member": "TC",
+      "fileJournalId": "00000000000000000021",
+      "memberJournalId": "00000000000000000001",
+      "fileObservation": {
+        "sequence": "5",
+        "type": "D/CT"
+      },
+      "memberObservation": {
+        "sequence": "7",
+        "type": "F/JM"
+      }
+    },
+    {
+      "library": "DCTG1107",
+      "file": "TC2",
+      "member": "TC2",
+      "fileJournalId": "0000000000000000000b",
+      "memberJournalId": "0000000000000000000a",
+      "fileObservation": {
+        "sequence": "227",
+        "type": "D/CT"
+      },
+      "memberObservation": {
+        "sequence": "229",
+        "type": "F/JM"
+      }
+    },
+    {
+      "library": "DCTG1107",
+      "file": "TI",
+      "member": "TI",
+      "fileJournalId": "00000000000000000022",
+      "memberJournalId": "00000000000000000008",
+      "fileObservation": {
+        "sequence": "85",
+        "type": "D/CT"
+      },
+      "memberObservation": {
+        "sequence": "87",
+        "type": "F/JM"
+      }
+    },
+    {
+      "library": "DCTG1107",
+      "file": "TR",
+      "member": "TR",
+      "fileJournalId": "00000000000000000023",
+      "memberJournalId": "00000000000000000002",
+      "fileObservation": {
+        "sequence": "15",
+        "type": "D/CT"
+      },
+      "memberObservation": {
+        "sequence": "17",
+        "type": "F/JM"
+      }
+    },
+    {
+      "library": "DCTG1107",
+      "file": "TR2",
+      "member": "TR2",
+      "fileJournalId": "0000000000000000000d",
+      "memberJournalId": "0000000000000000000c",
+      "fileObservation": {
+        "sequence": "237",
+        "type": "D/CT"
+      },
+      "memberObservation": {
+        "sequence": "239",
+        "type": "F/JM"
+      }
+    },
+    {
+      "library": "DCTG1107",
+      "file": "TS",
+      "member": "TS",
+      "fileJournalId": "00000000000000000024",
+      "memberJournalId": "00000000000000000003",
+      "fileObservation": {
+        "sequence": "25",
+        "type": "D/CT"
+      },
+      "memberObservation": {
+        "sequence": "27",
+        "type": "F/JM"
+      }
+    },
+    {
+      "library": "DCTG1107",
+      "file": "TS2",
+      "member": "TS2",
+      "fileJournalId": "0000000000000000000f",
+      "memberJournalId": "0000000000000000000e",
+      "fileObservation": {
+        "sequence": "247",
+        "type": "D/CT"
+      },
+      "memberObservation": {
+        "sequence": "249",
+        "type": "F/JM"
+      }
+    }
+  ]
+}
