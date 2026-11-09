@@ -10,6 +10,7 @@ import java.lang.reflect.Method;
 import java.math.BigInteger;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.HexFormat;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -30,6 +31,7 @@ import com.ibm.as400.access.TimestampFieldDescription;
 import io.debezium.ibmi.db2.journal.retrieve.XaTransactionDecoder;
 
 public class EntryHeaderDecoder {
+    private static final int HEADER_LENGTH = 236;
     private final AS400Structure structure;
     private final XaTransactionDecoder txDecoder = new XaTransactionDecoder();
     private final ReceiverNameDecoder nameDecoder = new ReceiverNameDecoder();
@@ -85,7 +87,10 @@ public class EntryHeaderDecoder {
                 new CharacterFieldDescription(new AS400Text(8), "29 System name"),
                 new CharacterFieldDescription(new AS400Text(1), "30 Indicator flag"),
                 new CharacterFieldDescription(new AS400Text(1), "31 Object name identifier"),
-                new BinaryFieldDescription(new AS400Bin1(), "32 bit flags")
+                new BinaryFieldDescription(new AS400Bin1(), "32 bit flags"),
+                new CharacterFieldDescription(new AS400Text(10), "33 object type"),
+                new CharacterFieldDescription(new AS400Text(3), "34 reserved"),
+                new BinaryFieldDescription(new AS400UnsignedBin4(), "35 nested commit level")
         };
         for (int i = 0; i < fds.length; i++) {
             dataTypes.add(fds[i].getDataType());
@@ -94,6 +99,9 @@ public class EntryHeaderDecoder {
     }
 
     public EntryHeader decode(byte[] data, int offset) {
+        if (offset < 0 || (long) offset + HEADER_LENGTH > data.length) {
+            throw new IllegalArgumentException("Incomplete RJNE0200 entry header");
+        }
         Object[] os = (Object[]) structure.toObject(data, offset);
         Long nextEntryOffset = (Long) os[0];
         Long nullEntryOffset = (Long) os[1];
@@ -106,6 +114,14 @@ public class EntryHeaderDecoder {
         String objectName = (String) os[25];
         BigInteger commitCycle = (BigInteger) os[11];
         Long pointerHandle = (Long) os[12];
+        long endOffset = nextEntryOffset == 0 ? (long) data.length - offset : nextEntryOffset;
+        if (endOffset < HEADER_LENGTH || (long) offset + endOffset > data.length || nullEntryOffset > Integer.MAX_VALUE) {
+            throw new IllegalArgumentException("Invalid RJNE0200 entry boundary");
+        }
+        validateDisplacement(entrySpecificDataOffset, endOffset, 16);
+        validateDisplacement((Long) os[3], endOffset, 1);
+        validateDisplacement((Long) os[4], endOffset, 39);
+        validateDisplacement((Long) os[5], endOffset, 32);
         int receiverOffset = ((Long) os[5]).intValue();
         String[] receiver = EMPTY;
         if (receiverOffset > 0) {
@@ -128,16 +144,23 @@ public class EntryHeaderDecoder {
         // log.debug("Minimised flags: {}", ((flags&8) != 0));
         // log.debug("File type flags: {}", ((flags&4) != 0));
 
-        int endOffset = (int) ((nextEntryOffset == 0) ? data.length - offset : nextEntryOffset);
-        if (nextEntryOffset > Integer.MAX_VALUE || nullEntryOffset > Integer.MAX_VALUE) {
-            throw new RuntimeException(
-                    "Offsets too big for data, these are used as offsets into the buffer the data is in, they should never be this big nextEntryOffset " + nextEntryOffset
-                            + ", nullEntryOffset " + nullEntryOffset);
-        }
         Instant time = (timestamp == null) ? Instant.ofEpochSecond(0) : timestamp.toInstant();
+        EntryHeader.ControlInfo controlInfo = new EntryHeader.ControlInfo(((String) os[30]).charAt(0), (Long) os[35],
+                (Long) os[3] != 0, (Long) os[4] != 0, flags);
+        EntryHeader.RecordInfo recordInfo = new EntryHeader.RecordInfo((BigInteger) os[10], (BigInteger) os[8],
+                ((String) os[19]).trim(), ((String) os[20]).trim(), ((String) os[21]).trim(),
+                HexFormat.of().formatHex(data, offset + 197, offset + 207), ((String) os[31]).charAt(0),
+                ((String) os[33]).trim(), ((String) os[29]).trim(), ((String) os[22]).trim(),
+                ((String) os[23]).trim(), ((String) os[26]).trim());
         return new EntryHeader(nextEntryOffset.intValue(), nullEntryOffset.intValue(), entrySpecificDataOffset, sequenceNumber, systemSequenceNumber,
-                time, journalCode, entryType, objectName, commitCycle, endOffset, pointerHandle, receiver[0], receiver[1]);
+                time, journalCode, entryType, objectName, commitCycle, (int) endOffset, pointerHandle, receiver[0], receiver[1], controlInfo, recordInfo);
 
+    }
+
+    private static void validateDisplacement(long displacement, long endOffset, int minimumLength) {
+        if (displacement != 0 && (displacement < HEADER_LENGTH || displacement + minimumLength > endOffset)) {
+            throw new IllegalArgumentException("Invalid RJNE0200 entry displacement " + displacement);
+        }
     }
 
 }

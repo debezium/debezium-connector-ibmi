@@ -87,6 +87,11 @@ public class ParameterListBuilder {
         criteria.reset();
     }
 
+    public ParameterListBuilder withVariableNullIndicators() {
+        criteria.withLenNullPointerIndicatorVarLength();
+        return this;
+    }
+
     public ParameterListBuilder withJournalEntryType(JournalEntryType type) {
         criteria.withEntTyp(new JournalEntryType[]{ type });
         return this;
@@ -145,8 +150,12 @@ public class ParameterListBuilder {
     }
 
     public ParameterListBuilder filterJournalCodes(JournalCode[] journalCode) {
+        return filterJournalCodes(journalCode, false);
+    }
+
+    public ParameterListBuilder filterJournalCodes(JournalCode[] journalCode, boolean transactionControls) {
         this.journalCode = journalCode;
-        criteria.withJrnCde(journalCode);
+        criteria.withJrnCde(journalCode, transactionControls);
         return this;
     }
 

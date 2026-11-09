@@ -29,6 +29,7 @@ public class RetrieveConfigBuilder {
     private List<FileFilter> includeFiles = Collections.<FileFilter> emptyList();
     private int maxServerSideEntries = RetrieveConfig.DEFAULT_MAX_SERVER_SIDE_ENTRIES;
     private boolean filtering;
+    private boolean transactionControls;
 
     public RetrieveConfigBuilder() {
     }
@@ -102,6 +103,16 @@ public class RetrieveConfigBuilder {
     }
 
     public RetrieveConfig build() {
-        return new RetrieveConfig(as400, journalInfo, journalBufferSize, filtering, filterCodes, includeFiles, maxServerSideEntries, dumpFolder);
+        return new RetrieveConfig(as400, journalInfo, journalBufferSize, filtering, filterCodes, includeFiles, maxServerSideEntries, dumpFolder, transactionControls);
+    }
+
+    /**
+     * Include all entry types and retrieve C controls independently of file selection.
+     * This requires *OBJEXIST authority on the journal when file selection is bypassed.
+     * Consumers must handle transaction outcomes before using this mode for capture.
+     */
+    public RetrieveConfigBuilder withTransactionControls(boolean transactionControls) {
+        this.transactionControls = transactionControls;
+        return this;
     }
 }
