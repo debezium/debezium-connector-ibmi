@@ -75,6 +75,8 @@ public class As400StreamingChangeEventSource implements StreamingChangeEventSour
     private final Map<String, TransactionContext> txMap = new HashMap<>();
     private final String database;
     private As400OffsetContext offsetContext;
+    private volatile ChangeEventSourceContext streamingContext;
+    private volatile boolean streamingFinished;
     private final OffsetActivityMonitorService offsetActivityMonitorService;
     private OffsetActivityMonitor<As400Partition, As400OffsetContext> offsetActivityMonitor;
 
@@ -123,6 +125,7 @@ public class As400StreamingChangeEventSource implements StreamingChangeEventSour
     @Override
     public void execute(ChangeEventSourceContext context, As400Partition partition, As400OffsetContext offsetContext)
             throws InterruptedException {
+        streamingContext = context;
         final Metronome metronome = Metronome.sleeper(pollInterval, clock);
         int retries = 0;
         final WatchDog watchDog = new WatchDog(Thread.currentThread(), connectorConfig.getMaxRetrievalTimeout());
@@ -141,7 +144,9 @@ public class As400StreamingChangeEventSource implements StreamingChangeEventSour
                                 break;
                             case NotCalled:
                                 metronome.pause();
-                                dispatcher.dispatchHeartbeatEventAlsoToIncrementalSnapshot(partition, offsetContext);
+                                if (context.isRunning()) {
+                                    dispatcher.dispatchHeartbeatEventAlsoToIncrementalSnapshot(partition, offsetContext);
+                                }
                                 break;
                             default:
                                 metronome.pause();
@@ -170,8 +175,11 @@ public class As400StreamingChangeEventSource implements StreamingChangeEventSour
                         }
                     }
                     catch (IOException | SQLNonTransientConnectionException e) { // SQLNonTransientConnectionException
-                        // thrown by jt400 jdbc driver when
-                        // connection errors
+                        // A late connection failure must not reopen either transport
+                        // after the coordinator has stopped this streaming context.
+                        if (!context.isRunning()) {
+                            return;
+                        }
                         log.error("Connection failed offset {} retry {}", offsetContext.getPosition(), retries, e);
                         closeAndReconnect();
 
@@ -179,6 +187,9 @@ public class As400StreamingChangeEventSource implements StreamingChangeEventSour
                         metronome.pause(); // throws interruptedException
                     }
                     catch (final Exception e) {
+                        if (!context.isRunning()) {
+                            return;
+                        }
                         log.error("Failed to process offset {} retry {}", offsetContext.getPosition(), retries, e);
 
                         retries++;
@@ -193,6 +204,7 @@ public class As400StreamingChangeEventSource implements StreamingChangeEventSour
             }
         }
         finally {
+            streamingFinished = true;
             watchDog.stop();
         }
     }
@@ -206,22 +218,47 @@ public class As400StreamingChangeEventSource implements StreamingChangeEventSour
         }
     }
 
+    private boolean retryAllowed() {
+        ChangeEventSourceContext context = streamingContext;
+        return !streamingFinished && (context == null || context.isRunning());
+    }
+
     public void closeAndReconnect() {
-        try {
-            dataConnection.close();
-            dataConnection.connection();
+        if (!retryAllowed()) {
+            return;
         }
-        catch (final Exception e) {
-            log.error("Failure reconnecting command", e);
+        try (var ignored = dataConnection.admitRetry()) {
+            if (!retryAllowed()) {
+                return;
+            }
+            try {
+                dataConnection.close();
+                if (!retryAllowed()) {
+                    return;
+                }
+                dataConnection.connection();
+            }
+            catch (final Exception e) {
+                log.error("Failure reconnecting command", e);
+            }
+            if (!retryAllowed()) {
+                return;
+            }
+            try {
+                jdbcConnection.close();
+                if (!retryAllowed()) {
+                    return;
+                }
+                jdbcConnection.connect();
+            }
+            catch (final Exception e) {
+                log.error("Failure reconnecting sql", e);
+            }
+            connectionTime = System.currentTimeMillis();
         }
-        try {
-            jdbcConnection.close();
-            jdbcConnection.connect();
+        catch (IOException e) {
+            log.debug("Reader stopped before retry admission", e);
         }
-        catch (final Exception e) {
-            log.error("Failure reconnecting sql", e);
-        }
-        connectionTime = System.currentTimeMillis();
     }
 
     // TODO tidy up exception handling

@@ -240,10 +240,39 @@ public class As400ConnectorConfig extends RelationalDatabaseConnectorConfig {
         return new As400SourceInfoStructMaker(Module.name(), Module.version(), this);
     }
 
+    public static final Field DCG_BUFFER_TRANSACTIONS = Field.create("dcg.buffer.max.transactions").withType(Type.INT).withDefault(64)
+            .withDescription("Maximum simultaneously buffered D/CG transactions; failure preserves durable recovery positions.");
+    public static final Field DCG_BUFFER_ENTRIES = Field.create("dcg.buffer.max.entries").withType(Type.INT).withDefault(10000)
+            .withDescription("Maximum retained changes, before-images and table identities across open D/CG transactions.");
+    public static final Field DCG_BUFFER_SAVEPOINTS = Field.create("dcg.buffer.max.savepoints").withType(Type.INT).withDefault(1024)
+            .withDescription("Maximum retained native savepoint scopes.");
+    public static final Field DCG_BUFFER_BYTES = Field.create("dcg.buffer.max.bytes").withType(Type.INT).withDefault(16777216)
+            .withDescription("Maximum retained source payload bytes; excludes JVM object and output serialization overhead.");
+
+    public static final Field DCG_MODE = Field.create("dcg.mode")
+            .withType(Type.STRING).withDefault("disabled")
+            .withDescription("Native D/CG profile: disabled, initialize with an operator window, or resume from durable F/W. Defaults to disabled.");
+    public static final Field DCG_JOURNAL = Field.create("dcg.journal").withType(Type.STRING)
+            .withDescription("Exact LIBRARY/JOURNAL for the native D/CG profile.");
+    public static final Field DCG_KEY_MODE = Field.create("dcg.key.mode").withType(Type.STRING).withDefault("primary-key")
+            .withDescription("Native output identity: primary-key or explicit rrn using __IBMI_RRN; changing mode requires a fresh generation.");
+    public static final Field DCG_TABLES = Field.create("dcg.tables").withType(Type.STRING)
+            .withDescription("Exact comma-separated LIBRARY.FILE capture set for D/CG.");
+    public static final Field DCG_CONTROLLED = Field.create("dcg.controlled.tables").withType(Type.STRING)
+            .withDescription("Complete controlled journal file inventory; this profile requires the capture set to match.");
+    public static final Field DCG_LIBRARIES = Field.create("dcg.journaled.libraries").withType(Type.STRING).withDefault("")
+            .withDescription("Controlled library if the library itself is journaled, otherwise empty.");
+    public static final Field DCG_WINDOW = Field.create("dcg.initialization.window").withType(Type.STRING)
+            .withDescription("Absolute durable shared directory containing the version-2 operator first-start plan.");
+    public static final Field DCG_RETENTION = Field.create("dcg.retention").withType(Type.STRING)
+            .withDescription("Must be operator-managed. Operators retain every receiver and history record required by F/W.");
+
     public static Field.Set ALL_FIELDS = Field.setOf(JdbcConfiguration.HOSTNAME, USER, PASSWORD, SCHEMA, BUFFER_SIZE,
             RelationalDatabaseConnectorConfig.SNAPSHOT_SELECT_STATEMENT_OVERRIDES_BY_TABLE, SOCKET_TIMEOUT,
             MAX_SERVER_SIDE_ENTRIES, TOPIC_NAMING_STRATEGY, FROM_CCSID, TO_CCSID, SECURE,
-            DIAGNOSTICS_FOLDER, TRIM_NON_XML_CHARSEQUENCE_FIELD_MODE, JOURNAL_CACHE_ADDITIONAL_DELAY);
+            DIAGNOSTICS_FOLDER, TRIM_NON_XML_CHARSEQUENCE_FIELD_MODE, JOURNAL_CACHE_ADDITIONAL_DELAY,
+            DCG_MODE, DCG_JOURNAL, DCG_KEY_MODE, DCG_TABLES, DCG_CONTROLLED, DCG_LIBRARIES, DCG_WINDOW, DCG_RETENTION, DCG_BUFFER_TRANSACTIONS, DCG_BUFFER_ENTRIES,
+            DCG_BUFFER_SAVEPOINTS, DCG_BUFFER_BYTES);
 
     public static ConfigDef configDef() {
         final ConfigDef c = RelationalDatabaseConnectorConfig.CONFIG_DEFINITION.edit()
@@ -259,7 +288,8 @@ public class As400ConnectorConfig extends RelationalDatabaseConnectorConfig {
                         As400OffsetContext.EVENT_SEQUENCE_FIELD,
                         As400OffsetContext.RECEIVER_FIELD,
                         As400OffsetContext.RECEIVER_LIBRARY_FIELD,
-                        As400OffsetContext.PROCESSED_FIELD)
+                        As400OffsetContext.PROCESSED_FIELD, DCG_MODE, DCG_JOURNAL, DCG_KEY_MODE, DCG_TABLES, DCG_CONTROLLED, DCG_LIBRARIES, DCG_WINDOW, DCG_RETENTION,
+                        DCG_BUFFER_TRANSACTIONS, DCG_BUFFER_ENTRIES, DCG_BUFFER_SAVEPOINTS, DCG_BUFFER_BYTES)
                 .create().configDef();
         return c;
     }

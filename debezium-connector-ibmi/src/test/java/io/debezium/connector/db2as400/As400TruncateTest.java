@@ -271,6 +271,9 @@ class As400TruncateTest {
 
         // Exercise the real RPC consumption loop, including its offset advancement.
         // Inject only the journal and disable diagnostic polling to avoid IBM i access.
+        Field lifecycle = As400RpcConnection.class.getDeclaredField("lifecycle");
+        lifecycle.setAccessible(true);
+        lifecycle.set(rpc, new io.debezium.ibmi.db2.journal.retrieve.JournalReadLifecycle());
         Field retrieval = As400RpcConnection.class.getDeclaredField("retrieveJournal");
         retrieval.setAccessible(true);
         retrieval.set(rpc, journal);

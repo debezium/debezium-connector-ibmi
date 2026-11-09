@@ -189,6 +189,9 @@ public class As400OffsetContext extends CommonOffsetContext<SourceInfo> {
 
         @Override
         public As400OffsetContext load(Map<String, ?> map) {
+            if (map.containsKey(As400Checkpoint.VERSION)) {
+                throw new IllegalArgumentException("Versioned transaction offsets require buffered recovery; legacy streaming cannot load them");
+            }
             final String offsetStr = (String) map.get(As400OffsetContext.EVENT_SEQUENCE);
             final String timeStr = (String) map.get(As400OffsetContext.EVENT_TIME);
             final String complete = (String) map.get(As400OffsetContext.SNAPSHOT_COMPLETED_KEY);
