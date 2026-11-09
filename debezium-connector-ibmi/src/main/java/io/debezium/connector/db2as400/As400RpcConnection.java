@@ -28,6 +28,7 @@ import io.debezium.ibmi.db2.journal.retrieve.JournalInfo;
 import io.debezium.ibmi.db2.journal.retrieve.JournalInfoRetrieval;
 import io.debezium.ibmi.db2.journal.retrieve.JournalPosition;
 import io.debezium.ibmi.db2.journal.retrieve.JournalProcessedPosition;
+import io.debezium.ibmi.db2.journal.retrieve.JournalReadLifecycle;
 import io.debezium.ibmi.db2.journal.retrieve.RetrievalState;
 import io.debezium.ibmi.db2.journal.retrieve.RetrieveConfig;
 import io.debezium.ibmi.db2.journal.retrieve.RetrieveConfigBuilder;
@@ -48,6 +49,7 @@ public class As400RpcConnection implements AutoCloseable, Connect<AS400, IOExcep
     private JournalInfo journalInfo;
     private RetrieveJournal retrieveJournal;
     private AS400 as400;
+    private final JournalReadLifecycle lifecycle = new JournalReadLifecycle();
     private static SocketProperties socketProperties = new SocketProperties();
     private final LogLimmiting periodic = new LogLimmiting(5 * 60 * 1000l);
     private final JournalInfoRetrieval journalInfoRetrieval;
@@ -71,42 +73,95 @@ public class As400RpcConnection implements AutoCloseable, Connect<AS400, IOExcep
                     .withServerFiltering(true)
                     .withIncludeFiles(includes).withDumpFolder(config.diagnosticsFolder())
                     .build();
-            retrieveJournal = new RetrieveJournal(rconfig, journalInfoRetrieval);
+            retrieveJournal = new RetrieveJournal(rconfig, journalInfoRetrieval, lifecycle);
         }
         catch (final IOException e) {
             log.error("Failed to fetch library", e);
         }
     }
 
-    @Override
-    public void close() {
+    /**
+     * Permanently reject new work, cancel the captured read, then drain admitted
+     * work. Unlike close(), this instance can never reconnect after stop.
+     * Must be called outside a reader operation. No driver deadline is assumed.
+     */
+    public void stop() {
+        lifecycle.requestStop();
+        final AS400 closing;
+        synchronized (this) {
+            closing = as400;
+        }
         try {
-            if (as400 != null) {
-                log.info("Disconnecting");
+            // Also cancel when an ordinary close has already detached as400.
+            if (retrieveJournal != null) {
                 retrieveJournal.cancelJob();
-                this.as400.disconnectAllServices();
+            }
+            close();
+        }
+        finally {
+            lifecycle.awaitDrained();
+            // An admitted driver operation may have reconnected its captured
+            // transport while stop was draining. Release that same object again.
+            if (closing != null) {
+                try {
+                    closing.disconnectAllServices();
+                }
+                catch (Exception e) {
+                    log.debug("Problem closing drained connection", e);
+                }
             }
         }
-        catch (final Exception e) {
-            log.debug("Problem closing connection", e);
-        }
-
-        this.as400 = null;
     }
 
-    public boolean isValid() {
+    // Streaming retries include JDBC work. They must drain with this reader even
+    // when RPC reconnect fails or stop arrives between the two transports.
+    JournalReadLifecycle.Lease admitRetry() throws IOException {
+        return lifecycle.enter();
+    }
+
+    @Override
+    public synchronized void close() {
+        final AS400 closing = as400;
+        as400 = null;
+        if (closing == null) {
+            return;
+        }
+        try {
+            log.info("Disconnecting");
+            if (retrieveJournal != null) {
+                retrieveJournal.cancelJob();
+            }
+        }
+        finally {
+            try {
+                closing.disconnectAllServices();
+            }
+            catch (final Exception e) {
+                log.debug("Problem closing connection", e);
+            }
+        }
+    }
+
+    public synchronized boolean isValid() {
         return (as400 != null && as400.isConnectionAlive(AS400.COMMAND));
 
     }
 
     public boolean validateLogPosition(Partition partition, OffsetContext offsetContext, CommonConnectorConfig config) {
-        try {
+        try (var ignored = lifecycle.enter()) {
             if (offsetContext instanceof As400OffsetContext offset) {
                 if (offset.isPositionSet()) {
                     JournalReceiverInfo receiver = new JournalReceiverInfo(offset.getPosition().getReceiver(), null, null, Optional.empty());
 
-                    DetailedJournalReceiver dr = journalInfoRetrieval.getReceiverDetails(as400, receiver);
-                    return dr != null;
+                    final AS400 connection = connection();
+                    try {
+                        DetailedJournalReceiver dr = journalInfoRetrieval.getReceiverDetails(connection, receiver);
+                        lifecycle.checkOpen();
+                        return dr != null;
+                    }
+                    finally {
+                        disconnectIfStopped(connection);
+                    }
                 }
             }
         }
@@ -117,7 +172,13 @@ public class As400RpcConnection implements AutoCloseable, Connect<AS400, IOExcep
     }
 
     @Override
-    public AS400 connection() throws IOException {
+    public synchronized AS400 connection() throws IOException {
+        try (var ignored = lifecycle.enter()) {
+            return connect();
+        }
+    }
+
+    private AS400 connect() throws IOException {
         if (as400 == null || !as400.isConnectionAlive(AS400.COMMAND)) {
             log.info("create new as400 connection");
             try {
@@ -143,29 +204,54 @@ public class As400RpcConnection implements AutoCloseable, Connect<AS400, IOExcep
     }
 
     public JournalPosition getCurrentPosition() throws RpcException {
-        try {
-            final JournalPosition position = journalInfoRetrieval.getCurrentPosition(connection(), journalInfo);
-
-            return new JournalPosition(position);
+        try (var ignored = lifecycle.enter()) {
+            final AS400 connection = connection();
+            try {
+                final JournalPosition position = journalInfoRetrieval.getCurrentPosition(connection, journalInfo);
+                lifecycle.checkOpen();
+                return new JournalPosition(position);
+            }
+            finally {
+                disconnectIfStopped(connection);
+            }
         }
         catch (final Exception e) {
             throw new RpcException("Failed to find offset", e);
         }
     }
 
+    private void disconnectIfStopped(AS400 connection) {
+        if (lifecycle.isStopped()) {
+            try {
+                connection.disconnectAllServices();
+            }
+            catch (Exception e) {
+                log.warn("Failed to disconnect stopped metadata operation", e);
+            }
+        }
+    }
+
     public RetrievalState getJournalEntries(ChangeEventSourceContext context, As400OffsetContext offsetCtx, BlockingReceiverConsumer consumer, WatchDog watchDog)
+            throws Exception {
+        try (var ignored = lifecycle.enter()) {
+            return readEntries(context, offsetCtx, consumer, watchDog);
+        }
+    }
+
+    private RetrievalState readEntries(ChangeEventSourceContext context, As400OffsetContext offsetCtx, BlockingReceiverConsumer consumer, WatchDog watchDog)
             throws Exception {
         final JournalProcessedPosition position = offsetCtx.getPosition();
         try {
-
+            lifecycle.checkOpen();
             RetrievalState state = retrieveJournal.retrieveJournal(position);
 
+            lifecycle.checkOpen();
             logOffsets(position, state);
 
             watchDog.alive();
 
             if (state.hasData()) {
-                while (retrieveJournal.nextEntry() && context.isRunning()) {
+                while (!lifecycle.isStopped() && retrieveJournal.nextEntry() && context.isRunning()) {
                     watchDog.alive();
                     final EntryHeader eheader = retrieveJournal.getEntryHeader();
                     final BigInteger processingOffset = eheader.getSequenceNumber();
@@ -176,12 +262,14 @@ public class As400RpcConnection implements AutoCloseable, Connect<AS400, IOExcep
                 }
 
                 // note that getPosition returns the current position or the next continuation offset after the current block
+                lifecycle.checkOpen();
                 offsetCtx.setPosition(retrieveJournal.getPosition());
 
             }
             return state;
         }
         catch (LostJournalException e) {
+            lifecycle.checkOpen();
             // this is bad, we've probably lost data
             final List<DetailedJournalReceiver> receivers = journalInfoRetrieval.getReceivers(connection(), journalInfo);
             log.error("Failed to fetch journal entries '{}', resetting journal to blank",

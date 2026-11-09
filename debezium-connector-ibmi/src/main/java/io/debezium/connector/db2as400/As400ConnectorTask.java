@@ -8,8 +8,10 @@ package io.debezium.connector.db2as400;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.stream.Collectors;
 
+import org.apache.kafka.clients.producer.RecordMetadata;
 import org.apache.kafka.connect.source.SourceRecord;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -53,8 +55,22 @@ public class As400ConnectorTask extends BaseSourceTask<As400Partition, As400Offs
     private static final String CONTEXT_NAME = "db2as400-server-connector-task";
     private As400DatabaseSchema schema;
     private ErrorHandler errorHandler;
+    private As400RpcConnection rpcConnection;
+    private As400JdbcConnection jdbcConnection;
     private As400ConnectorConfig connectorConfig;
     private CdcSourceTaskContext<As400ConnectorConfig> taskContext;
+    private volatile As400RecoverySource recoverySource;
+    private org.apache.kafka.connect.source.TransactionContext configuredTransactions;
+
+    /** No configuration flag selects this path. Only an in-package test task supplies admission. */
+    As400TaskRecovery recoveryForTesting(Configuration config) {
+        return null;
+    }
+
+    /** Explicit first-start authority is separate from missing-offset recovery. */
+    As400TaskInitialization initializationForTesting(Configuration config) {
+        return null;
+    }
 
     @Override
     public String version() {
@@ -73,6 +89,18 @@ public class As400ConnectorTask extends BaseSourceTask<As400Partition, As400Offs
     @Override
     protected ChangeEventSourceCoordinator<As400Partition, As400OffsetContext> start(Configuration config) {
         LOGGER.info("starting connector task {}", version());
+        configuredTransactions = null;
+        if (As400DcgConfig.enabled(config)) {
+            throw new org.apache.kafka.connect.errors.ConnectException("Configured D/CG startup requires the initialization integration");
+        }
+        As400TaskInitialization initialization = initializationForTesting(config);
+        if (initialization != null) {
+            return startRecovery(config, initialization.recovery(), initialization);
+        }
+        As400TaskRecovery recovery = recoveryForTesting(config);
+        if (recovery != null) {
+            return startRecovery(config, recovery, null);
+        }
         // TODO resolve schema FIELD_NAME_ADJUSTMENT_MODE to be SchemaNameAdjuster.AVRO_FIELD_NAMER
 
         @SuppressWarnings("unchecked")
@@ -83,7 +111,7 @@ public class As400ConnectorTask extends BaseSourceTask<As400Partition, As400Offs
 
         final MainConnectionProvidingConnectionFactory<As400JdbcConnection> jdbcConnectionFactory = new DefaultMainConnectionProvidingConnectionFactory<>(
                 () -> new As400JdbcConnection(connectorConfig.getJdbcConfig()));
-        final As400JdbcConnection jdbcConnection = jdbcConnectionFactory.mainConnection();
+        jdbcConnection = jdbcConnectionFactory.mainConnection();
         registerServiceProviders(connectorConfig.getServiceRegistry());
 
         CustomConverterRegistry customConverterRegistry = connectorConfig.getServiceRegistry().tryGetService(CustomConverterRegistry.class);
@@ -138,7 +166,7 @@ public class As400ConnectorTask extends BaseSourceTask<As400Partition, As400Offs
 
         final long cacheWait = JournalInfoRetrieval.getJournalCacheDurationInMilliseconds(jdbcConnection);
 
-        final As400RpcConnection rpcConnection = new As400RpcConnection(connectorConfig, streamingMetrics,
+        rpcConnection = new As400RpcConnection(connectorConfig, streamingMetrics,
                 shortIncludes, cacheWait);
 
         validateSchemaHistory(connectorConfig, rpcConnection::validateLogPosition, previousOffsetPartition, schema,
@@ -180,6 +208,128 @@ public class As400ConnectorTask extends BaseSourceTask<As400Partition, As400Offs
         return coordinator;
     }
 
+    private ChangeEventSourceCoordinator<As400Partition, As400OffsetContext> startRecovery(Configuration raw, As400TaskRecovery input,
+                                                                                           As400TaskInitialization initialization) {
+        recoverySource = null;
+        try {
+            As400DcgConfig.requireSnapshotMode(raw);
+            As400BatchDispatcher.requireConfiguration(connectorConfig);
+            if (configuredTransactions == null) {
+                As400RecoveryAcknowledgements.requireProfile(raw.asMap());
+            }
+            input.checkQualified(raw);
+            if (!connectorConfig.getSignalingDataCollectionIds().isEmpty() || !raw.getString("signal.enabled.channels", "").isEmpty()) {
+                throw new IllegalArgumentException("Recovery-only admission does not permit snapshot signals");
+            }
+            Offsets<As400Partition, As400OffsetContext> offsets = getPreviousOffsets(() -> Set.of(input.partition()),
+                    saved -> {
+                        if (initialization != null) {
+                            throw new IllegalArgumentException("Explicit first start requires absent offsets; pending initialization cannot resume");
+                        }
+                        return new As400RecoveryOffsetContext(connectorConfig, saved, input.journalIdentity(), input.fingerprint());
+                    });
+            As400RecoveryOffsetContext recovered = (As400RecoveryOffsetContext) offsets.getTheOnlyOffset();
+            if (recovered == null && initialization == null) {
+                throw new IllegalArgumentException("Missing durable F/W: explicit initialization is required");
+            }
+            registerServiceProviders(connectorConfig.getServiceRegistry());
+            connectorConfig.getBeanRegistry().add(StandardBeanNames.CONFIGURATION, raw);
+            connectorConfig.getBeanRegistry().add(StandardBeanNames.CONNECTOR_CONFIG, connectorConfig);
+            connectorConfig.getBeanRegistry().add(StandardBeanNames.CDC_SOURCE_TASK_CONTEXT, taskContext);
+            connectorConfig.getBeanRegistry().add(StandardBeanNames.OFFSETS, offsets);
+            queue = new ChangeEventQueue.Builder<DataChangeEvent>()
+                    .maxBatchSize(connectorConfig.getMaxBatchSize()).maxQueueSize(connectorConfig.getMaxQueueSize())
+                    .queueProvider(connectorConfig.getServiceRegistry().tryGetService(QueueProviderService.class).getQueueProvider())
+                    .pollInterval(connectorConfig.getPollInterval()).pollDispatchInterval(connectorConfig.getPollDispatchInterval())
+                    .loggingContextSupplier(() -> taskContext.configureLoggingContext(CONTEXT_NAME)).build();
+            errorHandler = new ErrorHandler(As400RpcConnector.class, connectorConfig, queue, null) {
+                @Override
+                protected boolean hasMoreRetries() {
+                    // Recovery/acknowledgement uncertainty needs fresh admission,
+                    // never BaseSourceTask's automatic reuse of a stopped session.
+                    return false;
+                }
+            };
+            TopicNamingStrategy<TableId> topics = connectorConfig.getTopicNamingStrategy(As400ConnectorConfig.TOPIC_NAMING_STRATEGY, true);
+            var headers = connectorConfig.getServiceRegistry().tryGetService(DebeziumHeaderProducer.class);
+            var source = new As400RecoverySource(input, initialization, connectorConfig, recovered, queue, errorHandler, topics, headers,
+                    () -> context.offsetStorageReader().offset(input.partition().getSourcePartition()));
+            recoverySource = source;
+            connectorConfig.getBeanRegistry().add(StandardBeanNames.DATABASE_SCHEMA, source);
+            var metadata = new As400EventMetadataProvider();
+            var metricContext = new As400TaskContext(raw, connectorConfig, connectorConfig.getCustomMetricTags());
+            var streamingMetrics = new As400StreamingChangeEventSourceMetrics(metricContext, queue, metadata, source::dataCollectionIds);
+            source.metrics(streamingMetrics);
+            var dispatcher = new EventDispatcher<As400Partition, TableId>(connectorConfig, topics, source, queue, id -> true,
+                    DataChangeEvent::new, metadata, connectorConfig.schemaNameAdjuster(), null, headers);
+            var coordinator = new ChangeEventSourceCoordinator<As400Partition, As400OffsetContext>(offsets, errorHandler,
+                    As400RpcConnector.class, connectorConfig, source, new As400ChangeEventSourceMetricsFactory(streamingMetrics),
+                    dispatcher, source, null, null, null) {
+                @Override
+                public synchronized void stop() throws InterruptedException {
+                    // BaseSourceTask stops its coordinator before doStop. Close
+                    // admission/cancel now, before waiting for its executor.
+                    source.requestStop();
+                    try {
+                        super.stop();
+                    }
+                    finally {
+                        source.close();
+                    }
+                }
+            };
+            coordinator.start(metricContext, queue, metadata);
+            return coordinator;
+        }
+        catch (RuntimeException | Error failure) {
+            try {
+                if (recoverySource != null) {
+                    recoverySource.close();
+                }
+                else {
+                    try {
+                        input.requestStop();
+                    }
+                    finally {
+                        input.close();
+                    }
+                }
+            }
+            catch (Throwable cleanup) {
+                failure.addSuppressed(cleanup);
+            }
+            try {
+                connectorConfig.getServiceRegistry().close();
+            }
+            catch (Throwable cleanup) {
+                failure.addSuppressed(cleanup);
+            }
+            throw failure;
+        }
+    }
+
+    @Override
+    public void commitRecord(SourceRecord record, RecordMetadata metadata) throws InterruptedException {
+        var recovery = recoverySource;
+        if (recovery != null) {
+            recovery.record(record, metadata);
+        }
+        super.commitRecord(record, metadata);
+    }
+
+    @Override
+    public void commit() throws InterruptedException {
+        super.commit();
+        var recovery = recoverySource;
+        if (recovery != null) {
+            recovery.committed();
+        }
+    }
+
+    boolean recoveryDrained() {
+        return recoverySource != null && recoverySource.drained();
+    }
+
     @Override
     protected String connectorName() {
         return Module.name();
@@ -187,12 +337,43 @@ public class As400ConnectorTask extends BaseSourceTask<As400Partition, As400Offs
 
     @Override
     protected List<SourceRecord> doPoll() throws InterruptedException {
+        var recovery = recoverySource;
+        // Even a stopped source must surface its producer failure through poll.
+        if (recovery != null && !recovery.stopped()) {
+            recovery.checkForPoll();
+        }
         final List<DataChangeEvent> records = queue.poll();
+
+        if (recovery != null && recovery.stopped()) {
+            return List.of();
+        }
+
+        if (recovery != null) {
+            if (records.isEmpty()) {
+                recovery.checkForPoll();
+            }
+            else {
+                checkRecoveryPublication();
+            }
+        }
 
         final List<SourceRecord> sourceRecords = records.stream().map(DataChangeEvent::getRecord)
                 .collect(Collectors.toList());
 
+        if (configuredTransactions != null && !sourceRecords.isEmpty()) {
+            // Public Connect transaction request: commit this poll's records and
+            // their conservative offsets together. This is not source exactly once.
+            configuredTransactions.commitTransaction();
+        }
         return sourceRecords;
+    }
+
+    // Also used when the native test adapter releases a deliberately held poll.
+    final void checkRecoveryPublication() {
+        var recovery = recoverySource;
+        if (recovery != null) {
+            recovery.checkForPublication();
+        }
     }
 
     @Override
@@ -202,6 +383,24 @@ public class As400ConnectorTask extends BaseSourceTask<As400Partition, As400Offs
 
     @Override
     protected void doStop() {
+        try {
+            if (recoverySource != null) {
+                recoverySource.close();
+            }
+            if (rpcConnection != null) {
+                rpcConnection.stop();
+            }
+        }
+        finally {
+            if (jdbcConnection != null) {
+                try {
+                    jdbcConnection.close();
+                }
+                catch (java.sql.SQLException e) {
+                    LOGGER.warn("Failed to close task JDBC connection", e);
+                }
+            }
+        }
     }
 
     @Override
