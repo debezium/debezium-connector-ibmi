@@ -426,19 +426,21 @@ public class As400TaskStopProbeConnector extends As400ConnectOwnershipProbeConne
     }
 
     static final class FixtureSchema implements DatabaseSchema<TableId> {
-        private final TableSchema schema;
+        private final Map<TableId, TableSchema> schemas = new HashMap<>();
 
-        FixtureSchema(As400OffsetContext offset) {
+        FixtureSchema(As400OffsetContext offset, TableId... tables) {
             Schema row = SchemaBuilder.struct().name("probe.Value").field("ID", Schema.INT32_SCHEMA).optional().build();
             Schema key = SchemaBuilder.struct().name("probe.Key").field("ID", Schema.INT32_SCHEMA).build();
             Envelope envelope = Envelope.defineSchema().withName("probe.Envelope").withRecord(row).withSource(offset.getSourceInfoSchema())
                     .withTransaction(TransactionMonitor.TRANSACTION_BLOCK_SCHEMA).build();
-            schema = new TableSchema(TABLE, key, data -> new Struct(key).put("ID", data[0]), envelope, row, data -> new Struct(row).put("ID", data[0]));
+            for (TableId table : tables.length == 0 ? new TableId[]{ TABLE } : tables) {
+                schemas.put(table, new TableSchema(table, key, data -> new Struct(key).put("ID", data[0]), envelope, row, data -> new Struct(row).put("ID", data[0])));
+            }
         }
 
         @Override
         public TableSchema schemaFor(TableId id) {
-            return TABLE.equals(id) ? schema : null;
+            return schemas.get(id);
         }
 
         @Override

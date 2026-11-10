@@ -87,7 +87,7 @@ class Experiment(automatic.Experiment):
             raise RuntimeError('Cannot install transient worker credentials')
         path = self.directory / (name + '.native.log')
         process = subprocess.Popen(['docker', 'exec', '-e', 'KAFKA_HEAP_OPTS=-Xms128m -Xmx512m',
-                                    '-e', 'KAFKA_OPTS=-Dlog4j2.configurationFile=/audit/native-console.properties', worker,
+                                    '-e', 'KAFKA_OPTS=' + self.worker_java_options(), worker,
                                     '/opt/kafka/bin/connect-distributed.sh', '/worker.properties'],
                                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
         self.children.append(process)
@@ -98,6 +98,9 @@ class Experiment(automatic.Experiment):
         thread = threading.Thread(target=collect, daemon=True)
         thread.start(); self.log_threads.append(thread); self.logs[worker] = path
         return worker
+
+    def worker_java_options(self):
+        return '-Dlog4j2.configurationFile=/audit/native-console.properties'
 
     def command(self, *args, timeout=45, check=True):
         if args[:2] == ('docker', 'logs') and args[-1] in getattr(self, 'logs', {}):
