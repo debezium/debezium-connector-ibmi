@@ -38,8 +38,8 @@ public class As400DatabaseSchema extends RelationalDatabaseSchema implements Sch
                                TopicNamingStrategy<TableId> topicSelector, SchemaNameAdjuster schemaNameAdjuster, CustomConverterRegistry customConverterRegistry,
                                CdcSourceTaskContext<As400ConnectorConfig> taskContext) {
         super(config, topicSelector, config.getTableFilters().dataCollectionFilter(), config.getColumnFilter(),
-                new TableSchemaBuilder(new As400ValueConverters(config.getDecimalMode(), config),
-                        new As400DefaultValueConverter(), schemaNameAdjuster,
+                new TableSchemaBuilder(valueConverters(config),
+                        new As400DefaultValueConverter(valueConverters(config)), schemaNameAdjuster,
                         customConverterRegistry, config.getSourceInfoStructMaker().schema(),
                         config.getFieldNamer(), false, config.getEventConvertingFailureHandlingMode()),
                 false, config.getKeyMapper(), taskContext);
@@ -51,6 +51,10 @@ public class As400DatabaseSchema extends RelationalDatabaseSchema implements Sch
                 config.getToCcsid());
 
         schemaInfoConversion = new SchemaInfoConversion(fileDecoder);
+    }
+
+    private static As400ValueConverters valueConverters(As400ConnectorConfig config) {
+        return new As400ValueConverters(config.getDecimalMode(), config.getTemporalPrecisionMode(), config.getCharSequenceTrimMode());
     }
 
     public JdbcFileDecoder getFileDecoder() {
