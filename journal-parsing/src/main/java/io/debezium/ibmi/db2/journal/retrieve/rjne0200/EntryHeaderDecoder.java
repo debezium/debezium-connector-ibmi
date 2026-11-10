@@ -104,6 +104,7 @@ public class EntryHeaderDecoder {
         char journalCode = ((String) os[17]).charAt(0);
         String entryType = (String) os[18];
         String objectName = (String) os[25];
+        BigInteger relativeRecordNumber = (BigInteger) os[10];
         BigInteger commitCycle = (BigInteger) os[11];
         Long pointerHandle = (Long) os[12];
         int receiverOffset = ((Long) os[5]).intValue();
@@ -136,7 +137,7 @@ public class EntryHeaderDecoder {
         }
         Instant time = (timestamp == null) ? Instant.ofEpochSecond(0) : timestamp.toInstant();
         return new EntryHeader(nextEntryOffset.intValue(), nullEntryOffset.intValue(), entrySpecificDataOffset, sequenceNumber, systemSequenceNumber,
-                time, journalCode, entryType, objectName, commitCycle, endOffset, pointerHandle, receiver[0], receiver[1]);
+                time, journalCode, entryType, objectName, commitCycle, endOffset, pointerHandle, receiver[0], receiver[1], relativeRecordNumber);
 
     }
 
