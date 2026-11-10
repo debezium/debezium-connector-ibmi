@@ -88,7 +88,8 @@ class As400IncrementalLifecycleTest {
                         .map(name -> Arguments.of("lifecycle-discrimination", name)),
                 Stream.of("multiple_clear_commit", "multiple_clear_rollback", "multiple_clear_savepoint", "nested_clear_savepoint",
                         "non_top_clear_savepoint", "two_table_clear_rollback", "two_table_clear_savepoint")
-                        .map(name -> Arguments.of("multiple-clears", name)))
+                        .map(name -> Arguments.of("multiple-clears", name)),
+                Stream.of("clear_only_savepoint", "clear_only_delete_savepoint").map(name -> Arguments.of("clear-only-savepoint", name)))
                 .flatMap(stream -> stream);
     }
 
@@ -103,6 +104,24 @@ class As400IncrementalLifecycleTest {
                 throw new IllegalStateException(e);
             }
         });
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = { "two_table_clear_rollback", "two_table_clear_savepoint" })
+    void ordinaryTableFilterPreservesNativeCrossTableRollbackAndSavepointContext(String name) throws Exception {
+        var bindings = bindings("multiple-clears");
+        var table = bindings.get("A").identity().tableId();
+        var selection = Map.of("table.include.list", java.util.regex.Pattern.quote(table.schema() + "." + table.table()));
+        var entries = entries("multiple-clears", name);
+        List<SourceRecord> records = new ArrayList<>();
+        try (var output = new Output(bindings, false, selection).dispatcher;
+                var replay = coordinator(initial(entries).toOffset(), "multiple-clears", entries, records::add, LIMITS)) {
+            for (Entry entry : entries) {
+                feed(replay, entry, output);
+            }
+            replay.verifyEndOfAvailableJournal();
+        }
+        assertThat(data(records)).containsExactlyElementsOf(name.endsWith("savepoint") ? List.of("c:A:22") : List.of());
     }
 
     @ParameterizedTest
@@ -728,6 +747,49 @@ class As400IncrementalLifecycleTest {
         return resequence(entries);
     }
 
+    @ParameterizedTest
+    @ValueSource(strings = { "missing-start", "missing-companion", "flags", "jid", "thread", "profile", "scope" })
+    void clearOnlySavepointRestorationRequiresTheEntireIdentifiedSequence(String fault) throws Exception {
+        String fixture = "clear-only-savepoint";
+        var entries = entries(fixture, "clear_only_savepoint");
+        int rollback = index(entries, "C/SU");
+        int target = rollback + 1;
+        assertThat(entries.get(target).type()).isEqualTo("F/EJ");
+        if (fault.equals("missing-start") || fault.equals("missing-companion")) {
+            entries.remove(fault.equals("missing-start") ? rollback : target + 1);
+        }
+        else {
+            if (fault.equals("profile")) {
+                target += 2; // D/JF must restore the original recording profile.
+            }
+            if (fault.equals("scope")) {
+                target += 4; // C/SB must replace the exact rolled-back scope.
+            }
+            Entry old = entries.get(target);
+            byte[] bytes = old.bytes().clone();
+            switch (fault) {
+                case "flags" -> bytes[218] = 0;
+                case "jid" -> bytes[197] ^= 1;
+                case "thread" -> ByteBuffer.wrap(bytes).putLong(40, 999);
+                case "profile" -> bytes[216] = new AS400Text(1).toBytes("0")[0];
+                case "scope" -> ByteBuffer.wrap(bytes).putInt(232, 99);
+                default -> throw new AssertionError(fault);
+            }
+            entries.set(target, new Entry(new EntryHeaderDecoder().decode(bytes, 0), bytes, old.position()));
+        }
+        List<SourceRecord> records = new ArrayList<>();
+        try (var output = new Output(bindings(fixture)).dispatcher;
+                var coordinator = coordinator(initial(entries).toOffset(), fixture, entries, records::add, LIMITS)) {
+            assertThrows(RecoveryException.class, () -> {
+                for (Entry entry : entries) {
+                    feed(coordinator, entry, output);
+                }
+            });
+            assertThat(coordinator.checkpoint().completedThrough()).isEqualTo(initial(entries).completedThrough());
+            assertThat(records).isEmpty();
+        }
+    }
+
     /** Synthetic interleaving only: remap sequence references consistently, preserve values/producers. */
     private static List<Entry> resequence(List<Entry> entries) {
         Map<BigInteger, BigInteger> sequence = new HashMap<>();
@@ -824,6 +886,8 @@ class As400IncrementalLifecycleTest {
             case "atomic_statement_failure" -> List.of("c:ERR:20", "c:ERR:24");
             case "multiple_clear_commit" -> List.of("t:MC", "c:MC:10", "d:MC:10", "c:MC:11");
             case "multiple_clear_rollback", "multiple_clear_savepoint", "two_table_clear_rollback" -> List.of();
+            case "clear_only_savepoint" -> List.of("c:B:10001");
+            case "clear_only_delete_savepoint" -> List.of("c:B:10002");
             case "nested_clear_savepoint" -> List.of("c:NC:13");
             case "non_top_clear_savepoint" -> List.of("c:NR:12");
             case "two_table_clear_savepoint" -> List.of("c:A:22", "c:B:23");
@@ -878,9 +942,14 @@ class As400IncrementalLifecycleTest {
         }
 
         Output(Map<String, TableBinding> bindings, boolean ordinary) {
+            this(bindings, ordinary, Map.of());
+        }
+
+        Output(Map<String, TableBinding> bindings, boolean ordinary, Map<String, String> selection) {
             var raw = Configuration.create().with("topic.prefix", "test").with("database.dbname", "AEQA")
                     .with("database.schema", "FIXTURE").with("skipped.operations", "none").with("heartbeat.interval.ms", "3600000")
-                    .with("provide.transaction.metadata", "true").with("event.converting.failure.handling.mode", "fail").build();
+                    .with("provide.transaction.metadata", "true").with("event.converting.failure.handling.mode", "fail").build()
+                    .edit().with(Configuration.from(selection)).build();
             var context = preStart(raw);
             var config = (As400ConnectorConfig) context.getConfig();
             registerServiceProviders(config.getServiceRegistry());

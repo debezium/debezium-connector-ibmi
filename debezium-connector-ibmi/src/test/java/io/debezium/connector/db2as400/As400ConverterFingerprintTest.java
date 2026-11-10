@@ -24,7 +24,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import io.debezium.config.Configuration;
-import io.debezium.connector.db2as400.As400BindingHistoryTest.Fixture;
+import io.debezium.connector.db2as400.As400RecoveryTestSupport.Fixture;
 
 class As400ConverterFingerprintTest {
     private static final ObjectMapper JSON = new ObjectMapper();
@@ -173,7 +173,7 @@ class As400ConverterFingerprintTest {
     }
 
     private static As400BindingHistory history(Path file, As400DcgConfig config) {
-        return new As400BindingHistory(() -> new As400BindingHistoryTest.FileHistory(file), Configuration.empty(), config.policy.sourcePartition());
+        return new As400BindingHistory(() -> new As400RecoveryTestSupport.FileHistory(file), Configuration.empty(), config.policy.sourcePartition());
     }
 
     private static Map<String, String> legacyProperties(boolean credentials) throws Exception {

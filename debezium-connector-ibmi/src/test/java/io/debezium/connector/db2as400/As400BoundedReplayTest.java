@@ -45,7 +45,7 @@ class As400BoundedReplayTest {
             assertThat(polls).isGreaterThan(1);
             assertThat(saved).containsEntry("completed_through.sequence", "59");
         }
-        assertThat(As400BindingHistoryTest.data(records)).containsExactly("c:A:8", "t:B", "c:B:100", "c:A:9");
+        assertThat(As400RecoveryTestSupport.data(records)).containsExactly("c:A:8", "t:B", "c:B:100", "c:A:9");
     }
 
     @Test
@@ -65,7 +65,7 @@ class As400BoundedReplayTest {
                 assertThat(progress.scan().orElseThrow().offset().intValueExact()).isLessThan(42);
                 assertThat(progress.checkpoint()).isEqualTo(durable);
             }
-            assertThat(As400BindingHistoryTest.data(records)).containsExactly("c:A:8");
+            assertThat(As400RecoveryTestSupport.data(records)).containsExactly("c:A:8");
         }
         try (var output = f.output(); var runtime = f.runtime(durable, (offset, scan) -> f.reader.readPrefix(offset, scan.orElse(null)), output, records::add)) {
             var saved = durable;
@@ -74,7 +74,7 @@ class As400BoundedReplayTest {
                 var progress = runtime.poll(saved);
                 if (progress.scan().orElseThrow().offset().intValueExact() < 42) {
                     assertThat(progress.checkpoint()).isEqualTo(durable);
-                    assertThat(As400BindingHistoryTest.data(records)).containsExactly("c:A:8");
+                    assertThat(As400RecoveryTestSupport.data(records)).containsExactly("c:A:8");
                 }
                 saved = progress.checkpoint();
                 assertThat(++polls).isLessThan(50);
@@ -83,7 +83,7 @@ class As400BoundedReplayTest {
                 }
             }
         }
-        assertThat(As400BindingHistoryTest.data(records)).containsExactly("c:A:8", "t:B", "c:B:100", "c:A:9");
+        assertThat(As400RecoveryTestSupport.data(records)).containsExactly("c:A:8", "t:B", "c:B:100", "c:A:9");
     }
 
     @ParameterizedTest

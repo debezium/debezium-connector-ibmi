@@ -19,7 +19,7 @@ class As400NativeConnectProfileTest {
 
     @Test
     void nativeTestProfileRejectsPartialProjectionAndNullableKeyLayouts() throws Exception {
-        var definition = new As400BindingHistoryTest.Fixture(directory).definitions.get(0);
+        var definition = new As400RecoveryTestSupport.Fixture(directory).definitions.get(0);
         As400NativeConnectProbeConnector.requireIntegerTable(definition);
         var withoutKey = new As400BindingDefinition(definition.identity(), definition.schema().edit().setPrimaryKeyNames(List.of()).create(), definition.codecs());
         assertThrows(IllegalArgumentException.class, () -> As400NativeConnectProbeConnector.requireIntegerTable(withoutKey));

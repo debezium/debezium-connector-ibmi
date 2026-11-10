@@ -35,7 +35,7 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import io.debezium.config.Configuration;
-import io.debezium.connector.db2as400.As400BindingHistoryTest.Fixture;
+import io.debezium.connector.db2as400.As400RecoveryTestSupport.Fixture;
 
 class As400InitializationTaskTest {
     @TempDir
@@ -97,7 +97,7 @@ class As400InitializationTaskTest {
             assertThat(run.input.handoffs).hasValue(0);
             run.commit(initial);
             var streaming = run.throughCheckpoint("42");
-            assertThat(As400BindingHistoryTest.data(streaming)).containsExactly("c:DCOC1107.A:8");
+            assertThat(As400RecoveryTestSupport.data(streaming)).containsExactly("c:DCOC1107.A:8");
             assertThat(run.input.handoffs).hasValue(1);
             assertThat(run.input.heldSession).isFalse();
             run.ack(streaming);
@@ -135,7 +135,7 @@ class As400InitializationTaskTest {
                 replacement.input.tail = 64;
                 replacement.start();
                 var records = replacement.throughCheckpoint("59");
-                assertThat(As400BindingHistoryTest.data(records)).containsExactly("c:DCOC1107.A:8", "t:DCOC1107.B", "c:DCOC1107.B:100", "c:DCOC1107.A:9");
+                assertThat(As400RecoveryTestSupport.data(records)).containsExactly("c:DCOC1107.A:8", "t:DCOC1107.B", "c:DCOC1107.B:100", "c:DCOC1107.A:9");
                 replacement.ack(records);
             }
         }

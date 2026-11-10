@@ -1,0 +1,2526 @@
+{
+  "profile": "late-membership-diagnostic-projection-v1",
+  "startup_proof": false,
+  "metadata": {
+    "profile": "offlock-native-metadata-candidate-v1",
+    "outside_lock": true,
+    "startup_proof": false,
+    "library": "DCNC0959",
+    "targets": [
+      {
+        "library": "DCNC0959",
+        "file": "A",
+        "member": "A"
+      },
+      {
+        "library": "DCNC0959",
+        "file": "B",
+        "member": "B"
+      },
+      {
+        "library": "DCNC0959",
+        "file": "M",
+        "member": "M"
+      },
+      {
+        "library": "DCNC0959",
+        "file": "U",
+        "member": "U"
+      }
+    ],
+    "queries": [
+      {
+        "name": "journal",
+        "phase": "before",
+        "parameters": [
+          "DCNC0959",
+          "QSQJRN"
+        ],
+        "sql": "SELECT JOURNAL_LIBRARY, JOURNAL_NAME, JOURNAL_TYPE, JOURNAL_STATE, ASP_NUMBER, JOURNAL_ASPGRP,\n       ATTACHED_JOURNAL_RECEIVER_LIBRARY, ATTACHED_JOURNAL_RECEIVER_NAME,\n       REMOVE_INTERNAL_ENTRIES, REMOVE_FIXED_LENGTH_DETAIL, MINIMIZE_ESD_FOR_FILES, JOURNAL_CACHE\nFROM QSYS2.JOURNAL_INFO WHERE JOURNAL_LIBRARY = ? AND JOURNAL_NAME = ?\n",
+        "rows": [
+          {
+            "JOURNAL_LIBRARY": "DCNC0959",
+            "JOURNAL_NAME": "QSQJRN",
+            "JOURNAL_TYPE": "*LOCAL",
+            "JOURNAL_STATE": "*ACTIVE",
+            "ASP_NUMBER": 1,
+            "JOURNAL_ASPGRP": "*SYSBAS",
+            "ATTACHED_JOURNAL_RECEIVER_LIBRARY": "DCNC0959",
+            "ATTACHED_JOURNAL_RECEIVER_NAME": "QSQJRN0002",
+            "REMOVE_INTERNAL_ENTRIES": "NO",
+            "REMOVE_FIXED_LENGTH_DETAIL": "NO",
+            "MINIMIZE_ESD_FOR_FILES": "NO",
+            "JOURNAL_CACHE": "NO"
+          }
+        ]
+      },
+      {
+        "name": "receivers",
+        "phase": "before",
+        "parameters": [
+          "DCNC0959",
+          "QSQJRN"
+        ],
+        "sql": "SELECT JOURNAL_LIBRARY, JOURNAL_NAME, JOURNAL_RECEIVER_LIBRARY, JOURNAL_RECEIVER_NAME,\n       JOURNAL_RECEIVER_ASP_NUMBER, STATUS, FIRST_SEQUENCE_NUMBER, LAST_SEQUENCE_NUMBER,\n       PREVIOUS_JOURNAL_RECEIVER_LIBRARY, PREVIOUS_JOURNAL_RECEIVER,\n       NEXT_JOURNAL_RECEIVER_LIBRARY, NEXT_JOURNAL_RECEIVER,\n       MINIMIZE_ESD_FOR_FILES, FIXED_LENGTH_DATA_INCLUDES_JOB_NAME, FIXED_LENGTH_DATA_INCLUDES_THREAD_ID,\n       FIXED_LENGTH_DATA_INCLUDES_LOGICAL_UNIT_OF_WORK_ID, FIXED_LENGTH_DATA_INCLUDES_TRANSACTION_ID\nFROM QSYS2.JOURNAL_RECEIVER_INFO WHERE JOURNAL_LIBRARY = ? AND JOURNAL_NAME = ?\n",
+        "rows": [
+          {
+            "JOURNAL_LIBRARY": "DCNC0959",
+            "JOURNAL_NAME": "QSQJRN",
+            "JOURNAL_RECEIVER_LIBRARY": "DCNC0959",
+            "JOURNAL_RECEIVER_NAME": "QSQJRN0001",
+            "JOURNAL_RECEIVER_ASP_NUMBER": 1,
+            "STATUS": "ONLINE",
+            "FIRST_SEQUENCE_NUMBER": "1",
+            "LAST_SEQUENCE_NUMBER": "3",
+            "PREVIOUS_JOURNAL_RECEIVER_LIBRARY": null,
+            "PREVIOUS_JOURNAL_RECEIVER": null,
+            "NEXT_JOURNAL_RECEIVER_LIBRARY": "DCNC0959",
+            "NEXT_JOURNAL_RECEIVER": "QSQJRN0002",
+            "MINIMIZE_ESD_FOR_FILES": "NO",
+            "FIXED_LENGTH_DATA_INCLUDES_JOB_NAME": "YES",
+            "FIXED_LENGTH_DATA_INCLUDES_THREAD_ID": "NO",
+            "FIXED_LENGTH_DATA_INCLUDES_LOGICAL_UNIT_OF_WORK_ID": "NO",
+            "FIXED_LENGTH_DATA_INCLUDES_TRANSACTION_ID": "NO"
+          },
+          {
+            "JOURNAL_LIBRARY": "DCNC0959",
+            "JOURNAL_NAME": "QSQJRN",
+            "JOURNAL_RECEIVER_LIBRARY": "DCNC0959",
+            "JOURNAL_RECEIVER_NAME": "QSQJRN0002",
+            "JOURNAL_RECEIVER_ASP_NUMBER": 1,
+            "STATUS": "ATTACHED",
+            "FIRST_SEQUENCE_NUMBER": "4",
+            "LAST_SEQUENCE_NUMBER": "45",
+            "PREVIOUS_JOURNAL_RECEIVER_LIBRARY": "DCNC0959",
+            "PREVIOUS_JOURNAL_RECEIVER": "QSQJRN0001",
+            "NEXT_JOURNAL_RECEIVER_LIBRARY": null,
+            "NEXT_JOURNAL_RECEIVER": null,
+            "MINIMIZE_ESD_FOR_FILES": "NO",
+            "FIXED_LENGTH_DATA_INCLUDES_JOB_NAME": "YES",
+            "FIXED_LENGTH_DATA_INCLUDES_THREAD_ID": "YES",
+            "FIXED_LENGTH_DATA_INCLUDES_LOGICAL_UNIT_OF_WORK_ID": "NO",
+            "FIXED_LENGTH_DATA_INCLUDES_TRANSACTION_ID": "NO"
+          }
+        ]
+      },
+      {
+        "name": "identity",
+        "phase": "before",
+        "parameters": [
+          "/QSYS.LIB/DCNC0959.LIB/QSQJRN.JRN",
+          "*JRN"
+        ],
+        "sql": "SELECT CASE WHEN LENGTH(PATH_NAME) <= 55 THEN CAST(PATH_NAME AS VARCHAR(55) CCSID 1208) ELSE NULL END AS PATH_NAME,\n       LENGTH(PATH_NAME) AS PATH_LENGTH, OBJECT_TYPE, ASP_NUMBER, STORED_LOCAL,\n       CASE WHEN SYMBOLIC_LINK IS NULL THEN 0 ELSE 1 END AS HAS_SYMBOLIC_LINK,\n       FILE_SYSTEM_IDENTIFIER, FILE_IDENTIFIER_NUMBER, GENERATION_IDENTIFIER\nFROM TABLE(QSYS2.IFS_OBJECT_STATISTICS(\n    START_PATH_NAME => ?, SUBTREE_DIRECTORIES => 'NO', OBJECT_TYPE_LIST => ?, IGNORE_ERRORS => 'NO')) AS O\n",
+        "rows": [
+          {
+            "PATH_NAME": "/QSYS.LIB/DCNC0959.LIB/QSQJRN.JRN",
+            "PATH_LENGTH": 33,
+            "OBJECT_TYPE": "*JRN",
+            "ASP_NUMBER": 1,
+            "STORED_LOCAL": "YES",
+            "HAS_SYMBOLIC_LINK": 0,
+            "FILE_SYSTEM_IDENTIFIER": 141016661229569,
+            "FILE_IDENTIFIER_NUMBER": 488889,
+            "GENERATION_IDENTIFIER": 2829710039
+          }
+        ]
+      },
+      {
+        "name": "identity",
+        "phase": "before",
+        "parameters": [
+          "/QSYS.LIB/DCNC0959.LIB/QSQJRN0002.JRNRCV",
+          "*JRNRCV"
+        ],
+        "sql": "SELECT CASE WHEN LENGTH(PATH_NAME) <= 55 THEN CAST(PATH_NAME AS VARCHAR(55) CCSID 1208) ELSE NULL END AS PATH_NAME,\n       LENGTH(PATH_NAME) AS PATH_LENGTH, OBJECT_TYPE, ASP_NUMBER, STORED_LOCAL,\n       CASE WHEN SYMBOLIC_LINK IS NULL THEN 0 ELSE 1 END AS HAS_SYMBOLIC_LINK,\n       FILE_SYSTEM_IDENTIFIER, FILE_IDENTIFIER_NUMBER, GENERATION_IDENTIFIER\nFROM TABLE(QSYS2.IFS_OBJECT_STATISTICS(\n    START_PATH_NAME => ?, SUBTREE_DIRECTORIES => 'NO', OBJECT_TYPE_LIST => ?, IGNORE_ERRORS => 'NO')) AS O\n",
+        "rows": [
+          {
+            "PATH_NAME": "/QSYS.LIB/DCNC0959.LIB/QSQJRN0002.JRNRCV",
+            "PATH_LENGTH": 40,
+            "OBJECT_TYPE": "*JRNRCV",
+            "ASP_NUMBER": 1,
+            "STORED_LOCAL": "YES",
+            "HAS_SYMBOLIC_LINK": 0,
+            "FILE_SYSTEM_IDENTIFIER": 141016661229569,
+            "FILE_IDENTIFIER_NUMBER": 488890,
+            "GENERATION_IDENTIFIER": 2829710039
+          }
+        ]
+      },
+      {
+        "name": "member",
+        "phase": "before",
+        "parameters": [
+          "DCNC0959",
+          "A"
+        ],
+        "sql": "SELECT SYSTEM_TABLE_SCHEMA, SYSTEM_TABLE_NAME, SYSTEM_TABLE_MEMBER, TABLE_SCHEMA, TABLE_NAME\nFROM QSYS2.SYSPARTITIONSTAT WHERE SYSTEM_TABLE_SCHEMA = ? AND SYSTEM_TABLE_NAME = ?\n",
+        "rows": [
+          {
+            "SYSTEM_TABLE_SCHEMA": "DCNC0959  ",
+            "SYSTEM_TABLE_NAME": "A         ",
+            "SYSTEM_TABLE_MEMBER": "A         ",
+            "TABLE_SCHEMA": "DCNC0959",
+            "TABLE_NAME": "A"
+          }
+        ]
+      },
+      {
+        "name": "format",
+        "phase": "before",
+        "parameters": [
+          "DCNC0959",
+          "A"
+        ],
+        "sql": "SELECT SYSTEM_TABLE_SCHEMA, SYSTEM_TABLE_NAME, NATIVE_TYPE, FILE_TYPE,\n       NUMBER_MEMBERS, NUMBER_RECORD_FORMATS, FORMAT_LEVEL_ID, FORMAT_NAME, RECORD_LENGTH, NUMBER_FIELDS,\n       CONTAINS_LOB, CONTAINS_VARYING_LENGTH\nFROM QSYS2.SYSFILES WHERE SYSTEM_TABLE_SCHEMA = ? AND SYSTEM_TABLE_NAME = ?\n",
+        "rows": [
+          {
+            "SYSTEM_TABLE_SCHEMA": "DCNC0959",
+            "SYSTEM_TABLE_NAME": "A",
+            "NATIVE_TYPE": "PHYSICAL",
+            "FILE_TYPE": "DATA",
+            "NUMBER_MEMBERS": 1,
+            "NUMBER_RECORD_FORMATS": 1,
+            "FORMAT_LEVEL_ID": "29087D5938DDA",
+            "FORMAT_NAME": "A",
+            "RECORD_LENGTH": 4,
+            "NUMBER_FIELDS": 1,
+            "CONTAINS_LOB": "NO",
+            "CONTAINS_VARYING_LENGTH": "NO"
+          }
+        ]
+      },
+      {
+        "name": "object",
+        "phase": "before",
+        "parameters": [
+          "/QSYS.LIB/DCNC0959.LIB/A.FILE",
+          "*FILE"
+        ],
+        "sql": "SELECT CASE WHEN LENGTH(PATH_NAME) <= 55 THEN CAST(PATH_NAME AS VARCHAR(55) CCSID 1208) ELSE NULL END AS PATH_NAME,\n       LENGTH(PATH_NAME) AS PATH_LENGTH, OBJECT_TYPE, ASP_NUMBER, STORED_LOCAL,\n       CASE WHEN SYMBOLIC_LINK IS NULL THEN 0 ELSE 1 END AS HAS_SYMBOLIC_LINK,\n       FILE_SYSTEM_IDENTIFIER, FILE_IDENTIFIER_NUMBER, GENERATION_IDENTIFIER,\n       JOURNALED, JOURNAL_LIBRARY, JOURNAL_NAME, HEX(JOURNAL_IDENTIFIER) AS OBJECT_JID\nFROM TABLE(QSYS2.IFS_OBJECT_STATISTICS(\n    START_PATH_NAME => ?, SUBTREE_DIRECTORIES => 'NO', OBJECT_TYPE_LIST => ?, IGNORE_ERRORS => 'NO')) AS O\n",
+        "rows": [
+          {
+            "PATH_NAME": "/QSYS.LIB/DCNC0959.LIB/A.FILE",
+            "PATH_LENGTH": 29,
+            "OBJECT_TYPE": "*FILE",
+            "ASP_NUMBER": 1,
+            "STORED_LOCAL": "YES",
+            "HAS_SYMBOLIC_LINK": 0,
+            "FILE_SYSTEM_IDENTIFIER": 141016661229569,
+            "FILE_IDENTIFIER_NUMBER": 488891,
+            "GENERATION_IDENTIFIER": 2829710040,
+            "JOURNALED": "YES",
+            "JOURNAL_LIBRARY": "DCNC0959",
+            "JOURNAL_NAME": "QSQJRN",
+            "OBJECT_JID": "E94000005191F38D0003"
+          }
+        ]
+      },
+      {
+        "name": "object",
+        "phase": "before",
+        "parameters": [
+          "/QSYS.LIB/DCNC0959.LIB/A.FILE/A.MBR",
+          "*MBR"
+        ],
+        "sql": "SELECT CASE WHEN LENGTH(PATH_NAME) <= 55 THEN CAST(PATH_NAME AS VARCHAR(55) CCSID 1208) ELSE NULL END AS PATH_NAME,\n       LENGTH(PATH_NAME) AS PATH_LENGTH, OBJECT_TYPE, ASP_NUMBER, STORED_LOCAL,\n       CASE WHEN SYMBOLIC_LINK IS NULL THEN 0 ELSE 1 END AS HAS_SYMBOLIC_LINK,\n       FILE_SYSTEM_IDENTIFIER, FILE_IDENTIFIER_NUMBER, GENERATION_IDENTIFIER,\n       JOURNALED, JOURNAL_LIBRARY, JOURNAL_NAME, HEX(JOURNAL_IDENTIFIER) AS OBJECT_JID\nFROM TABLE(QSYS2.IFS_OBJECT_STATISTICS(\n    START_PATH_NAME => ?, SUBTREE_DIRECTORIES => 'NO', OBJECT_TYPE_LIST => ?, IGNORE_ERRORS => 'NO')) AS O\n",
+        "rows": [
+          {
+            "PATH_NAME": "/QSYS.LIB/DCNC0959.LIB/A.FILE/A.MBR",
+            "PATH_LENGTH": 35,
+            "OBJECT_TYPE": "*MBR",
+            "ASP_NUMBER": 1,
+            "STORED_LOCAL": "YES",
+            "HAS_SYMBOLIC_LINK": 0,
+            "FILE_SYSTEM_IDENTIFIER": 141016661229569,
+            "FILE_IDENTIFIER_NUMBER": 488892,
+            "GENERATION_IDENTIFIER": 2829710040,
+            "JOURNALED": "YES",
+            "JOURNAL_LIBRARY": "DCNC0959",
+            "JOURNAL_NAME": "QSQJRN",
+            "OBJECT_JID": "E94000005191F38D0004"
+          }
+        ]
+      },
+      {
+        "name": "member",
+        "phase": "before",
+        "parameters": [
+          "DCNC0959",
+          "B"
+        ],
+        "sql": "SELECT SYSTEM_TABLE_SCHEMA, SYSTEM_TABLE_NAME, SYSTEM_TABLE_MEMBER, TABLE_SCHEMA, TABLE_NAME\nFROM QSYS2.SYSPARTITIONSTAT WHERE SYSTEM_TABLE_SCHEMA = ? AND SYSTEM_TABLE_NAME = ?\n",
+        "rows": [
+          {
+            "SYSTEM_TABLE_SCHEMA": "DCNC0959  ",
+            "SYSTEM_TABLE_NAME": "B         ",
+            "SYSTEM_TABLE_MEMBER": "B         ",
+            "TABLE_SCHEMA": "DCNC0959",
+            "TABLE_NAME": "B"
+          }
+        ]
+      },
+      {
+        "name": "format",
+        "phase": "before",
+        "parameters": [
+          "DCNC0959",
+          "B"
+        ],
+        "sql": "SELECT SYSTEM_TABLE_SCHEMA, SYSTEM_TABLE_NAME, NATIVE_TYPE, FILE_TYPE,\n       NUMBER_MEMBERS, NUMBER_RECORD_FORMATS, FORMAT_LEVEL_ID, FORMAT_NAME, RECORD_LENGTH, NUMBER_FIELDS,\n       CONTAINS_LOB, CONTAINS_VARYING_LENGTH\nFROM QSYS2.SYSFILES WHERE SYSTEM_TABLE_SCHEMA = ? AND SYSTEM_TABLE_NAME = ?\n",
+        "rows": [
+          {
+            "SYSTEM_TABLE_SCHEMA": "DCNC0959",
+            "SYSTEM_TABLE_NAME": "B",
+            "NATIVE_TYPE": "PHYSICAL",
+            "FILE_TYPE": "DATA",
+            "NUMBER_MEMBERS": 1,
+            "NUMBER_RECORD_FORMATS": 1,
+            "FORMAT_LEVEL_ID": "29187D5938DDA",
+            "FORMAT_NAME": "B",
+            "RECORD_LENGTH": 4,
+            "NUMBER_FIELDS": 1,
+            "CONTAINS_LOB": "NO",
+            "CONTAINS_VARYING_LENGTH": "NO"
+          }
+        ]
+      },
+      {
+        "name": "object",
+        "phase": "before",
+        "parameters": [
+          "/QSYS.LIB/DCNC0959.LIB/B.FILE",
+          "*FILE"
+        ],
+        "sql": "SELECT CASE WHEN LENGTH(PATH_NAME) <= 55 THEN CAST(PATH_NAME AS VARCHAR(55) CCSID 1208) ELSE NULL END AS PATH_NAME,\n       LENGTH(PATH_NAME) AS PATH_LENGTH, OBJECT_TYPE, ASP_NUMBER, STORED_LOCAL,\n       CASE WHEN SYMBOLIC_LINK IS NULL THEN 0 ELSE 1 END AS HAS_SYMBOLIC_LINK,\n       FILE_SYSTEM_IDENTIFIER, FILE_IDENTIFIER_NUMBER, GENERATION_IDENTIFIER,\n       JOURNALED, JOURNAL_LIBRARY, JOURNAL_NAME, HEX(JOURNAL_IDENTIFIER) AS OBJECT_JID\nFROM TABLE(QSYS2.IFS_OBJECT_STATISTICS(\n    START_PATH_NAME => ?, SUBTREE_DIRECTORIES => 'NO', OBJECT_TYPE_LIST => ?, IGNORE_ERRORS => 'NO')) AS O\n",
+        "rows": [
+          {
+            "PATH_NAME": "/QSYS.LIB/DCNC0959.LIB/B.FILE",
+            "PATH_LENGTH": 29,
+            "OBJECT_TYPE": "*FILE",
+            "ASP_NUMBER": 1,
+            "STORED_LOCAL": "YES",
+            "HAS_SYMBOLIC_LINK": 0,
+            "FILE_SYSTEM_IDENTIFIER": 141016661229569,
+            "FILE_IDENTIFIER_NUMBER": 488893,
+            "GENERATION_IDENTIFIER": 2829710040,
+            "JOURNALED": "YES",
+            "JOURNAL_LIBRARY": "DCNC0959",
+            "JOURNAL_NAME": "QSQJRN",
+            "OBJECT_JID": "E94000005191F38D0005"
+          }
+        ]
+      },
+      {
+        "name": "object",
+        "phase": "before",
+        "parameters": [
+          "/QSYS.LIB/DCNC0959.LIB/B.FILE/B.MBR",
+          "*MBR"
+        ],
+        "sql": "SELECT CASE WHEN LENGTH(PATH_NAME) <= 55 THEN CAST(PATH_NAME AS VARCHAR(55) CCSID 1208) ELSE NULL END AS PATH_NAME,\n       LENGTH(PATH_NAME) AS PATH_LENGTH, OBJECT_TYPE, ASP_NUMBER, STORED_LOCAL,\n       CASE WHEN SYMBOLIC_LINK IS NULL THEN 0 ELSE 1 END AS HAS_SYMBOLIC_LINK,\n       FILE_SYSTEM_IDENTIFIER, FILE_IDENTIFIER_NUMBER, GENERATION_IDENTIFIER,\n       JOURNALED, JOURNAL_LIBRARY, JOURNAL_NAME, HEX(JOURNAL_IDENTIFIER) AS OBJECT_JID\nFROM TABLE(QSYS2.IFS_OBJECT_STATISTICS(\n    START_PATH_NAME => ?, SUBTREE_DIRECTORIES => 'NO', OBJECT_TYPE_LIST => ?, IGNORE_ERRORS => 'NO')) AS O\n",
+        "rows": [
+          {
+            "PATH_NAME": "/QSYS.LIB/DCNC0959.LIB/B.FILE/B.MBR",
+            "PATH_LENGTH": 35,
+            "OBJECT_TYPE": "*MBR",
+            "ASP_NUMBER": 1,
+            "STORED_LOCAL": "YES",
+            "HAS_SYMBOLIC_LINK": 0,
+            "FILE_SYSTEM_IDENTIFIER": 141016661229569,
+            "FILE_IDENTIFIER_NUMBER": 488950,
+            "GENERATION_IDENTIFIER": 2829710039,
+            "JOURNALED": "YES",
+            "JOURNAL_LIBRARY": "DCNC0959",
+            "JOURNAL_NAME": "QSQJRN",
+            "OBJECT_JID": "E94000005191F38D0006"
+          }
+        ]
+      },
+      {
+        "name": "member",
+        "phase": "before",
+        "parameters": [
+          "DCNC0959",
+          "M"
+        ],
+        "sql": "SELECT SYSTEM_TABLE_SCHEMA, SYSTEM_TABLE_NAME, SYSTEM_TABLE_MEMBER, TABLE_SCHEMA, TABLE_NAME\nFROM QSYS2.SYSPARTITIONSTAT WHERE SYSTEM_TABLE_SCHEMA = ? AND SYSTEM_TABLE_NAME = ?\n",
+        "rows": [
+          {
+            "SYSTEM_TABLE_SCHEMA": "DCNC0959  ",
+            "SYSTEM_TABLE_NAME": "M         ",
+            "SYSTEM_TABLE_MEMBER": "M         ",
+            "TABLE_SCHEMA": "DCNC0959",
+            "TABLE_NAME": "M"
+          }
+        ]
+      },
+      {
+        "name": "format",
+        "phase": "before",
+        "parameters": [
+          "DCNC0959",
+          "M"
+        ],
+        "sql": "SELECT SYSTEM_TABLE_SCHEMA, SYSTEM_TABLE_NAME, NATIVE_TYPE, FILE_TYPE,\n       NUMBER_MEMBERS, NUMBER_RECORD_FORMATS, FORMAT_LEVEL_ID, FORMAT_NAME, RECORD_LENGTH, NUMBER_FIELDS,\n       CONTAINS_LOB, CONTAINS_VARYING_LENGTH\nFROM QSYS2.SYSFILES WHERE SYSTEM_TABLE_SCHEMA = ? AND SYSTEM_TABLE_NAME = ?\n",
+        "rows": [
+          {
+            "SYSTEM_TABLE_SCHEMA": "DCNC0959",
+            "SYSTEM_TABLE_NAME": "M",
+            "NATIVE_TYPE": "PHYSICAL",
+            "FILE_TYPE": "DATA",
+            "NUMBER_MEMBERS": 1,
+            "NUMBER_RECORD_FORMATS": 1,
+            "FORMAT_LEVEL_ID": "2A387D5938DDA",
+            "FORMAT_NAME": "M",
+            "RECORD_LENGTH": 4,
+            "NUMBER_FIELDS": 1,
+            "CONTAINS_LOB": "NO",
+            "CONTAINS_VARYING_LENGTH": "NO"
+          }
+        ]
+      },
+      {
+        "name": "object",
+        "phase": "before",
+        "parameters": [
+          "/QSYS.LIB/DCNC0959.LIB/M.FILE",
+          "*FILE"
+        ],
+        "sql": "SELECT CASE WHEN LENGTH(PATH_NAME) <= 55 THEN CAST(PATH_NAME AS VARCHAR(55) CCSID 1208) ELSE NULL END AS PATH_NAME,\n       LENGTH(PATH_NAME) AS PATH_LENGTH, OBJECT_TYPE, ASP_NUMBER, STORED_LOCAL,\n       CASE WHEN SYMBOLIC_LINK IS NULL THEN 0 ELSE 1 END AS HAS_SYMBOLIC_LINK,\n       FILE_SYSTEM_IDENTIFIER, FILE_IDENTIFIER_NUMBER, GENERATION_IDENTIFIER,\n       JOURNALED, JOURNAL_LIBRARY, JOURNAL_NAME, HEX(JOURNAL_IDENTIFIER) AS OBJECT_JID\nFROM TABLE(QSYS2.IFS_OBJECT_STATISTICS(\n    START_PATH_NAME => ?, SUBTREE_DIRECTORIES => 'NO', OBJECT_TYPE_LIST => ?, IGNORE_ERRORS => 'NO')) AS O\n",
+        "rows": [
+          {
+            "PATH_NAME": "/QSYS.LIB/DCNC0959.LIB/M.FILE",
+            "PATH_LENGTH": 29,
+            "OBJECT_TYPE": "*FILE",
+            "ASP_NUMBER": 1,
+            "STORED_LOCAL": "YES",
+            "HAS_SYMBOLIC_LINK": 0,
+            "FILE_SYSTEM_IDENTIFIER": 141016661229569,
+            "FILE_IDENTIFIER_NUMBER": 488952,
+            "GENERATION_IDENTIFIER": 2829710040,
+            "JOURNALED": "YES",
+            "JOURNAL_LIBRARY": "DCNC0959",
+            "JOURNAL_NAME": "QSQJRN",
+            "OBJECT_JID": "E94000005191F38D0007"
+          }
+        ]
+      },
+      {
+        "name": "object",
+        "phase": "before",
+        "parameters": [
+          "/QSYS.LIB/DCNC0959.LIB/M.FILE/M.MBR",
+          "*MBR"
+        ],
+        "sql": "SELECT CASE WHEN LENGTH(PATH_NAME) <= 55 THEN CAST(PATH_NAME AS VARCHAR(55) CCSID 1208) ELSE NULL END AS PATH_NAME,\n       LENGTH(PATH_NAME) AS PATH_LENGTH, OBJECT_TYPE, ASP_NUMBER, STORED_LOCAL,\n       CASE WHEN SYMBOLIC_LINK IS NULL THEN 0 ELSE 1 END AS HAS_SYMBOLIC_LINK,\n       FILE_SYSTEM_IDENTIFIER, FILE_IDENTIFIER_NUMBER, GENERATION_IDENTIFIER,\n       JOURNALED, JOURNAL_LIBRARY, JOURNAL_NAME, HEX(JOURNAL_IDENTIFIER) AS OBJECT_JID\nFROM TABLE(QSYS2.IFS_OBJECT_STATISTICS(\n    START_PATH_NAME => ?, SUBTREE_DIRECTORIES => 'NO', OBJECT_TYPE_LIST => ?, IGNORE_ERRORS => 'NO')) AS O\n",
+        "rows": [
+          {
+            "PATH_NAME": "/QSYS.LIB/DCNC0959.LIB/M.FILE/M.MBR",
+            "PATH_LENGTH": 35,
+            "OBJECT_TYPE": "*MBR",
+            "ASP_NUMBER": 1,
+            "STORED_LOCAL": "YES",
+            "HAS_SYMBOLIC_LINK": 0,
+            "FILE_SYSTEM_IDENTIFIER": 141016661229569,
+            "FILE_IDENTIFIER_NUMBER": 488953,
+            "GENERATION_IDENTIFIER": 2829710039,
+            "JOURNALED": "YES",
+            "JOURNAL_LIBRARY": "DCNC0959",
+            "JOURNAL_NAME": "QSQJRN",
+            "OBJECT_JID": "E94000005191F38D0008"
+          }
+        ]
+      },
+      {
+        "name": "member",
+        "phase": "before",
+        "parameters": [
+          "DCNC0959",
+          "U"
+        ],
+        "sql": "SELECT SYSTEM_TABLE_SCHEMA, SYSTEM_TABLE_NAME, SYSTEM_TABLE_MEMBER, TABLE_SCHEMA, TABLE_NAME\nFROM QSYS2.SYSPARTITIONSTAT WHERE SYSTEM_TABLE_SCHEMA = ? AND SYSTEM_TABLE_NAME = ?\n",
+        "rows": [
+          {
+            "SYSTEM_TABLE_SCHEMA": "DCNC0959  ",
+            "SYSTEM_TABLE_NAME": "U         ",
+            "SYSTEM_TABLE_MEMBER": "U         ",
+            "TABLE_SCHEMA": "DCNC0959",
+            "TABLE_NAME": "U"
+          }
+        ]
+      },
+      {
+        "name": "format",
+        "phase": "before",
+        "parameters": [
+          "DCNC0959",
+          "U"
+        ],
+        "sql": "SELECT SYSTEM_TABLE_SCHEMA, SYSTEM_TABLE_NAME, NATIVE_TYPE, FILE_TYPE,\n       NUMBER_MEMBERS, NUMBER_RECORD_FORMATS, FORMAT_LEVEL_ID, FORMAT_NAME, RECORD_LENGTH, NUMBER_FIELDS,\n       CONTAINS_LOB, CONTAINS_VARYING_LENGTH\nFROM QSYS2.SYSFILES WHERE SYSTEM_TABLE_SCHEMA = ? AND SYSTEM_TABLE_NAME = ?\n",
+        "rows": [
+          {
+            "SYSTEM_TABLE_SCHEMA": "DCNC0959",
+            "SYSTEM_TABLE_NAME": "U",
+            "NATIVE_TYPE": "PHYSICAL",
+            "FILE_TYPE": "DATA",
+            "NUMBER_MEMBERS": 1,
+            "NUMBER_RECORD_FORMATS": 1,
+            "FORMAT_LEVEL_ID": "2B387D5938DDA",
+            "FORMAT_NAME": "U",
+            "RECORD_LENGTH": 4,
+            "NUMBER_FIELDS": 1,
+            "CONTAINS_LOB": "NO",
+            "CONTAINS_VARYING_LENGTH": "NO"
+          }
+        ]
+      },
+      {
+        "name": "object",
+        "phase": "before",
+        "parameters": [
+          "/QSYS.LIB/DCNC0959.LIB/U.FILE",
+          "*FILE"
+        ],
+        "sql": "SELECT CASE WHEN LENGTH(PATH_NAME) <= 55 THEN CAST(PATH_NAME AS VARCHAR(55) CCSID 1208) ELSE NULL END AS PATH_NAME,\n       LENGTH(PATH_NAME) AS PATH_LENGTH, OBJECT_TYPE, ASP_NUMBER, STORED_LOCAL,\n       CASE WHEN SYMBOLIC_LINK IS NULL THEN 0 ELSE 1 END AS HAS_SYMBOLIC_LINK,\n       FILE_SYSTEM_IDENTIFIER, FILE_IDENTIFIER_NUMBER, GENERATION_IDENTIFIER,\n       JOURNALED, JOURNAL_LIBRARY, JOURNAL_NAME, HEX(JOURNAL_IDENTIFIER) AS OBJECT_JID\nFROM TABLE(QSYS2.IFS_OBJECT_STATISTICS(\n    START_PATH_NAME => ?, SUBTREE_DIRECTORIES => 'NO', OBJECT_TYPE_LIST => ?, IGNORE_ERRORS => 'NO')) AS O\n",
+        "rows": [
+          {
+            "PATH_NAME": "/QSYS.LIB/DCNC0959.LIB/U.FILE",
+            "PATH_LENGTH": 29,
+            "OBJECT_TYPE": "*FILE",
+            "ASP_NUMBER": 1,
+            "STORED_LOCAL": "YES",
+            "HAS_SYMBOLIC_LINK": 0,
+            "FILE_SYSTEM_IDENTIFIER": 141016661229569,
+            "FILE_IDENTIFIER_NUMBER": 488954,
+            "GENERATION_IDENTIFIER": 2829710039,
+            "JOURNALED": "YES",
+            "JOURNAL_LIBRARY": "DCNC0959",
+            "JOURNAL_NAME": "QSQJRN",
+            "OBJECT_JID": "E94000005191F38D0009"
+          }
+        ]
+      },
+      {
+        "name": "object",
+        "phase": "before",
+        "parameters": [
+          "/QSYS.LIB/DCNC0959.LIB/U.FILE/U.MBR",
+          "*MBR"
+        ],
+        "sql": "SELECT CASE WHEN LENGTH(PATH_NAME) <= 55 THEN CAST(PATH_NAME AS VARCHAR(55) CCSID 1208) ELSE NULL END AS PATH_NAME,\n       LENGTH(PATH_NAME) AS PATH_LENGTH, OBJECT_TYPE, ASP_NUMBER, STORED_LOCAL,\n       CASE WHEN SYMBOLIC_LINK IS NULL THEN 0 ELSE 1 END AS HAS_SYMBOLIC_LINK,\n       FILE_SYSTEM_IDENTIFIER, FILE_IDENTIFIER_NUMBER, GENERATION_IDENTIFIER,\n       JOURNALED, JOURNAL_LIBRARY, JOURNAL_NAME, HEX(JOURNAL_IDENTIFIER) AS OBJECT_JID\nFROM TABLE(QSYS2.IFS_OBJECT_STATISTICS(\n    START_PATH_NAME => ?, SUBTREE_DIRECTORIES => 'NO', OBJECT_TYPE_LIST => ?, IGNORE_ERRORS => 'NO')) AS O\n",
+        "rows": [
+          {
+            "PATH_NAME": "/QSYS.LIB/DCNC0959.LIB/U.FILE/U.MBR",
+            "PATH_LENGTH": 35,
+            "OBJECT_TYPE": "*MBR",
+            "ASP_NUMBER": 1,
+            "STORED_LOCAL": "YES",
+            "HAS_SYMBOLIC_LINK": 0,
+            "FILE_SYSTEM_IDENTIFIER": 141016661229569,
+            "FILE_IDENTIFIER_NUMBER": 488955,
+            "GENERATION_IDENTIFIER": 2829710039,
+            "JOURNALED": "YES",
+            "JOURNAL_LIBRARY": "DCNC0959",
+            "JOURNAL_NAME": "QSQJRN",
+            "OBJECT_JID": "E94000005191F38D000A"
+          }
+        ]
+      },
+      {
+        "name": "columns",
+        "phase": "layout",
+        "parameters": [
+          "DCNC0959",
+          "A"
+        ],
+        "sql": "SELECT TABLE_SCHEMA, TABLE_NAME, SYSTEM_TABLE_SCHEMA, SYSTEM_TABLE_NAME,\n       COLUMN_NAME, SYSTEM_COLUMN_NAME, ORDINAL_POSITION, DATA_TYPE, LENGTH,\n       NUMERIC_SCALE, CCSID, IS_NULLABLE, IS_IDENTITY, HIDDEN, HAS_FLDPROC,\n       BUFFER_POSITION, BUFFER_LENGTH, STORAGE, CHARACTER_OCTET_LENGTH,\n       DATETIME_PRECISION, DATE_FORMAT, DATE_SEPARATOR, TIME_FORMAT, TIME_SEPARATOR\nFROM QSYS2.SYSCOLUMNS2 WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? ORDER BY ORDINAL_POSITION\n",
+        "rows": [
+          {
+            "TABLE_SCHEMA": "DCNC0959",
+            "TABLE_NAME": "A",
+            "SYSTEM_TABLE_SCHEMA": "DCNC0959  ",
+            "SYSTEM_TABLE_NAME": "A         ",
+            "COLUMN_NAME": "ID",
+            "SYSTEM_COLUMN_NAME": "ID        ",
+            "ORDINAL_POSITION": 1,
+            "DATA_TYPE": "INTEGER ",
+            "LENGTH": 4,
+            "NUMERIC_SCALE": 0,
+            "CCSID": null,
+            "IS_NULLABLE": "N",
+            "IS_IDENTITY": "NO",
+            "HIDDEN": "N",
+            "HAS_FLDPROC": "N",
+            "BUFFER_POSITION": 1,
+            "BUFFER_LENGTH": 4,
+            "STORAGE": 4,
+            "CHARACTER_OCTET_LENGTH": null,
+            "DATETIME_PRECISION": null,
+            "DATE_FORMAT": null,
+            "DATE_SEPARATOR": null,
+            "TIME_FORMAT": null,
+            "TIME_SEPARATOR": null
+          }
+        ]
+      },
+      {
+        "name": "keys",
+        "phase": "layout",
+        "parameters": [
+          "DCNC0959",
+          "A"
+        ],
+        "sql": "SELECT K.COLUMN_NAME, K.ORDINAL_POSITION, K.CONSTRAINT_SCHEMA, K.CONSTRAINT_NAME\nFROM QSYS2.SYSKEYCST K JOIN QSYS2.SYSCST C\n  ON K.CONSTRAINT_SCHEMA = C.CONSTRAINT_SCHEMA AND K.CONSTRAINT_NAME = C.CONSTRAINT_NAME\nWHERE C.TABLE_SCHEMA = ? AND C.TABLE_NAME = ? AND C.CONSTRAINT_TYPE = 'PRIMARY KEY'\nORDER BY K.ORDINAL_POSITION\n",
+        "rows": [
+          {
+            "COLUMN_NAME": "ID",
+            "ORDINAL_POSITION": 1,
+            "CONSTRAINT_SCHEMA": "DCNC0959",
+            "CONSTRAINT_NAME": "Q_DCNC0959_A_ID_00001"
+          }
+        ]
+      },
+      {
+        "name": "columns",
+        "phase": "layout",
+        "parameters": [
+          "DCNC0959",
+          "B"
+        ],
+        "sql": "SELECT TABLE_SCHEMA, TABLE_NAME, SYSTEM_TABLE_SCHEMA, SYSTEM_TABLE_NAME,\n       COLUMN_NAME, SYSTEM_COLUMN_NAME, ORDINAL_POSITION, DATA_TYPE, LENGTH,\n       NUMERIC_SCALE, CCSID, IS_NULLABLE, IS_IDENTITY, HIDDEN, HAS_FLDPROC,\n       BUFFER_POSITION, BUFFER_LENGTH, STORAGE, CHARACTER_OCTET_LENGTH,\n       DATETIME_PRECISION, DATE_FORMAT, DATE_SEPARATOR, TIME_FORMAT, TIME_SEPARATOR\nFROM QSYS2.SYSCOLUMNS2 WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? ORDER BY ORDINAL_POSITION\n",
+        "rows": [
+          {
+            "TABLE_SCHEMA": "DCNC0959",
+            "TABLE_NAME": "B",
+            "SYSTEM_TABLE_SCHEMA": "DCNC0959  ",
+            "SYSTEM_TABLE_NAME": "B         ",
+            "COLUMN_NAME": "ID",
+            "SYSTEM_COLUMN_NAME": "ID        ",
+            "ORDINAL_POSITION": 1,
+            "DATA_TYPE": "INTEGER ",
+            "LENGTH": 4,
+            "NUMERIC_SCALE": 0,
+            "CCSID": null,
+            "IS_NULLABLE": "N",
+            "IS_IDENTITY": "NO",
+            "HIDDEN": "N",
+            "HAS_FLDPROC": "N",
+            "BUFFER_POSITION": 1,
+            "BUFFER_LENGTH": 4,
+            "STORAGE": 4,
+            "CHARACTER_OCTET_LENGTH": null,
+            "DATETIME_PRECISION": null,
+            "DATE_FORMAT": null,
+            "DATE_SEPARATOR": null,
+            "TIME_FORMAT": null,
+            "TIME_SEPARATOR": null
+          }
+        ]
+      },
+      {
+        "name": "keys",
+        "phase": "layout",
+        "parameters": [
+          "DCNC0959",
+          "B"
+        ],
+        "sql": "SELECT K.COLUMN_NAME, K.ORDINAL_POSITION, K.CONSTRAINT_SCHEMA, K.CONSTRAINT_NAME\nFROM QSYS2.SYSKEYCST K JOIN QSYS2.SYSCST C\n  ON K.CONSTRAINT_SCHEMA = C.CONSTRAINT_SCHEMA AND K.CONSTRAINT_NAME = C.CONSTRAINT_NAME\nWHERE C.TABLE_SCHEMA = ? AND C.TABLE_NAME = ? AND C.CONSTRAINT_TYPE = 'PRIMARY KEY'\nORDER BY K.ORDINAL_POSITION\n",
+        "rows": [
+          {
+            "COLUMN_NAME": "ID",
+            "ORDINAL_POSITION": 1,
+            "CONSTRAINT_SCHEMA": "DCNC0959",
+            "CONSTRAINT_NAME": "Q_DCNC0959_B_ID_00001"
+          }
+        ]
+      },
+      {
+        "name": "columns",
+        "phase": "layout",
+        "parameters": [
+          "DCNC0959",
+          "M"
+        ],
+        "sql": "SELECT TABLE_SCHEMA, TABLE_NAME, SYSTEM_TABLE_SCHEMA, SYSTEM_TABLE_NAME,\n       COLUMN_NAME, SYSTEM_COLUMN_NAME, ORDINAL_POSITION, DATA_TYPE, LENGTH,\n       NUMERIC_SCALE, CCSID, IS_NULLABLE, IS_IDENTITY, HIDDEN, HAS_FLDPROC,\n       BUFFER_POSITION, BUFFER_LENGTH, STORAGE, CHARACTER_OCTET_LENGTH,\n       DATETIME_PRECISION, DATE_FORMAT, DATE_SEPARATOR, TIME_FORMAT, TIME_SEPARATOR\nFROM QSYS2.SYSCOLUMNS2 WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? ORDER BY ORDINAL_POSITION\n",
+        "rows": [
+          {
+            "TABLE_SCHEMA": "DCNC0959",
+            "TABLE_NAME": "M",
+            "SYSTEM_TABLE_SCHEMA": "DCNC0959  ",
+            "SYSTEM_TABLE_NAME": "M         ",
+            "COLUMN_NAME": "ID",
+            "SYSTEM_COLUMN_NAME": "ID        ",
+            "ORDINAL_POSITION": 1,
+            "DATA_TYPE": "INTEGER ",
+            "LENGTH": 4,
+            "NUMERIC_SCALE": 0,
+            "CCSID": null,
+            "IS_NULLABLE": "N",
+            "IS_IDENTITY": "NO",
+            "HIDDEN": "N",
+            "HAS_FLDPROC": "N",
+            "BUFFER_POSITION": 1,
+            "BUFFER_LENGTH": 4,
+            "STORAGE": 4,
+            "CHARACTER_OCTET_LENGTH": null,
+            "DATETIME_PRECISION": null,
+            "DATE_FORMAT": null,
+            "DATE_SEPARATOR": null,
+            "TIME_FORMAT": null,
+            "TIME_SEPARATOR": null
+          }
+        ]
+      },
+      {
+        "name": "keys",
+        "phase": "layout",
+        "parameters": [
+          "DCNC0959",
+          "M"
+        ],
+        "sql": "SELECT K.COLUMN_NAME, K.ORDINAL_POSITION, K.CONSTRAINT_SCHEMA, K.CONSTRAINT_NAME\nFROM QSYS2.SYSKEYCST K JOIN QSYS2.SYSCST C\n  ON K.CONSTRAINT_SCHEMA = C.CONSTRAINT_SCHEMA AND K.CONSTRAINT_NAME = C.CONSTRAINT_NAME\nWHERE C.TABLE_SCHEMA = ? AND C.TABLE_NAME = ? AND C.CONSTRAINT_TYPE = 'PRIMARY KEY'\nORDER BY K.ORDINAL_POSITION\n",
+        "rows": [
+          {
+            "COLUMN_NAME": "ID",
+            "ORDINAL_POSITION": 1,
+            "CONSTRAINT_SCHEMA": "DCNC0959",
+            "CONSTRAINT_NAME": "Q_DCNC0959_M_ID_00001"
+          }
+        ]
+      },
+      {
+        "name": "columns",
+        "phase": "layout",
+        "parameters": [
+          "DCNC0959",
+          "U"
+        ],
+        "sql": "SELECT TABLE_SCHEMA, TABLE_NAME, SYSTEM_TABLE_SCHEMA, SYSTEM_TABLE_NAME,\n       COLUMN_NAME, SYSTEM_COLUMN_NAME, ORDINAL_POSITION, DATA_TYPE, LENGTH,\n       NUMERIC_SCALE, CCSID, IS_NULLABLE, IS_IDENTITY, HIDDEN, HAS_FLDPROC,\n       BUFFER_POSITION, BUFFER_LENGTH, STORAGE, CHARACTER_OCTET_LENGTH,\n       DATETIME_PRECISION, DATE_FORMAT, DATE_SEPARATOR, TIME_FORMAT, TIME_SEPARATOR\nFROM QSYS2.SYSCOLUMNS2 WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? ORDER BY ORDINAL_POSITION\n",
+        "rows": [
+          {
+            "TABLE_SCHEMA": "DCNC0959",
+            "TABLE_NAME": "U",
+            "SYSTEM_TABLE_SCHEMA": "DCNC0959  ",
+            "SYSTEM_TABLE_NAME": "U         ",
+            "COLUMN_NAME": "ID",
+            "SYSTEM_COLUMN_NAME": "ID        ",
+            "ORDINAL_POSITION": 1,
+            "DATA_TYPE": "INTEGER ",
+            "LENGTH": 4,
+            "NUMERIC_SCALE": 0,
+            "CCSID": null,
+            "IS_NULLABLE": "N",
+            "IS_IDENTITY": "NO",
+            "HIDDEN": "N",
+            "HAS_FLDPROC": "N",
+            "BUFFER_POSITION": 1,
+            "BUFFER_LENGTH": 4,
+            "STORAGE": 4,
+            "CHARACTER_OCTET_LENGTH": null,
+            "DATETIME_PRECISION": null,
+            "DATE_FORMAT": null,
+            "DATE_SEPARATOR": null,
+            "TIME_FORMAT": null,
+            "TIME_SEPARATOR": null
+          }
+        ]
+      },
+      {
+        "name": "keys",
+        "phase": "layout",
+        "parameters": [
+          "DCNC0959",
+          "U"
+        ],
+        "sql": "SELECT K.COLUMN_NAME, K.ORDINAL_POSITION, K.CONSTRAINT_SCHEMA, K.CONSTRAINT_NAME\nFROM QSYS2.SYSKEYCST K JOIN QSYS2.SYSCST C\n  ON K.CONSTRAINT_SCHEMA = C.CONSTRAINT_SCHEMA AND K.CONSTRAINT_NAME = C.CONSTRAINT_NAME\nWHERE C.TABLE_SCHEMA = ? AND C.TABLE_NAME = ? AND C.CONSTRAINT_TYPE = 'PRIMARY KEY'\nORDER BY K.ORDINAL_POSITION\n",
+        "rows": [
+          {
+            "COLUMN_NAME": "ID",
+            "ORDINAL_POSITION": 1,
+            "CONSTRAINT_SCHEMA": "DCNC0959",
+            "CONSTRAINT_NAME": "Q_DCNC0959_U_ID_00001"
+          }
+        ]
+      },
+      {
+        "name": "member",
+        "phase": "after",
+        "parameters": [
+          "DCNC0959",
+          "A"
+        ],
+        "sql": "SELECT SYSTEM_TABLE_SCHEMA, SYSTEM_TABLE_NAME, SYSTEM_TABLE_MEMBER, TABLE_SCHEMA, TABLE_NAME\nFROM QSYS2.SYSPARTITIONSTAT WHERE SYSTEM_TABLE_SCHEMA = ? AND SYSTEM_TABLE_NAME = ?\n",
+        "rows": [
+          {
+            "SYSTEM_TABLE_SCHEMA": "DCNC0959  ",
+            "SYSTEM_TABLE_NAME": "A         ",
+            "SYSTEM_TABLE_MEMBER": "A         ",
+            "TABLE_SCHEMA": "DCNC0959",
+            "TABLE_NAME": "A"
+          }
+        ]
+      },
+      {
+        "name": "format",
+        "phase": "after",
+        "parameters": [
+          "DCNC0959",
+          "A"
+        ],
+        "sql": "SELECT SYSTEM_TABLE_SCHEMA, SYSTEM_TABLE_NAME, NATIVE_TYPE, FILE_TYPE,\n       NUMBER_MEMBERS, NUMBER_RECORD_FORMATS, FORMAT_LEVEL_ID, FORMAT_NAME, RECORD_LENGTH, NUMBER_FIELDS,\n       CONTAINS_LOB, CONTAINS_VARYING_LENGTH\nFROM QSYS2.SYSFILES WHERE SYSTEM_TABLE_SCHEMA = ? AND SYSTEM_TABLE_NAME = ?\n",
+        "rows": [
+          {
+            "SYSTEM_TABLE_SCHEMA": "DCNC0959",
+            "SYSTEM_TABLE_NAME": "A",
+            "NATIVE_TYPE": "PHYSICAL",
+            "FILE_TYPE": "DATA",
+            "NUMBER_MEMBERS": 1,
+            "NUMBER_RECORD_FORMATS": 1,
+            "FORMAT_LEVEL_ID": "29087D5938DDA",
+            "FORMAT_NAME": "A",
+            "RECORD_LENGTH": 4,
+            "NUMBER_FIELDS": 1,
+            "CONTAINS_LOB": "NO",
+            "CONTAINS_VARYING_LENGTH": "NO"
+          }
+        ]
+      },
+      {
+        "name": "object",
+        "phase": "after",
+        "parameters": [
+          "/QSYS.LIB/DCNC0959.LIB/A.FILE",
+          "*FILE"
+        ],
+        "sql": "SELECT CASE WHEN LENGTH(PATH_NAME) <= 55 THEN CAST(PATH_NAME AS VARCHAR(55) CCSID 1208) ELSE NULL END AS PATH_NAME,\n       LENGTH(PATH_NAME) AS PATH_LENGTH, OBJECT_TYPE, ASP_NUMBER, STORED_LOCAL,\n       CASE WHEN SYMBOLIC_LINK IS NULL THEN 0 ELSE 1 END AS HAS_SYMBOLIC_LINK,\n       FILE_SYSTEM_IDENTIFIER, FILE_IDENTIFIER_NUMBER, GENERATION_IDENTIFIER,\n       JOURNALED, JOURNAL_LIBRARY, JOURNAL_NAME, HEX(JOURNAL_IDENTIFIER) AS OBJECT_JID\nFROM TABLE(QSYS2.IFS_OBJECT_STATISTICS(\n    START_PATH_NAME => ?, SUBTREE_DIRECTORIES => 'NO', OBJECT_TYPE_LIST => ?, IGNORE_ERRORS => 'NO')) AS O\n",
+        "rows": [
+          {
+            "PATH_NAME": "/QSYS.LIB/DCNC0959.LIB/A.FILE",
+            "PATH_LENGTH": 29,
+            "OBJECT_TYPE": "*FILE",
+            "ASP_NUMBER": 1,
+            "STORED_LOCAL": "YES",
+            "HAS_SYMBOLIC_LINK": 0,
+            "FILE_SYSTEM_IDENTIFIER": 141016661229569,
+            "FILE_IDENTIFIER_NUMBER": 488891,
+            "GENERATION_IDENTIFIER": 2829710040,
+            "JOURNALED": "YES",
+            "JOURNAL_LIBRARY": "DCNC0959",
+            "JOURNAL_NAME": "QSQJRN",
+            "OBJECT_JID": "E94000005191F38D0003"
+          }
+        ]
+      },
+      {
+        "name": "object",
+        "phase": "after",
+        "parameters": [
+          "/QSYS.LIB/DCNC0959.LIB/A.FILE/A.MBR",
+          "*MBR"
+        ],
+        "sql": "SELECT CASE WHEN LENGTH(PATH_NAME) <= 55 THEN CAST(PATH_NAME AS VARCHAR(55) CCSID 1208) ELSE NULL END AS PATH_NAME,\n       LENGTH(PATH_NAME) AS PATH_LENGTH, OBJECT_TYPE, ASP_NUMBER, STORED_LOCAL,\n       CASE WHEN SYMBOLIC_LINK IS NULL THEN 0 ELSE 1 END AS HAS_SYMBOLIC_LINK,\n       FILE_SYSTEM_IDENTIFIER, FILE_IDENTIFIER_NUMBER, GENERATION_IDENTIFIER,\n       JOURNALED, JOURNAL_LIBRARY, JOURNAL_NAME, HEX(JOURNAL_IDENTIFIER) AS OBJECT_JID\nFROM TABLE(QSYS2.IFS_OBJECT_STATISTICS(\n    START_PATH_NAME => ?, SUBTREE_DIRECTORIES => 'NO', OBJECT_TYPE_LIST => ?, IGNORE_ERRORS => 'NO')) AS O\n",
+        "rows": [
+          {
+            "PATH_NAME": "/QSYS.LIB/DCNC0959.LIB/A.FILE/A.MBR",
+            "PATH_LENGTH": 35,
+            "OBJECT_TYPE": "*MBR",
+            "ASP_NUMBER": 1,
+            "STORED_LOCAL": "YES",
+            "HAS_SYMBOLIC_LINK": 0,
+            "FILE_SYSTEM_IDENTIFIER": 141016661229569,
+            "FILE_IDENTIFIER_NUMBER": 488892,
+            "GENERATION_IDENTIFIER": 2829710040,
+            "JOURNALED": "YES",
+            "JOURNAL_LIBRARY": "DCNC0959",
+            "JOURNAL_NAME": "QSQJRN",
+            "OBJECT_JID": "E94000005191F38D0004"
+          }
+        ]
+      },
+      {
+        "name": "member",
+        "phase": "after",
+        "parameters": [
+          "DCNC0959",
+          "B"
+        ],
+        "sql": "SELECT SYSTEM_TABLE_SCHEMA, SYSTEM_TABLE_NAME, SYSTEM_TABLE_MEMBER, TABLE_SCHEMA, TABLE_NAME\nFROM QSYS2.SYSPARTITIONSTAT WHERE SYSTEM_TABLE_SCHEMA = ? AND SYSTEM_TABLE_NAME = ?\n",
+        "rows": [
+          {
+            "SYSTEM_TABLE_SCHEMA": "DCNC0959  ",
+            "SYSTEM_TABLE_NAME": "B         ",
+            "SYSTEM_TABLE_MEMBER": "B         ",
+            "TABLE_SCHEMA": "DCNC0959",
+            "TABLE_NAME": "B"
+          }
+        ]
+      },
+      {
+        "name": "format",
+        "phase": "after",
+        "parameters": [
+          "DCNC0959",
+          "B"
+        ],
+        "sql": "SELECT SYSTEM_TABLE_SCHEMA, SYSTEM_TABLE_NAME, NATIVE_TYPE, FILE_TYPE,\n       NUMBER_MEMBERS, NUMBER_RECORD_FORMATS, FORMAT_LEVEL_ID, FORMAT_NAME, RECORD_LENGTH, NUMBER_FIELDS,\n       CONTAINS_LOB, CONTAINS_VARYING_LENGTH\nFROM QSYS2.SYSFILES WHERE SYSTEM_TABLE_SCHEMA = ? AND SYSTEM_TABLE_NAME = ?\n",
+        "rows": [
+          {
+            "SYSTEM_TABLE_SCHEMA": "DCNC0959",
+            "SYSTEM_TABLE_NAME": "B",
+            "NATIVE_TYPE": "PHYSICAL",
+            "FILE_TYPE": "DATA",
+            "NUMBER_MEMBERS": 1,
+            "NUMBER_RECORD_FORMATS": 1,
+            "FORMAT_LEVEL_ID": "29187D5938DDA",
+            "FORMAT_NAME": "B",
+            "RECORD_LENGTH": 4,
+            "NUMBER_FIELDS": 1,
+            "CONTAINS_LOB": "NO",
+            "CONTAINS_VARYING_LENGTH": "NO"
+          }
+        ]
+      },
+      {
+        "name": "object",
+        "phase": "after",
+        "parameters": [
+          "/QSYS.LIB/DCNC0959.LIB/B.FILE",
+          "*FILE"
+        ],
+        "sql": "SELECT CASE WHEN LENGTH(PATH_NAME) <= 55 THEN CAST(PATH_NAME AS VARCHAR(55) CCSID 1208) ELSE NULL END AS PATH_NAME,\n       LENGTH(PATH_NAME) AS PATH_LENGTH, OBJECT_TYPE, ASP_NUMBER, STORED_LOCAL,\n       CASE WHEN SYMBOLIC_LINK IS NULL THEN 0 ELSE 1 END AS HAS_SYMBOLIC_LINK,\n       FILE_SYSTEM_IDENTIFIER, FILE_IDENTIFIER_NUMBER, GENERATION_IDENTIFIER,\n       JOURNALED, JOURNAL_LIBRARY, JOURNAL_NAME, HEX(JOURNAL_IDENTIFIER) AS OBJECT_JID\nFROM TABLE(QSYS2.IFS_OBJECT_STATISTICS(\n    START_PATH_NAME => ?, SUBTREE_DIRECTORIES => 'NO', OBJECT_TYPE_LIST => ?, IGNORE_ERRORS => 'NO')) AS O\n",
+        "rows": [
+          {
+            "PATH_NAME": "/QSYS.LIB/DCNC0959.LIB/B.FILE",
+            "PATH_LENGTH": 29,
+            "OBJECT_TYPE": "*FILE",
+            "ASP_NUMBER": 1,
+            "STORED_LOCAL": "YES",
+            "HAS_SYMBOLIC_LINK": 0,
+            "FILE_SYSTEM_IDENTIFIER": 141016661229569,
+            "FILE_IDENTIFIER_NUMBER": 488893,
+            "GENERATION_IDENTIFIER": 2829710040,
+            "JOURNALED": "YES",
+            "JOURNAL_LIBRARY": "DCNC0959",
+            "JOURNAL_NAME": "QSQJRN",
+            "OBJECT_JID": "E94000005191F38D0005"
+          }
+        ]
+      },
+      {
+        "name": "object",
+        "phase": "after",
+        "parameters": [
+          "/QSYS.LIB/DCNC0959.LIB/B.FILE/B.MBR",
+          "*MBR"
+        ],
+        "sql": "SELECT CASE WHEN LENGTH(PATH_NAME) <= 55 THEN CAST(PATH_NAME AS VARCHAR(55) CCSID 1208) ELSE NULL END AS PATH_NAME,\n       LENGTH(PATH_NAME) AS PATH_LENGTH, OBJECT_TYPE, ASP_NUMBER, STORED_LOCAL,\n       CASE WHEN SYMBOLIC_LINK IS NULL THEN 0 ELSE 1 END AS HAS_SYMBOLIC_LINK,\n       FILE_SYSTEM_IDENTIFIER, FILE_IDENTIFIER_NUMBER, GENERATION_IDENTIFIER,\n       JOURNALED, JOURNAL_LIBRARY, JOURNAL_NAME, HEX(JOURNAL_IDENTIFIER) AS OBJECT_JID\nFROM TABLE(QSYS2.IFS_OBJECT_STATISTICS(\n    START_PATH_NAME => ?, SUBTREE_DIRECTORIES => 'NO', OBJECT_TYPE_LIST => ?, IGNORE_ERRORS => 'NO')) AS O\n",
+        "rows": [
+          {
+            "PATH_NAME": "/QSYS.LIB/DCNC0959.LIB/B.FILE/B.MBR",
+            "PATH_LENGTH": 35,
+            "OBJECT_TYPE": "*MBR",
+            "ASP_NUMBER": 1,
+            "STORED_LOCAL": "YES",
+            "HAS_SYMBOLIC_LINK": 0,
+            "FILE_SYSTEM_IDENTIFIER": 141016661229569,
+            "FILE_IDENTIFIER_NUMBER": 488950,
+            "GENERATION_IDENTIFIER": 2829710039,
+            "JOURNALED": "YES",
+            "JOURNAL_LIBRARY": "DCNC0959",
+            "JOURNAL_NAME": "QSQJRN",
+            "OBJECT_JID": "E94000005191F38D0006"
+          }
+        ]
+      },
+      {
+        "name": "member",
+        "phase": "after",
+        "parameters": [
+          "DCNC0959",
+          "M"
+        ],
+        "sql": "SELECT SYSTEM_TABLE_SCHEMA, SYSTEM_TABLE_NAME, SYSTEM_TABLE_MEMBER, TABLE_SCHEMA, TABLE_NAME\nFROM QSYS2.SYSPARTITIONSTAT WHERE SYSTEM_TABLE_SCHEMA = ? AND SYSTEM_TABLE_NAME = ?\n",
+        "rows": [
+          {
+            "SYSTEM_TABLE_SCHEMA": "DCNC0959  ",
+            "SYSTEM_TABLE_NAME": "M         ",
+            "SYSTEM_TABLE_MEMBER": "M         ",
+            "TABLE_SCHEMA": "DCNC0959",
+            "TABLE_NAME": "M"
+          }
+        ]
+      },
+      {
+        "name": "format",
+        "phase": "after",
+        "parameters": [
+          "DCNC0959",
+          "M"
+        ],
+        "sql": "SELECT SYSTEM_TABLE_SCHEMA, SYSTEM_TABLE_NAME, NATIVE_TYPE, FILE_TYPE,\n       NUMBER_MEMBERS, NUMBER_RECORD_FORMATS, FORMAT_LEVEL_ID, FORMAT_NAME, RECORD_LENGTH, NUMBER_FIELDS,\n       CONTAINS_LOB, CONTAINS_VARYING_LENGTH\nFROM QSYS2.SYSFILES WHERE SYSTEM_TABLE_SCHEMA = ? AND SYSTEM_TABLE_NAME = ?\n",
+        "rows": [
+          {
+            "SYSTEM_TABLE_SCHEMA": "DCNC0959",
+            "SYSTEM_TABLE_NAME": "M",
+            "NATIVE_TYPE": "PHYSICAL",
+            "FILE_TYPE": "DATA",
+            "NUMBER_MEMBERS": 1,
+            "NUMBER_RECORD_FORMATS": 1,
+            "FORMAT_LEVEL_ID": "2A387D5938DDA",
+            "FORMAT_NAME": "M",
+            "RECORD_LENGTH": 4,
+            "NUMBER_FIELDS": 1,
+            "CONTAINS_LOB": "NO",
+            "CONTAINS_VARYING_LENGTH": "NO"
+          }
+        ]
+      },
+      {
+        "name": "object",
+        "phase": "after",
+        "parameters": [
+          "/QSYS.LIB/DCNC0959.LIB/M.FILE",
+          "*FILE"
+        ],
+        "sql": "SELECT CASE WHEN LENGTH(PATH_NAME) <= 55 THEN CAST(PATH_NAME AS VARCHAR(55) CCSID 1208) ELSE NULL END AS PATH_NAME,\n       LENGTH(PATH_NAME) AS PATH_LENGTH, OBJECT_TYPE, ASP_NUMBER, STORED_LOCAL,\n       CASE WHEN SYMBOLIC_LINK IS NULL THEN 0 ELSE 1 END AS HAS_SYMBOLIC_LINK,\n       FILE_SYSTEM_IDENTIFIER, FILE_IDENTIFIER_NUMBER, GENERATION_IDENTIFIER,\n       JOURNALED, JOURNAL_LIBRARY, JOURNAL_NAME, HEX(JOURNAL_IDENTIFIER) AS OBJECT_JID\nFROM TABLE(QSYS2.IFS_OBJECT_STATISTICS(\n    START_PATH_NAME => ?, SUBTREE_DIRECTORIES => 'NO', OBJECT_TYPE_LIST => ?, IGNORE_ERRORS => 'NO')) AS O\n",
+        "rows": [
+          {
+            "PATH_NAME": "/QSYS.LIB/DCNC0959.LIB/M.FILE",
+            "PATH_LENGTH": 29,
+            "OBJECT_TYPE": "*FILE",
+            "ASP_NUMBER": 1,
+            "STORED_LOCAL": "YES",
+            "HAS_SYMBOLIC_LINK": 0,
+            "FILE_SYSTEM_IDENTIFIER": 141016661229569,
+            "FILE_IDENTIFIER_NUMBER": 488952,
+            "GENERATION_IDENTIFIER": 2829710040,
+            "JOURNALED": "YES",
+            "JOURNAL_LIBRARY": "DCNC0959",
+            "JOURNAL_NAME": "QSQJRN",
+            "OBJECT_JID": "E94000005191F38D0007"
+          }
+        ]
+      },
+      {
+        "name": "object",
+        "phase": "after",
+        "parameters": [
+          "/QSYS.LIB/DCNC0959.LIB/M.FILE/M.MBR",
+          "*MBR"
+        ],
+        "sql": "SELECT CASE WHEN LENGTH(PATH_NAME) <= 55 THEN CAST(PATH_NAME AS VARCHAR(55) CCSID 1208) ELSE NULL END AS PATH_NAME,\n       LENGTH(PATH_NAME) AS PATH_LENGTH, OBJECT_TYPE, ASP_NUMBER, STORED_LOCAL,\n       CASE WHEN SYMBOLIC_LINK IS NULL THEN 0 ELSE 1 END AS HAS_SYMBOLIC_LINK,\n       FILE_SYSTEM_IDENTIFIER, FILE_IDENTIFIER_NUMBER, GENERATION_IDENTIFIER,\n       JOURNALED, JOURNAL_LIBRARY, JOURNAL_NAME, HEX(JOURNAL_IDENTIFIER) AS OBJECT_JID\nFROM TABLE(QSYS2.IFS_OBJECT_STATISTICS(\n    START_PATH_NAME => ?, SUBTREE_DIRECTORIES => 'NO', OBJECT_TYPE_LIST => ?, IGNORE_ERRORS => 'NO')) AS O\n",
+        "rows": [
+          {
+            "PATH_NAME": "/QSYS.LIB/DCNC0959.LIB/M.FILE/M.MBR",
+            "PATH_LENGTH": 35,
+            "OBJECT_TYPE": "*MBR",
+            "ASP_NUMBER": 1,
+            "STORED_LOCAL": "YES",
+            "HAS_SYMBOLIC_LINK": 0,
+            "FILE_SYSTEM_IDENTIFIER": 141016661229569,
+            "FILE_IDENTIFIER_NUMBER": 488953,
+            "GENERATION_IDENTIFIER": 2829710039,
+            "JOURNALED": "YES",
+            "JOURNAL_LIBRARY": "DCNC0959",
+            "JOURNAL_NAME": "QSQJRN",
+            "OBJECT_JID": "E94000005191F38D0008"
+          }
+        ]
+      },
+      {
+        "name": "member",
+        "phase": "after",
+        "parameters": [
+          "DCNC0959",
+          "U"
+        ],
+        "sql": "SELECT SYSTEM_TABLE_SCHEMA, SYSTEM_TABLE_NAME, SYSTEM_TABLE_MEMBER, TABLE_SCHEMA, TABLE_NAME\nFROM QSYS2.SYSPARTITIONSTAT WHERE SYSTEM_TABLE_SCHEMA = ? AND SYSTEM_TABLE_NAME = ?\n",
+        "rows": [
+          {
+            "SYSTEM_TABLE_SCHEMA": "DCNC0959  ",
+            "SYSTEM_TABLE_NAME": "U         ",
+            "SYSTEM_TABLE_MEMBER": "U         ",
+            "TABLE_SCHEMA": "DCNC0959",
+            "TABLE_NAME": "U"
+          }
+        ]
+      },
+      {
+        "name": "format",
+        "phase": "after",
+        "parameters": [
+          "DCNC0959",
+          "U"
+        ],
+        "sql": "SELECT SYSTEM_TABLE_SCHEMA, SYSTEM_TABLE_NAME, NATIVE_TYPE, FILE_TYPE,\n       NUMBER_MEMBERS, NUMBER_RECORD_FORMATS, FORMAT_LEVEL_ID, FORMAT_NAME, RECORD_LENGTH, NUMBER_FIELDS,\n       CONTAINS_LOB, CONTAINS_VARYING_LENGTH\nFROM QSYS2.SYSFILES WHERE SYSTEM_TABLE_SCHEMA = ? AND SYSTEM_TABLE_NAME = ?\n",
+        "rows": [
+          {
+            "SYSTEM_TABLE_SCHEMA": "DCNC0959",
+            "SYSTEM_TABLE_NAME": "U",
+            "NATIVE_TYPE": "PHYSICAL",
+            "FILE_TYPE": "DATA",
+            "NUMBER_MEMBERS": 1,
+            "NUMBER_RECORD_FORMATS": 1,
+            "FORMAT_LEVEL_ID": "2B387D5938DDA",
+            "FORMAT_NAME": "U",
+            "RECORD_LENGTH": 4,
+            "NUMBER_FIELDS": 1,
+            "CONTAINS_LOB": "NO",
+            "CONTAINS_VARYING_LENGTH": "NO"
+          }
+        ]
+      },
+      {
+        "name": "object",
+        "phase": "after",
+        "parameters": [
+          "/QSYS.LIB/DCNC0959.LIB/U.FILE",
+          "*FILE"
+        ],
+        "sql": "SELECT CASE WHEN LENGTH(PATH_NAME) <= 55 THEN CAST(PATH_NAME AS VARCHAR(55) CCSID 1208) ELSE NULL END AS PATH_NAME,\n       LENGTH(PATH_NAME) AS PATH_LENGTH, OBJECT_TYPE, ASP_NUMBER, STORED_LOCAL,\n       CASE WHEN SYMBOLIC_LINK IS NULL THEN 0 ELSE 1 END AS HAS_SYMBOLIC_LINK,\n       FILE_SYSTEM_IDENTIFIER, FILE_IDENTIFIER_NUMBER, GENERATION_IDENTIFIER,\n       JOURNALED, JOURNAL_LIBRARY, JOURNAL_NAME, HEX(JOURNAL_IDENTIFIER) AS OBJECT_JID\nFROM TABLE(QSYS2.IFS_OBJECT_STATISTICS(\n    START_PATH_NAME => ?, SUBTREE_DIRECTORIES => 'NO', OBJECT_TYPE_LIST => ?, IGNORE_ERRORS => 'NO')) AS O\n",
+        "rows": [
+          {
+            "PATH_NAME": "/QSYS.LIB/DCNC0959.LIB/U.FILE",
+            "PATH_LENGTH": 29,
+            "OBJECT_TYPE": "*FILE",
+            "ASP_NUMBER": 1,
+            "STORED_LOCAL": "YES",
+            "HAS_SYMBOLIC_LINK": 0,
+            "FILE_SYSTEM_IDENTIFIER": 141016661229569,
+            "FILE_IDENTIFIER_NUMBER": 488954,
+            "GENERATION_IDENTIFIER": 2829710039,
+            "JOURNALED": "YES",
+            "JOURNAL_LIBRARY": "DCNC0959",
+            "JOURNAL_NAME": "QSQJRN",
+            "OBJECT_JID": "E94000005191F38D0009"
+          }
+        ]
+      },
+      {
+        "name": "object",
+        "phase": "after",
+        "parameters": [
+          "/QSYS.LIB/DCNC0959.LIB/U.FILE/U.MBR",
+          "*MBR"
+        ],
+        "sql": "SELECT CASE WHEN LENGTH(PATH_NAME) <= 55 THEN CAST(PATH_NAME AS VARCHAR(55) CCSID 1208) ELSE NULL END AS PATH_NAME,\n       LENGTH(PATH_NAME) AS PATH_LENGTH, OBJECT_TYPE, ASP_NUMBER, STORED_LOCAL,\n       CASE WHEN SYMBOLIC_LINK IS NULL THEN 0 ELSE 1 END AS HAS_SYMBOLIC_LINK,\n       FILE_SYSTEM_IDENTIFIER, FILE_IDENTIFIER_NUMBER, GENERATION_IDENTIFIER,\n       JOURNALED, JOURNAL_LIBRARY, JOURNAL_NAME, HEX(JOURNAL_IDENTIFIER) AS OBJECT_JID\nFROM TABLE(QSYS2.IFS_OBJECT_STATISTICS(\n    START_PATH_NAME => ?, SUBTREE_DIRECTORIES => 'NO', OBJECT_TYPE_LIST => ?, IGNORE_ERRORS => 'NO')) AS O\n",
+        "rows": [
+          {
+            "PATH_NAME": "/QSYS.LIB/DCNC0959.LIB/U.FILE/U.MBR",
+            "PATH_LENGTH": 35,
+            "OBJECT_TYPE": "*MBR",
+            "ASP_NUMBER": 1,
+            "STORED_LOCAL": "YES",
+            "HAS_SYMBOLIC_LINK": 0,
+            "FILE_SYSTEM_IDENTIFIER": 141016661229569,
+            "FILE_IDENTIFIER_NUMBER": 488955,
+            "GENERATION_IDENTIFIER": 2829710039,
+            "JOURNALED": "YES",
+            "JOURNAL_LIBRARY": "DCNC0959",
+            "JOURNAL_NAME": "QSQJRN",
+            "OBJECT_JID": "E94000005191F38D000A"
+          }
+        ]
+      },
+      {
+        "name": "journal",
+        "phase": "after",
+        "parameters": [
+          "DCNC0959",
+          "QSQJRN"
+        ],
+        "sql": "SELECT JOURNAL_LIBRARY, JOURNAL_NAME, JOURNAL_TYPE, JOURNAL_STATE, ASP_NUMBER, JOURNAL_ASPGRP,\n       ATTACHED_JOURNAL_RECEIVER_LIBRARY, ATTACHED_JOURNAL_RECEIVER_NAME,\n       REMOVE_INTERNAL_ENTRIES, REMOVE_FIXED_LENGTH_DETAIL, MINIMIZE_ESD_FOR_FILES, JOURNAL_CACHE\nFROM QSYS2.JOURNAL_INFO WHERE JOURNAL_LIBRARY = ? AND JOURNAL_NAME = ?\n",
+        "rows": [
+          {
+            "JOURNAL_LIBRARY": "DCNC0959",
+            "JOURNAL_NAME": "QSQJRN",
+            "JOURNAL_TYPE": "*LOCAL",
+            "JOURNAL_STATE": "*ACTIVE",
+            "ASP_NUMBER": 1,
+            "JOURNAL_ASPGRP": "*SYSBAS",
+            "ATTACHED_JOURNAL_RECEIVER_LIBRARY": "DCNC0959",
+            "ATTACHED_JOURNAL_RECEIVER_NAME": "QSQJRN0002",
+            "REMOVE_INTERNAL_ENTRIES": "NO",
+            "REMOVE_FIXED_LENGTH_DETAIL": "NO",
+            "MINIMIZE_ESD_FOR_FILES": "NO",
+            "JOURNAL_CACHE": "NO"
+          }
+        ]
+      },
+      {
+        "name": "receivers",
+        "phase": "after",
+        "parameters": [
+          "DCNC0959",
+          "QSQJRN"
+        ],
+        "sql": "SELECT JOURNAL_LIBRARY, JOURNAL_NAME, JOURNAL_RECEIVER_LIBRARY, JOURNAL_RECEIVER_NAME,\n       JOURNAL_RECEIVER_ASP_NUMBER, STATUS, FIRST_SEQUENCE_NUMBER, LAST_SEQUENCE_NUMBER,\n       PREVIOUS_JOURNAL_RECEIVER_LIBRARY, PREVIOUS_JOURNAL_RECEIVER,\n       NEXT_JOURNAL_RECEIVER_LIBRARY, NEXT_JOURNAL_RECEIVER,\n       MINIMIZE_ESD_FOR_FILES, FIXED_LENGTH_DATA_INCLUDES_JOB_NAME, FIXED_LENGTH_DATA_INCLUDES_THREAD_ID,\n       FIXED_LENGTH_DATA_INCLUDES_LOGICAL_UNIT_OF_WORK_ID, FIXED_LENGTH_DATA_INCLUDES_TRANSACTION_ID\nFROM QSYS2.JOURNAL_RECEIVER_INFO WHERE JOURNAL_LIBRARY = ? AND JOURNAL_NAME = ?\n",
+        "rows": [
+          {
+            "JOURNAL_LIBRARY": "DCNC0959",
+            "JOURNAL_NAME": "QSQJRN",
+            "JOURNAL_RECEIVER_LIBRARY": "DCNC0959",
+            "JOURNAL_RECEIVER_NAME": "QSQJRN0001",
+            "JOURNAL_RECEIVER_ASP_NUMBER": 1,
+            "STATUS": "ONLINE",
+            "FIRST_SEQUENCE_NUMBER": "1",
+            "LAST_SEQUENCE_NUMBER": "3",
+            "PREVIOUS_JOURNAL_RECEIVER_LIBRARY": null,
+            "PREVIOUS_JOURNAL_RECEIVER": null,
+            "NEXT_JOURNAL_RECEIVER_LIBRARY": "DCNC0959",
+            "NEXT_JOURNAL_RECEIVER": "QSQJRN0002",
+            "MINIMIZE_ESD_FOR_FILES": "NO",
+            "FIXED_LENGTH_DATA_INCLUDES_JOB_NAME": "YES",
+            "FIXED_LENGTH_DATA_INCLUDES_THREAD_ID": "NO",
+            "FIXED_LENGTH_DATA_INCLUDES_LOGICAL_UNIT_OF_WORK_ID": "NO",
+            "FIXED_LENGTH_DATA_INCLUDES_TRANSACTION_ID": "NO"
+          },
+          {
+            "JOURNAL_LIBRARY": "DCNC0959",
+            "JOURNAL_NAME": "QSQJRN",
+            "JOURNAL_RECEIVER_LIBRARY": "DCNC0959",
+            "JOURNAL_RECEIVER_NAME": "QSQJRN0002",
+            "JOURNAL_RECEIVER_ASP_NUMBER": 1,
+            "STATUS": "ATTACHED",
+            "FIRST_SEQUENCE_NUMBER": "4",
+            "LAST_SEQUENCE_NUMBER": "45",
+            "PREVIOUS_JOURNAL_RECEIVER_LIBRARY": "DCNC0959",
+            "PREVIOUS_JOURNAL_RECEIVER": "QSQJRN0001",
+            "NEXT_JOURNAL_RECEIVER_LIBRARY": null,
+            "NEXT_JOURNAL_RECEIVER": null,
+            "MINIMIZE_ESD_FOR_FILES": "NO",
+            "FIXED_LENGTH_DATA_INCLUDES_JOB_NAME": "YES",
+            "FIXED_LENGTH_DATA_INCLUDES_THREAD_ID": "YES",
+            "FIXED_LENGTH_DATA_INCLUDES_LOGICAL_UNIT_OF_WORK_ID": "NO",
+            "FIXED_LENGTH_DATA_INCLUDES_TRANSACTION_ID": "NO"
+          }
+        ]
+      },
+      {
+        "name": "identity",
+        "phase": "after",
+        "parameters": [
+          "/QSYS.LIB/DCNC0959.LIB/QSQJRN.JRN",
+          "*JRN"
+        ],
+        "sql": "SELECT CASE WHEN LENGTH(PATH_NAME) <= 55 THEN CAST(PATH_NAME AS VARCHAR(55) CCSID 1208) ELSE NULL END AS PATH_NAME,\n       LENGTH(PATH_NAME) AS PATH_LENGTH, OBJECT_TYPE, ASP_NUMBER, STORED_LOCAL,\n       CASE WHEN SYMBOLIC_LINK IS NULL THEN 0 ELSE 1 END AS HAS_SYMBOLIC_LINK,\n       FILE_SYSTEM_IDENTIFIER, FILE_IDENTIFIER_NUMBER, GENERATION_IDENTIFIER\nFROM TABLE(QSYS2.IFS_OBJECT_STATISTICS(\n    START_PATH_NAME => ?, SUBTREE_DIRECTORIES => 'NO', OBJECT_TYPE_LIST => ?, IGNORE_ERRORS => 'NO')) AS O\n",
+        "rows": [
+          {
+            "PATH_NAME": "/QSYS.LIB/DCNC0959.LIB/QSQJRN.JRN",
+            "PATH_LENGTH": 33,
+            "OBJECT_TYPE": "*JRN",
+            "ASP_NUMBER": 1,
+            "STORED_LOCAL": "YES",
+            "HAS_SYMBOLIC_LINK": 0,
+            "FILE_SYSTEM_IDENTIFIER": 141016661229569,
+            "FILE_IDENTIFIER_NUMBER": 488889,
+            "GENERATION_IDENTIFIER": 2829710039
+          }
+        ]
+      },
+      {
+        "name": "identity",
+        "phase": "after",
+        "parameters": [
+          "/QSYS.LIB/DCNC0959.LIB/QSQJRN0002.JRNRCV",
+          "*JRNRCV"
+        ],
+        "sql": "SELECT CASE WHEN LENGTH(PATH_NAME) <= 55 THEN CAST(PATH_NAME AS VARCHAR(55) CCSID 1208) ELSE NULL END AS PATH_NAME,\n       LENGTH(PATH_NAME) AS PATH_LENGTH, OBJECT_TYPE, ASP_NUMBER, STORED_LOCAL,\n       CASE WHEN SYMBOLIC_LINK IS NULL THEN 0 ELSE 1 END AS HAS_SYMBOLIC_LINK,\n       FILE_SYSTEM_IDENTIFIER, FILE_IDENTIFIER_NUMBER, GENERATION_IDENTIFIER\nFROM TABLE(QSYS2.IFS_OBJECT_STATISTICS(\n    START_PATH_NAME => ?, SUBTREE_DIRECTORIES => 'NO', OBJECT_TYPE_LIST => ?, IGNORE_ERRORS => 'NO')) AS O\n",
+        "rows": [
+          {
+            "PATH_NAME": "/QSYS.LIB/DCNC0959.LIB/QSQJRN0002.JRNRCV",
+            "PATH_LENGTH": 40,
+            "OBJECT_TYPE": "*JRNRCV",
+            "ASP_NUMBER": 1,
+            "STORED_LOCAL": "YES",
+            "HAS_SYMBOLIC_LINK": 0,
+            "FILE_SYSTEM_IDENTIFIER": 141016661229569,
+            "FILE_IDENTIFIER_NUMBER": 488890,
+            "GENERATION_IDENTIFIER": 2829710039
+          }
+        ]
+      }
+    ],
+    "started": {
+      "utc": "2026-11-09T22:11:17.500265+00:00",
+      "monotonic_ns": 716270464845225
+    },
+    "native_scope": {
+      "discovered": {
+        "objects": [
+          {
+            "REQUEST_LIBRARY": "DCNC0959",
+            "REQUEST_JOURNAL": "QSQJRN",
+            "JOURNAL_LIBRARY": "DCNC0959",
+            "JOURNAL_NAME": "QSQJRN",
+            "ASP": "1",
+            "OBJECT_LIBRARY": "DCNC0959",
+            "OBJECT_NAME": "A",
+            "OBJECT_TYPE": "*FILE",
+            "FILE_TYPE": "PF",
+            "JOURNALED_TYPE": "0",
+            "SYSTEM_HEX": "C1C5D8C140404040",
+            "RELEASE_HEX": "E5F7D9F5D4F0",
+            "TYPE_HEX": "5CC6C9D3C54040",
+            "NAME_HEX": "C1404040404040404040",
+            "LIBRARY_HEX": "C4C3D5C3F0F9F5F94040",
+            "JOURNAL_HEX": "D8E2D8D1D9D540404040",
+            "JOURNAL_LIBRARY_HEX": "C4C3D5C3F0F9F5F94040",
+            "ASP_HEX": "F1404040404040404040",
+            "FILE_ID_HEX": "00000000000000000000000000000000",
+            "PATH_HEX": ""
+          },
+          {
+            "REQUEST_LIBRARY": "DCNC0959",
+            "REQUEST_JOURNAL": "QSQJRN",
+            "JOURNAL_LIBRARY": "DCNC0959",
+            "JOURNAL_NAME": "QSQJRN",
+            "ASP": "1",
+            "OBJECT_LIBRARY": "DCNC0959",
+            "OBJECT_NAME": "B",
+            "OBJECT_TYPE": "*FILE",
+            "FILE_TYPE": "PF",
+            "JOURNALED_TYPE": "0",
+            "SYSTEM_HEX": "C1C5D8C140404040",
+            "RELEASE_HEX": "E5F7D9F5D4F0",
+            "TYPE_HEX": "5CC6C9D3C54040",
+            "NAME_HEX": "C2404040404040404040",
+            "LIBRARY_HEX": "C4C3D5C3F0F9F5F94040",
+            "JOURNAL_HEX": "D8E2D8D1D9D540404040",
+            "JOURNAL_LIBRARY_HEX": "C4C3D5C3F0F9F5F94040",
+            "ASP_HEX": "F1404040404040404040",
+            "FILE_ID_HEX": "00000000000000000000000000000000",
+            "PATH_HEX": ""
+          },
+          {
+            "REQUEST_LIBRARY": "DCNC0959",
+            "REQUEST_JOURNAL": "QSQJRN",
+            "JOURNAL_LIBRARY": "DCNC0959",
+            "JOURNAL_NAME": "QSQJRN",
+            "ASP": "1",
+            "OBJECT_LIBRARY": "DCNC0959",
+            "OBJECT_NAME": "M",
+            "OBJECT_TYPE": "*FILE",
+            "FILE_TYPE": "PF",
+            "JOURNALED_TYPE": "0",
+            "SYSTEM_HEX": "C1C5D8C140404040",
+            "RELEASE_HEX": "E5F7D9F5D4F0",
+            "TYPE_HEX": "5CC6C9D3C54040",
+            "NAME_HEX": "D4404040404040404040",
+            "LIBRARY_HEX": "C4C3D5C3F0F9F5F94040",
+            "JOURNAL_HEX": "D8E2D8D1D9D540404040",
+            "JOURNAL_LIBRARY_HEX": "C4C3D5C3F0F9F5F94040",
+            "ASP_HEX": "F1404040404040404040",
+            "FILE_ID_HEX": "00000000000000000000000000000000",
+            "PATH_HEX": ""
+          },
+          {
+            "REQUEST_LIBRARY": "DCNC0959",
+            "REQUEST_JOURNAL": "QSQJRN",
+            "JOURNAL_LIBRARY": "DCNC0959",
+            "JOURNAL_NAME": "QSQJRN",
+            "ASP": "1",
+            "OBJECT_LIBRARY": "DCNC0959",
+            "OBJECT_NAME": "U",
+            "OBJECT_TYPE": "*FILE",
+            "FILE_TYPE": "PF",
+            "JOURNALED_TYPE": "0",
+            "SYSTEM_HEX": "C1C5D8C140404040",
+            "RELEASE_HEX": "E5F7D9F5D4F0",
+            "TYPE_HEX": "5CC6C9D3C54040",
+            "NAME_HEX": "E4404040404040404040",
+            "LIBRARY_HEX": "C4C3D5C3F0F9F5F94040",
+            "JOURNAL_HEX": "D8E2D8D1D9D540404040",
+            "JOURNAL_LIBRARY_HEX": "C4C3D5C3F0F9F5F94040",
+            "ASP_HEX": "F1404040404040404040",
+            "FILE_ID_HEX": "00000000000000000000000000000000",
+            "PATH_HEX": ""
+          },
+          {
+            "REQUEST_LIBRARY": "DCNC0959",
+            "REQUEST_JOURNAL": "QSQJRN",
+            "JOURNAL_LIBRARY": "DCNC0959",
+            "JOURNAL_NAME": "QSQJRN",
+            "ASP": "1",
+            "OBJECT_LIBRARY": "QSYS",
+            "OBJECT_NAME": "DCNC0959",
+            "OBJECT_TYPE": "*LIB",
+            "FILE_TYPE": "",
+            "JOURNALED_TYPE": "0",
+            "SYSTEM_HEX": "C1C5D8C140404040",
+            "RELEASE_HEX": "E5F7D9F5D4F0",
+            "TYPE_HEX": "5CD3C9C2404040",
+            "NAME_HEX": "C4C3D5C3F0F9F5F94040",
+            "LIBRARY_HEX": "D8E2E8E2404040404040",
+            "JOURNAL_HEX": "D8E2D8D1D9D540404040",
+            "JOURNAL_LIBRARY_HEX": "C4C3D5C3F0F9F5F94040",
+            "ASP_HEX": "F1404040404040404040",
+            "FILE_ID_HEX": "00000000000000000000000000000000",
+            "PATH_HEX": ""
+          }
+        ],
+        "counts": [
+          {
+            "JOURNAL_LIBRARY": "DCNC0959",
+            "JOURNAL_NAME": "QSQJRN",
+            "JOURNAL_TYPE": "*LOCAL",
+            "JOURNAL_STATE": "*ACTIVE",
+            "JOURNALED_FILES": 4,
+            "JOURNALED_MEMBERS": 4,
+            "JOURNALED_LIBRARIES": 1,
+            "JOURNALED_DATA_AREAS": 0,
+            "JOURNALED_DATA_QUEUES": 0,
+            "JOURNALED_IFS_OBJECTS": 0,
+            "JOURNALED_ACCESS_PATHS": 0,
+            "NUMBER_REMOTE_JOURNALS": 0
+          }
+        ]
+      },
+      "members": [
+        {
+          "SYSTEM_TABLE_SCHEMA": "DCNC0959  ",
+          "SYSTEM_TABLE_NAME": "A         ",
+          "SYSTEM_TABLE_MEMBER": "A         ",
+          "TABLE_SCHEMA": "DCNC0959",
+          "TABLE_NAME": "A"
+        },
+        {
+          "SYSTEM_TABLE_SCHEMA": "DCNC0959  ",
+          "SYSTEM_TABLE_NAME": "B         ",
+          "SYSTEM_TABLE_MEMBER": "B         ",
+          "TABLE_SCHEMA": "DCNC0959",
+          "TABLE_NAME": "B"
+        },
+        {
+          "SYSTEM_TABLE_SCHEMA": "DCNC0959  ",
+          "SYSTEM_TABLE_NAME": "M         ",
+          "SYSTEM_TABLE_MEMBER": "M         ",
+          "TABLE_SCHEMA": "DCNC0959",
+          "TABLE_NAME": "M"
+        },
+        {
+          "SYSTEM_TABLE_SCHEMA": "DCNC0959  ",
+          "SYSTEM_TABLE_NAME": "U         ",
+          "SYSTEM_TABLE_MEMBER": "U         ",
+          "TABLE_SCHEMA": "DCNC0959",
+          "TABLE_NAME": "U"
+        }
+      ],
+      "before": {
+        "objects": [
+          {
+            "REQUEST_LIBRARY": "DCNC0959",
+            "REQUEST_JOURNAL": "QSQJRN",
+            "JOURNAL_LIBRARY": "DCNC0959",
+            "JOURNAL_NAME": "QSQJRN",
+            "ASP": "1",
+            "OBJECT_LIBRARY": "DCNC0959",
+            "OBJECT_NAME": "A",
+            "OBJECT_TYPE": "*FILE",
+            "FILE_TYPE": "PF",
+            "JOURNALED_TYPE": "0",
+            "SYSTEM_HEX": "C1C5D8C140404040",
+            "RELEASE_HEX": "E5F7D9F5D4F0",
+            "TYPE_HEX": "5CC6C9D3C54040",
+            "NAME_HEX": "C1404040404040404040",
+            "LIBRARY_HEX": "C4C3D5C3F0F9F5F94040",
+            "JOURNAL_HEX": "D8E2D8D1D9D540404040",
+            "JOURNAL_LIBRARY_HEX": "C4C3D5C3F0F9F5F94040",
+            "ASP_HEX": "F1404040404040404040",
+            "FILE_ID_HEX": "00000000000000000000000000000000",
+            "PATH_HEX": ""
+          },
+          {
+            "REQUEST_LIBRARY": "DCNC0959",
+            "REQUEST_JOURNAL": "QSQJRN",
+            "JOURNAL_LIBRARY": "DCNC0959",
+            "JOURNAL_NAME": "QSQJRN",
+            "ASP": "1",
+            "OBJECT_LIBRARY": "DCNC0959",
+            "OBJECT_NAME": "B",
+            "OBJECT_TYPE": "*FILE",
+            "FILE_TYPE": "PF",
+            "JOURNALED_TYPE": "0",
+            "SYSTEM_HEX": "C1C5D8C140404040",
+            "RELEASE_HEX": "E5F7D9F5D4F0",
+            "TYPE_HEX": "5CC6C9D3C54040",
+            "NAME_HEX": "C2404040404040404040",
+            "LIBRARY_HEX": "C4C3D5C3F0F9F5F94040",
+            "JOURNAL_HEX": "D8E2D8D1D9D540404040",
+            "JOURNAL_LIBRARY_HEX": "C4C3D5C3F0F9F5F94040",
+            "ASP_HEX": "F1404040404040404040",
+            "FILE_ID_HEX": "00000000000000000000000000000000",
+            "PATH_HEX": ""
+          },
+          {
+            "REQUEST_LIBRARY": "DCNC0959",
+            "REQUEST_JOURNAL": "QSQJRN",
+            "JOURNAL_LIBRARY": "DCNC0959",
+            "JOURNAL_NAME": "QSQJRN",
+            "ASP": "1",
+            "OBJECT_LIBRARY": "DCNC0959",
+            "OBJECT_NAME": "M",
+            "OBJECT_TYPE": "*FILE",
+            "FILE_TYPE": "PF",
+            "JOURNALED_TYPE": "0",
+            "SYSTEM_HEX": "C1C5D8C140404040",
+            "RELEASE_HEX": "E5F7D9F5D4F0",
+            "TYPE_HEX": "5CC6C9D3C54040",
+            "NAME_HEX": "D4404040404040404040",
+            "LIBRARY_HEX": "C4C3D5C3F0F9F5F94040",
+            "JOURNAL_HEX": "D8E2D8D1D9D540404040",
+            "JOURNAL_LIBRARY_HEX": "C4C3D5C3F0F9F5F94040",
+            "ASP_HEX": "F1404040404040404040",
+            "FILE_ID_HEX": "00000000000000000000000000000000",
+            "PATH_HEX": ""
+          },
+          {
+            "REQUEST_LIBRARY": "DCNC0959",
+            "REQUEST_JOURNAL": "QSQJRN",
+            "JOURNAL_LIBRARY": "DCNC0959",
+            "JOURNAL_NAME": "QSQJRN",
+            "ASP": "1",
+            "OBJECT_LIBRARY": "DCNC0959",
+            "OBJECT_NAME": "U",
+            "OBJECT_TYPE": "*FILE",
+            "FILE_TYPE": "PF",
+            "JOURNALED_TYPE": "0",
+            "SYSTEM_HEX": "C1C5D8C140404040",
+            "RELEASE_HEX": "E5F7D9F5D4F0",
+            "TYPE_HEX": "5CC6C9D3C54040",
+            "NAME_HEX": "E4404040404040404040",
+            "LIBRARY_HEX": "C4C3D5C3F0F9F5F94040",
+            "JOURNAL_HEX": "D8E2D8D1D9D540404040",
+            "JOURNAL_LIBRARY_HEX": "C4C3D5C3F0F9F5F94040",
+            "ASP_HEX": "F1404040404040404040",
+            "FILE_ID_HEX": "00000000000000000000000000000000",
+            "PATH_HEX": ""
+          },
+          {
+            "REQUEST_LIBRARY": "DCNC0959",
+            "REQUEST_JOURNAL": "QSQJRN",
+            "JOURNAL_LIBRARY": "DCNC0959",
+            "JOURNAL_NAME": "QSQJRN",
+            "ASP": "1",
+            "OBJECT_LIBRARY": "QSYS",
+            "OBJECT_NAME": "DCNC0959",
+            "OBJECT_TYPE": "*LIB",
+            "FILE_TYPE": "",
+            "JOURNALED_TYPE": "0",
+            "SYSTEM_HEX": "C1C5D8C140404040",
+            "RELEASE_HEX": "E5F7D9F5D4F0",
+            "TYPE_HEX": "5CD3C9C2404040",
+            "NAME_HEX": "C4C3D5C3F0F9F5F94040",
+            "LIBRARY_HEX": "D8E2E8E2404040404040",
+            "JOURNAL_HEX": "D8E2D8D1D9D540404040",
+            "JOURNAL_LIBRARY_HEX": "C4C3D5C3F0F9F5F94040",
+            "ASP_HEX": "F1404040404040404040",
+            "FILE_ID_HEX": "00000000000000000000000000000000",
+            "PATH_HEX": ""
+          }
+        ],
+        "counts": [
+          {
+            "JOURNAL_LIBRARY": "DCNC0959",
+            "JOURNAL_NAME": "QSQJRN",
+            "JOURNAL_TYPE": "*LOCAL",
+            "JOURNAL_STATE": "*ACTIVE",
+            "JOURNALED_FILES": 4,
+            "JOURNALED_MEMBERS": 4,
+            "JOURNALED_LIBRARIES": 1,
+            "JOURNALED_DATA_AREAS": 0,
+            "JOURNALED_DATA_QUEUES": 0,
+            "JOURNALED_IFS_OBJECTS": 0,
+            "JOURNALED_ACCESS_PATHS": 0,
+            "NUMBER_REMOTE_JOURNALS": 0
+          }
+        ]
+      },
+      "after": {
+        "objects": [
+          {
+            "REQUEST_LIBRARY": "DCNC0959",
+            "REQUEST_JOURNAL": "QSQJRN",
+            "JOURNAL_LIBRARY": "DCNC0959",
+            "JOURNAL_NAME": "QSQJRN",
+            "ASP": "1",
+            "OBJECT_LIBRARY": "DCNC0959",
+            "OBJECT_NAME": "A",
+            "OBJECT_TYPE": "*FILE",
+            "FILE_TYPE": "PF",
+            "JOURNALED_TYPE": "0",
+            "SYSTEM_HEX": "C1C5D8C140404040",
+            "RELEASE_HEX": "E5F7D9F5D4F0",
+            "TYPE_HEX": "5CC6C9D3C54040",
+            "NAME_HEX": "C1404040404040404040",
+            "LIBRARY_HEX": "C4C3D5C3F0F9F5F94040",
+            "JOURNAL_HEX": "D8E2D8D1D9D540404040",
+            "JOURNAL_LIBRARY_HEX": "C4C3D5C3F0F9F5F94040",
+            "ASP_HEX": "F1404040404040404040",
+            "FILE_ID_HEX": "00000000000000000000000000000000",
+            "PATH_HEX": ""
+          },
+          {
+            "REQUEST_LIBRARY": "DCNC0959",
+            "REQUEST_JOURNAL": "QSQJRN",
+            "JOURNAL_LIBRARY": "DCNC0959",
+            "JOURNAL_NAME": "QSQJRN",
+            "ASP": "1",
+            "OBJECT_LIBRARY": "DCNC0959",
+            "OBJECT_NAME": "B",
+            "OBJECT_TYPE": "*FILE",
+            "FILE_TYPE": "PF",
+            "JOURNALED_TYPE": "0",
+            "SYSTEM_HEX": "C1C5D8C140404040",
+            "RELEASE_HEX": "E5F7D9F5D4F0",
+            "TYPE_HEX": "5CC6C9D3C54040",
+            "NAME_HEX": "C2404040404040404040",
+            "LIBRARY_HEX": "C4C3D5C3F0F9F5F94040",
+            "JOURNAL_HEX": "D8E2D8D1D9D540404040",
+            "JOURNAL_LIBRARY_HEX": "C4C3D5C3F0F9F5F94040",
+            "ASP_HEX": "F1404040404040404040",
+            "FILE_ID_HEX": "00000000000000000000000000000000",
+            "PATH_HEX": ""
+          },
+          {
+            "REQUEST_LIBRARY": "DCNC0959",
+            "REQUEST_JOURNAL": "QSQJRN",
+            "JOURNAL_LIBRARY": "DCNC0959",
+            "JOURNAL_NAME": "QSQJRN",
+            "ASP": "1",
+            "OBJECT_LIBRARY": "DCNC0959",
+            "OBJECT_NAME": "M",
+            "OBJECT_TYPE": "*FILE",
+            "FILE_TYPE": "PF",
+            "JOURNALED_TYPE": "0",
+            "SYSTEM_HEX": "C1C5D8C140404040",
+            "RELEASE_HEX": "E5F7D9F5D4F0",
+            "TYPE_HEX": "5CC6C9D3C54040",
+            "NAME_HEX": "D4404040404040404040",
+            "LIBRARY_HEX": "C4C3D5C3F0F9F5F94040",
+            "JOURNAL_HEX": "D8E2D8D1D9D540404040",
+            "JOURNAL_LIBRARY_HEX": "C4C3D5C3F0F9F5F94040",
+            "ASP_HEX": "F1404040404040404040",
+            "FILE_ID_HEX": "00000000000000000000000000000000",
+            "PATH_HEX": ""
+          },
+          {
+            "REQUEST_LIBRARY": "DCNC0959",
+            "REQUEST_JOURNAL": "QSQJRN",
+            "JOURNAL_LIBRARY": "DCNC0959",
+            "JOURNAL_NAME": "QSQJRN",
+            "ASP": "1",
+            "OBJECT_LIBRARY": "DCNC0959",
+            "OBJECT_NAME": "U",
+            "OBJECT_TYPE": "*FILE",
+            "FILE_TYPE": "PF",
+            "JOURNALED_TYPE": "0",
+            "SYSTEM_HEX": "C1C5D8C140404040",
+            "RELEASE_HEX": "E5F7D9F5D4F0",
+            "TYPE_HEX": "5CC6C9D3C54040",
+            "NAME_HEX": "E4404040404040404040",
+            "LIBRARY_HEX": "C4C3D5C3F0F9F5F94040",
+            "JOURNAL_HEX": "D8E2D8D1D9D540404040",
+            "JOURNAL_LIBRARY_HEX": "C4C3D5C3F0F9F5F94040",
+            "ASP_HEX": "F1404040404040404040",
+            "FILE_ID_HEX": "00000000000000000000000000000000",
+            "PATH_HEX": ""
+          },
+          {
+            "REQUEST_LIBRARY": "DCNC0959",
+            "REQUEST_JOURNAL": "QSQJRN",
+            "JOURNAL_LIBRARY": "DCNC0959",
+            "JOURNAL_NAME": "QSQJRN",
+            "ASP": "1",
+            "OBJECT_LIBRARY": "QSYS",
+            "OBJECT_NAME": "DCNC0959",
+            "OBJECT_TYPE": "*LIB",
+            "FILE_TYPE": "",
+            "JOURNALED_TYPE": "0",
+            "SYSTEM_HEX": "C1C5D8C140404040",
+            "RELEASE_HEX": "E5F7D9F5D4F0",
+            "TYPE_HEX": "5CD3C9C2404040",
+            "NAME_HEX": "C4C3D5C3F0F9F5F94040",
+            "LIBRARY_HEX": "D8E2E8E2404040404040",
+            "JOURNAL_HEX": "D8E2D8D1D9D540404040",
+            "JOURNAL_LIBRARY_HEX": "C4C3D5C3F0F9F5F94040",
+            "ASP_HEX": "F1404040404040404040",
+            "FILE_ID_HEX": "00000000000000000000000000000000",
+            "PATH_HEX": ""
+          }
+        ],
+        "counts": [
+          {
+            "JOURNAL_LIBRARY": "DCNC0959",
+            "JOURNAL_NAME": "QSQJRN",
+            "JOURNAL_TYPE": "*LOCAL",
+            "JOURNAL_STATE": "*ACTIVE",
+            "JOURNALED_FILES": 4,
+            "JOURNALED_MEMBERS": 4,
+            "JOURNALED_LIBRARIES": 1,
+            "JOURNALED_DATA_AREAS": 0,
+            "JOURNALED_DATA_QUEUES": 0,
+            "JOURNALED_IFS_OBJECTS": 0,
+            "JOURNALED_ACCESS_PATHS": 0,
+            "NUMBER_REMOTE_JOURNALS": 0
+          }
+        ]
+      }
+    },
+    "status": "observed",
+    "finished": {
+      "utc": "2026-11-09T22:11:20.926453+00:00",
+      "monotonic_ns": 716273891035388
+    }
+  },
+  "baseline-row": {
+    "startup_proof": false,
+    "library": "DCNC0959",
+    "mode": "capture",
+    "response_buffer_bytes": 1048576,
+    "receiver_observation": [
+      {
+        "name": "QSQJRN0002",
+        "library": "DCNC0959",
+        "status": "ATTACHED",
+        "first": "4",
+        "last": "48",
+        "previous": "DCNC0959/QSQJRN0001",
+        "next": "",
+        "job": "YES",
+        "thread": "YES",
+        "minimize": "NO",
+        "luw": "NO",
+        "xid": "NO"
+      }
+    ],
+    "from": {
+      "sequence": "48",
+      "receiver": "QSQJRN0002",
+      "library": "DCNC0959"
+    },
+    "through": {
+      "sequence": "48",
+      "receiver": "QSQJRN0002",
+      "library": "DCNC0959"
+    },
+    "pages": [
+      {
+        "count": 1,
+        "bytes_returned": 356,
+        "from": {
+          "sequence": "48",
+          "receiver": "QSQJRN0002",
+          "library": "DCNC0959"
+        },
+        "through": {
+          "sequence": "48",
+          "receiver": "QSQJRN0002",
+          "library": "DCNC0959"
+        },
+        "continuation": {}
+      }
+    ],
+    "entries": [
+      {
+        "file": "entry-0.bin",
+        "position": {
+          "sequence": "48",
+          "receiver": "QSQJRN0002",
+          "library": "DCNC0959"
+        },
+        "type": "R/PT",
+        "cycle": "0",
+        "table": "A",
+        "library": "DCNC0959",
+        "member": "A",
+        "time": "2026-11-09T17:11:34.395152Z",
+        "record": {
+          "recordNumber": 4,
+          "threadId": 19,
+          "jobName": "QZDASOINIT",
+          "jobUser": "QUSER",
+          "jobNumber": "073350",
+          "objectJournalId": "e94000005191f38d0004",
+          "objectNameIndicator": "1",
+          "objectType": "*QDDS",
+          "systemName": "AEQA",
+          "programName": "QZDASOINIT",
+          "programLibrary": "*OMITTED",
+          "userProfile": "@CDCDATA"
+        },
+        "sha256": "a0405b4675bede0c163cc2ce9c9ca2e9a7c75cc707b777fd9d9a29d1ed75ecb0",
+        "raw": "AAAAAAAAAQwAAAEQAAAAAAAAAAAAAADsAAAAAAAAADCwLZ0pblEAAAAAAAAAAAATAAAAAAAAAAAAAAAAAAAABAAAAAAAAAAAAAAAAAAAAAUAAAAAAAAAAAAAAAAAAAAAAADZ1+PY6cTB4tbJ1cnj2OTixdlAQEBAQPD38/P18NjpxMHi1snVyeNc1tTJ4+PFxEBAXNbUyePjxcRAQMFAQEBAQEBAQEDEw9XD8Pn1+UBAwUBAQEBAQEBAQHzDxMPEwePBQEDpQAAAUZHzjQAE8MHF2MFAQEBA8PEAXNjExOJAQEBAQAAAAAAAAADY4tjR2dXw8PDyxMPVw/D59flAQFzi6OLCweJAQEAAAQAAAADw8PDw9AAAAAAAAAAAAAAAAAAACg=="
+      }
+    ],
+    "receiver_recheck": [
+      {
+        "name": "QSQJRN0002",
+        "library": "DCNC0959",
+        "status": "ATTACHED",
+        "first": "4",
+        "last": "48",
+        "previous": "DCNC0959/QSQJRN0001",
+        "next": "",
+        "job": "YES",
+        "thread": "YES",
+        "minimize": "NO",
+        "luw": "NO",
+        "xid": "NO"
+      }
+    ],
+    "native_identity_evidence": {
+      "through": {
+        "sequence": "48",
+        "receiver": "QSQJRN0002",
+        "library": "DCNC0959"
+      },
+      "visibility_proof": false,
+      "profile": "online-native-observation-v1",
+      "from": {
+        "sequence": "48",
+        "receiver": "QSQJRN0002",
+        "library": "DCNC0959"
+      },
+      "historical_schema_proof": false,
+      "after": {
+        "attached": {
+          "name": "QSQJRN0002",
+          "library": "DCNC0959"
+        },
+        "receivers": [
+          {
+            "next": {},
+            "last": "48",
+            "profile": [
+              "NO",
+              "YES",
+              "YES",
+              "NO",
+              "NO"
+            ],
+            "status": "ATTACHED",
+            "first": "4",
+            "name": {
+              "name": "QSQJRN0002",
+              "library": "DCNC0959"
+            },
+            "previous": {
+              "name": "QSQJRN0001",
+              "library": "DCNC0959"
+            }
+          }
+        ],
+        "objects": [
+          {
+            "kind": "JOURNAL",
+            "generation": "2829710039",
+            "file": "488889",
+            "path": "/QSYS.LIB/DCNC0959.LIB/QSQJRN.JRN",
+            "filesystem": "141016661229569"
+          },
+          {
+            "kind": "RECEIVER",
+            "generation": "2829710039",
+            "file": "488890",
+            "path": "/QSYS.LIB/DCNC0959.LIB/QSQJRN0002.JRNRCV",
+            "filesystem": "141016661229569"
+          }
+        ],
+        "journal": {
+          "name": "QSQJRN",
+          "library": "DCNC0959"
+        }
+      },
+      "before": {
+        "attached": {
+          "name": "QSQJRN0002",
+          "library": "DCNC0959"
+        },
+        "receivers": [
+          {
+            "next": {},
+            "last": "48",
+            "profile": [
+              "NO",
+              "YES",
+              "YES",
+              "NO",
+              "NO"
+            ],
+            "status": "ATTACHED",
+            "first": "4",
+            "name": {
+              "name": "QSQJRN0002",
+              "library": "DCNC0959"
+            },
+            "previous": {
+              "name": "QSQJRN0001",
+              "library": "DCNC0959"
+            }
+          }
+        ],
+        "objects": [
+          {
+            "kind": "JOURNAL",
+            "generation": "2829710039",
+            "file": "488889",
+            "path": "/QSYS.LIB/DCNC0959.LIB/QSQJRN.JRN",
+            "filesystem": "141016661229569"
+          },
+          {
+            "kind": "RECEIVER",
+            "generation": "2829710039",
+            "file": "488890",
+            "path": "/QSYS.LIB/DCNC0959.LIB/QSQJRN0002.JRNRCV",
+            "filesystem": "141016661229569"
+          }
+        ],
+        "journal": {
+          "name": "QSQJRN",
+          "library": "DCNC0959"
+        }
+      },
+      "startup_proof": false
+    },
+    "status": "captured",
+    "transport_disconnected": true
+  },
+  "autocommit-rows": {
+    "startup_proof": false,
+    "library": "DCNC0959",
+    "mode": "capture",
+    "response_buffer_bytes": 1048576,
+    "receiver_observation": [
+      {
+        "name": "QSQJRN0002",
+        "library": "DCNC0959",
+        "status": "ATTACHED",
+        "first": "4",
+        "last": "58",
+        "previous": "DCNC0959/QSQJRN0001",
+        "next": "",
+        "job": "YES",
+        "thread": "YES",
+        "minimize": "NO",
+        "luw": "NO",
+        "xid": "NO"
+      }
+    ],
+    "from": {
+      "sequence": "56",
+      "receiver": "QSQJRN0002",
+      "library": "DCNC0959"
+    },
+    "through": {
+      "sequence": "58",
+      "receiver": "QSQJRN0002",
+      "library": "DCNC0959"
+    },
+    "pages": [
+      {
+        "count": 3,
+        "bytes_returned": 900,
+        "from": {
+          "sequence": "56",
+          "receiver": "QSQJRN0002",
+          "library": "DCNC0959"
+        },
+        "through": {
+          "sequence": "58",
+          "receiver": "QSQJRN0002",
+          "library": "DCNC0959"
+        },
+        "continuation": {}
+      }
+    ],
+    "entries": [
+      {
+        "file": "entry-0.bin",
+        "position": {
+          "sequence": "56",
+          "receiver": "QSQJRN0002",
+          "library": "DCNC0959"
+        },
+        "type": "R/PT",
+        "cycle": "0",
+        "table": "A",
+        "library": "DCNC0959",
+        "member": "A",
+        "time": "2026-11-09T17:11:39.376304Z",
+        "record": {
+          "recordNumber": 5,
+          "threadId": 19,
+          "jobName": "QZDASOINIT",
+          "jobUser": "QUSER",
+          "jobNumber": "073350",
+          "objectJournalId": "e94000005191f38d0004",
+          "objectNameIndicator": "1",
+          "objectType": "*QDDS",
+          "systemName": "AEQA",
+          "programName": "QZDASOINIT",
+          "programLibrary": "*OMITTED",
+          "userProfile": "@CDCDATA"
+        },
+        "sha256": "7763448572e949017437c394b921d8ef7e91e05f884dd1717d23bb7cb9f68018",
+        "raw": "AAAAAAAAAQwAAAEQAAAAAAAAAAAAAADsAAAAAAAAADiwLZ0uLmsAAAAAAAAAAAATAAAAAAAAAAAAAAAAAAAABQAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAAAAADZ1+PY6cTB4tbJ1cnj2OTixdlAQEBAQPD38/P18NjpxMHi1snVyeNc1tTJ4+PFxEBAXNbUyePjxcRAQMFAQEBAQEBAQEDEw9XD8Pn1+UBAwUBAQEBAQEBAQHzDxMPEwePBQEDpQAAAUZHzjQAE8MHF2MFAQEBA8PEAXNjExOJAQEBAQAAAAAAAAADY4tjR2dXw8PDyxMPVw/D59flAQFzi6OLCweJAQEAAAQAAAADw8PDw9AAAAAAAAAAAAAAAAAAACwAAAAAAAAAAAAAAAA=="
+      },
+      {
+        "file": "entry-1.bin",
+        "position": {
+          "sequence": "57",
+          "receiver": "QSQJRN0002",
+          "library": "DCNC0959"
+        },
+        "type": "R/PT",
+        "cycle": "0",
+        "table": "LATE",
+        "library": "DCNC0959",
+        "member": "LATE",
+        "time": "2026-11-09T17:11:39.476320Z",
+        "record": {
+          "recordNumber": 1,
+          "threadId": 19,
+          "jobName": "QZDASOINIT",
+          "jobUser": "QUSER",
+          "jobNumber": "073350",
+          "objectJournalId": "e94000005191f38d000c",
+          "objectNameIndicator": "1",
+          "objectType": "*QDDS",
+          "systemName": "AEQA",
+          "programName": "QZDASOINIT",
+          "programLibrary": "*OMITTED",
+          "userProfile": "@CDCDATA"
+        },
+        "sha256": "fd26391154b30b46e449b957549321d3fb5c315bff9d9e23f4c0d02463c88807",
+        "raw": "AAAAAAAAAOwAAADwAAAAAAAAAAAAAAAAAAAAAAAAADmwLZ0uRtYAAAAAAAAAAAATAAAAAAAAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAIAAAAAAAAAAAAAAAAAAAAAAADZ1+PY6cTB4tbJ1cnj2OTixdlAQEBAQPD38/P18NjpxMHi1snVyeNc1tTJ4+PFxEBAXNbUyePjxcRAQNPB48VAQEBAQEDEw9XD8Pn1+UBA08HjxUBAQEBAQHzDxMPEwePBQEDpQAAAUZHzjQAM8MHF2MFAQEBA8PEAXNjExOJAQEBAQAAAAAAAAAAAAAAA8PDw8PQAAAAAAAAAAAAAAAAAAGMAAAAAAAAAAAAAAAA="
+      },
+      {
+        "file": "entry-2.bin",
+        "position": {
+          "sequence": "58",
+          "receiver": "QSQJRN0002",
+          "library": "DCNC0959"
+        },
+        "type": "R/PT",
+        "cycle": "0",
+        "table": "A",
+        "library": "DCNC0959",
+        "member": "A",
+        "time": "2026-11-09T17:11:39.514592Z",
+        "record": {
+          "recordNumber": 6,
+          "threadId": 19,
+          "jobName": "QZDASOINIT",
+          "jobUser": "QUSER",
+          "jobNumber": "073350",
+          "objectJournalId": "e94000005191f38d0004",
+          "objectNameIndicator": "1",
+          "objectType": "*QDDS",
+          "systemName": "AEQA",
+          "programName": "QZDASOINIT",
+          "programLibrary": "*OMITTED",
+          "userProfile": "@CDCDATA"
+        },
+        "sha256": "8a8eaf9eeaa0f74212ad1016a37b387d73de768a5ae3f95e8599758a3c5cbf14",
+        "raw": "AAAAAAAAAOwAAADwAAAAAAAAAAAAAAAAAAAAAAAAADqwLZ0uUC4AAAAAAAAAAAATAAAAAAAAAAAAAAAAAAAABgAAAAAAAAAAAAAAAAAAAAMAAAAAAAAAAAAAAAAAAAAAAADZ1+PY6cTB4tbJ1cnj2OTixdlAQEBAQPD38/P18NjpxMHi1snVyeNc1tTJ4+PFxEBAXNbUyePjxcRAQMFAQEBAQEBAQEDEw9XD8Pn1+UBAwUBAQEBAQEBAQHzDxMPEwePBQEDpQAAAUZHzjQAE8MHF2MFAQEBA8PEAXNjExOJAQEBAQAAAAAAAAAAAAAAA8PDw8PQAAAAAAAAAAAAAAAAAAAw="
+      }
+    ],
+    "receiver_recheck": [
+      {
+        "name": "QSQJRN0002",
+        "library": "DCNC0959",
+        "status": "ATTACHED",
+        "first": "4",
+        "last": "58",
+        "previous": "DCNC0959/QSQJRN0001",
+        "next": "",
+        "job": "YES",
+        "thread": "YES",
+        "minimize": "NO",
+        "luw": "NO",
+        "xid": "NO"
+      }
+    ],
+    "native_identity_evidence": {
+      "through": {
+        "sequence": "58",
+        "receiver": "QSQJRN0002",
+        "library": "DCNC0959"
+      },
+      "visibility_proof": false,
+      "profile": "online-native-observation-v1",
+      "from": {
+        "sequence": "56",
+        "receiver": "QSQJRN0002",
+        "library": "DCNC0959"
+      },
+      "historical_schema_proof": false,
+      "after": {
+        "attached": {
+          "name": "QSQJRN0002",
+          "library": "DCNC0959"
+        },
+        "receivers": [
+          {
+            "last": "58",
+            "profile": [
+              "NO",
+              "YES",
+              "YES",
+              "NO",
+              "NO"
+            ],
+            "status": "ATTACHED",
+            "first": "4",
+            "name": {
+              "name": "QSQJRN0002",
+              "library": "DCNC0959"
+            },
+            "previous": {
+              "name": "QSQJRN0001",
+              "library": "DCNC0959"
+            },
+            "next": {}
+          }
+        ],
+        "objects": [
+          {
+            "generation": "2829710039",
+            "file": "488889",
+            "path": "/QSYS.LIB/DCNC0959.LIB/QSQJRN.JRN",
+            "filesystem": "141016661229569",
+            "kind": "JOURNAL"
+          },
+          {
+            "generation": "2829710039",
+            "file": "488890",
+            "path": "/QSYS.LIB/DCNC0959.LIB/QSQJRN0002.JRNRCV",
+            "filesystem": "141016661229569",
+            "kind": "RECEIVER"
+          }
+        ],
+        "journal": {
+          "name": "QSQJRN",
+          "library": "DCNC0959"
+        }
+      },
+      "before": {
+        "attached": {
+          "name": "QSQJRN0002",
+          "library": "DCNC0959"
+        },
+        "receivers": [
+          {
+            "last": "58",
+            "profile": [
+              "NO",
+              "YES",
+              "YES",
+              "NO",
+              "NO"
+            ],
+            "status": "ATTACHED",
+            "first": "4",
+            "name": {
+              "name": "QSQJRN0002",
+              "library": "DCNC0959"
+            },
+            "previous": {
+              "name": "QSQJRN0001",
+              "library": "DCNC0959"
+            },
+            "next": {}
+          }
+        ],
+        "objects": [
+          {
+            "generation": "2829710039",
+            "file": "488889",
+            "path": "/QSYS.LIB/DCNC0959.LIB/QSQJRN.JRN",
+            "filesystem": "141016661229569",
+            "kind": "JOURNAL"
+          },
+          {
+            "generation": "2829710039",
+            "file": "488890",
+            "path": "/QSYS.LIB/DCNC0959.LIB/QSQJRN0002.JRNRCV",
+            "filesystem": "141016661229569",
+            "kind": "RECEIVER"
+          }
+        ],
+        "journal": {
+          "name": "QSQJRN",
+          "library": "DCNC0959"
+        }
+      },
+      "startup_proof": false
+    },
+    "status": "captured",
+    "transport_disconnected": true
+  },
+  "transaction-rows": {
+    "startup_proof": false,
+    "library": "DCNC0959",
+    "mode": "capture",
+    "response_buffer_bytes": 1048576,
+    "receiver_observation": [
+      {
+        "name": "QSQJRN0002",
+        "library": "DCNC0959",
+        "status": "ATTACHED",
+        "first": "4",
+        "last": "63",
+        "previous": "DCNC0959/QSQJRN0001",
+        "next": "",
+        "job": "YES",
+        "thread": "YES",
+        "minimize": "NO",
+        "luw": "NO",
+        "xid": "NO"
+      }
+    ],
+    "from": {
+      "sequence": "58",
+      "library": "DCNC0959",
+      "receiver": "QSQJRN0002"
+    },
+    "through": {
+      "sequence": "63",
+      "library": "DCNC0959",
+      "receiver": "QSQJRN0002"
+    },
+    "pages": [
+      {
+        "from": {
+          "sequence": "58",
+          "library": "DCNC0959",
+          "receiver": "QSQJRN0002"
+        },
+        "bytes_returned": 1680,
+        "count": 6,
+        "continuation": {},
+        "through": {
+          "sequence": "63",
+          "library": "DCNC0959",
+          "receiver": "QSQJRN0002"
+        }
+      }
+    ],
+    "entries": [
+      {
+        "file": "entry-0.bin",
+        "position": {
+          "sequence": "58",
+          "library": "DCNC0959",
+          "receiver": "QSQJRN0002"
+        },
+        "type": "R/PT",
+        "cycle": "0",
+        "table": "A",
+        "library": "DCNC0959",
+        "member": "A",
+        "time": "2026-11-09T17:11:39.514592Z",
+        "record": {
+          "recordNumber": 6,
+          "threadId": 19,
+          "jobName": "QZDASOINIT",
+          "jobUser": "QUSER",
+          "jobNumber": "073350",
+          "objectJournalId": "e94000005191f38d0004",
+          "objectNameIndicator": "1",
+          "objectType": "*QDDS",
+          "systemName": "AEQA",
+          "programName": "QZDASOINIT",
+          "programLibrary": "*OMITTED",
+          "userProfile": "@CDCDATA"
+        },
+        "sha256": "b9e3b52525834402958e7571e992bceb66fbaeab6682dc2f2c5f289f0bb9d201",
+        "raw": "AAAAAAAAAQwAAAEQAAAAAAAAAAAAAADsAAAAAAAAADqwLZ0uUC4AAAAAAAAAAAATAAAAAAAAAAAAAAAAAAAABgAAAAAAAAAAAAAAAAAAAAMAAAAAAAAAAAAAAAAAAAAAAADZ1+PY6cTB4tbJ1cnj2OTixdlAQEBAQPD38/P18NjpxMHi1snVyeNc1tTJ4+PFxEBAXNbUyePjxcRAQMFAQEBAQEBAQEDEw9XD8Pn1+UBAwUBAQEBAQEBAQHzDxMPEwePBQEDpQAAAUZHzjQAE8MHF2MFAQEBA8PEAXNjExOJAQEBAQAAAAAAAAADY4tjR2dXw8PDyxMPVw/D59flAQFzi6OLCweJAQEAAAQAAAADw8PDw9AAAAAAAAAAAAAAAAAAADAAAAAAAAAAAAAAAAA=="
+      },
+      {
+        "file": "entry-1.bin",
+        "position": {
+          "sequence": "59",
+          "library": "DCNC0959",
+          "receiver": "QSQJRN0002"
+        },
+        "type": "C/BC",
+        "cycle": "0",
+        "table": "",
+        "library": "",
+        "member": "",
+        "time": "2026-11-09T17:11:44.159216Z",
+        "record": {
+          "recordNumber": 0,
+          "threadId": 14,
+          "jobName": "QZDASOINIT",
+          "jobUser": "QUSER",
+          "jobNumber": "073358",
+          "objectJournalId": "00000000000000000000",
+          "objectNameIndicator": "0",
+          "objectType": "",
+          "systemName": "AEQA",
+          "programName": "QZDASOINIT",
+          "programLibrary": "*OMITTED",
+          "userProfile": "@CDCDATA"
+        },
+        "sha256": "4df9cf34a254fa8c964b7a9db198e1ef4ccbc6210e80d61501af5848c368bd44",
+        "raw": "AAAAAAAAAOwAAADwAAAAAAAAAAAAAAAAAAAAAAAAADuwLZ0yvh8AAAAAAAAAAAAOAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAADDwsPY6cTB4tbJ1cnj2OTixdlAQEBAQPD38/P1+NjpxMHi1snVyeNc1tTJ4+PFxEBAXNbUyePjxcRAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQHzDxMPEwePBQEAAAAAAAAAAAAAA8MHF2MFAQEBA8PAAQEBAQEBAQEBAQAAAAAAAAAAAAAAA8PDw8PAAAAAAAAAAAAAAAA=="
+      },
+      {
+        "file": "entry-2.bin",
+        "position": {
+          "sequence": "60",
+          "library": "DCNC0959",
+          "receiver": "QSQJRN0002"
+        },
+        "type": "C/SC",
+        "cycle": "60",
+        "table": "",
+        "library": "",
+        "member": "",
+        "time": "2026-11-09T17:11:44.166832Z",
+        "record": {
+          "recordNumber": 0,
+          "threadId": 14,
+          "jobName": "QZDASOINIT",
+          "jobUser": "QUSER",
+          "jobNumber": "073358",
+          "objectJournalId": "00000000000000000000",
+          "objectNameIndicator": "0",
+          "objectType": "",
+          "systemName": "AEQA",
+          "programName": "QZDASOINIT",
+          "programLibrary": "*OMITTED",
+          "userProfile": "@CDCDATA"
+        },
+        "sha256": "3a16250ae3676dc14e61ba1c7a4ab8f596d31f90aa5b6c64b3566b6d17c861d0",
+        "raw": "AAAAAAAAAOwAAADwAAAAAAAAAAAAAAAAAAAAAAAAADywLZ0yv/sAAAAAAAAAAAAOAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA8AAAAAAAAAAUAAAAAAAAAAAAAAAAAAAAAAADD4sPY6cTB4tbJ1cnj2OTixdlAQEBAQPD38/P1+NjpxMHi1snVyeNc1tTJ4+PFxEBAXNbUyePjxcRAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQHzDxMPEwePBQEAAAAAAAAAAAAAA8MHF2MFAQEBA8PAAQEBAQEBAQEBAQAAAAAAAAAAAAAAA8PDw8PAAAAAAAAAAAAAAAA=="
+      },
+      {
+        "file": "entry-3.bin",
+        "position": {
+          "sequence": "61",
+          "library": "DCNC0959",
+          "receiver": "QSQJRN0002"
+        },
+        "type": "R/PT",
+        "cycle": "60",
+        "table": "A",
+        "library": "DCNC0959",
+        "member": "A",
+        "time": "2026-11-09T17:11:44.176720Z",
+        "record": {
+          "recordNumber": 7,
+          "threadId": 14,
+          "jobName": "QZDASOINIT",
+          "jobUser": "QUSER",
+          "jobNumber": "073358",
+          "objectJournalId": "e94000005191f38d0004",
+          "objectNameIndicator": "1",
+          "objectType": "*QDDS",
+          "systemName": "AEQA",
+          "programName": "QZDASOINIT",
+          "programLibrary": "*OMITTED",
+          "userProfile": "@CDCDATA"
+        },
+        "sha256": "cb62bfd026ff26fd083d3ed8464083d2fad512687eb11c42a751d137f74efd1f",
+        "raw": "AAAAAAAAAOwAAADwAAAAAAAAAAAAAAAAAAAAAAAAAD2wLZ0ywmUAAAAAAAAAAAAOAAAAAAAAAAAAAAAAAAAABwAAAAAAAAA8AAAAAAAAAAUAAAAAAAAAAAAAAAAAAAAAAADZ1+PY6cTB4tbJ1cnj2OTixdlAQEBAQPD38/P1+NjpxMHi1snVyeNc1tTJ4+PFxEBAXNbUyePjxcRAQMFAQEBAQEBAQEDEw9XD8Pn1+UBAwUBAQEBAQEBAQHzDxMPEwePBQEDpQAAAUZHzjQAE8MHF2MFAQEBA8PEAXNjExOJAQEBAQAAAAAAAAAAAAAAA8PDw8PQAAAAAAAAAAAAAAAAAAA0AAAAAAAAAAAAAAAA="
+      },
+      {
+        "file": "entry-4.bin",
+        "position": {
+          "sequence": "62",
+          "library": "DCNC0959",
+          "receiver": "QSQJRN0002"
+        },
+        "type": "R/PT",
+        "cycle": "60",
+        "table": "LATE",
+        "library": "DCNC0959",
+        "member": "LATE",
+        "time": "2026-11-09T17:11:44.214976Z",
+        "record": {
+          "recordNumber": 2,
+          "threadId": 14,
+          "jobName": "QZDASOINIT",
+          "jobUser": "QUSER",
+          "jobNumber": "073358",
+          "objectJournalId": "e94000005191f38d000c",
+          "objectNameIndicator": "1",
+          "objectType": "*QDDS",
+          "systemName": "AEQA",
+          "programName": "QZDASOINIT",
+          "programLibrary": "*OMITTED",
+          "userProfile": "@CDCDATA"
+        },
+        "sha256": "c06bcaa5d5728623250a2a4d5f498003a5c262b94d405e2fd9b168fce844942e",
+        "raw": "AAAAAAAAAOwAAADwAAAAAAAAAAAAAAAAAAAAAAAAAD6wLZ0yy7wAAAAAAAAAAAAOAAAAAAAAAAAAAAAAAAAAAgAAAAAAAAA8AAAAAAAAAAUAAAAAAAAAAAAAAAAAAAAAAADZ1+PY6cTB4tbJ1cnj2OTixdlAQEBAQPD38/P1+NjpxMHi1snVyeNc1tTJ4+PFxEBAXNbUyePjxcRAQNPB48VAQEBAQEDEw9XD8Pn1+UBA08HjxUBAQEBAQHzDxMPEwePBQEDpQAAAUZHzjQAM8MHF2MFAQEBA8PEAXNjExOJAQEBAQAAAAAAAAAAAAAAA8PDw8PQAAAAAAAAAAAAAAAAAAGQAAAAAAAAAAAAAAAA="
+      },
+      {
+        "file": "entry-5.bin",
+        "position": {
+          "sequence": "63",
+          "library": "DCNC0959",
+          "receiver": "QSQJRN0002"
+        },
+        "type": "C/CM",
+        "cycle": "60",
+        "table": "",
+        "library": "",
+        "member": "",
+        "time": "2026-11-09T17:11:44.244496Z",
+        "record": {
+          "recordNumber": 0,
+          "threadId": 14,
+          "jobName": "QZDASOINIT",
+          "jobUser": "QUSER",
+          "jobNumber": "073358",
+          "objectJournalId": "00000000000000000000",
+          "objectNameIndicator": "0",
+          "objectType": "",
+          "systemName": "AEQA",
+          "programName": "QZDASOINIT",
+          "programLibrary": "*OMITTED",
+          "userProfile": "@CDCDATA"
+        },
+        "sha256": "8f5fc1912ce91a87c2aea8205f71274b754e03bab00d34a9b369f2f6dda20b8d",
+        "raw": "AAAAAAAAAOwAAADwAAAAAAAAAAAAAAAAAAAAAAAAAD+wLZ0y0vEAAAAAAAAAAAAOAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA8AAAAAAAAAAYAAAAAAAAAAAAAAAAAAAAAAADDw9TY6cTB4tbJ1cnj2OTixdlAQEBAQPD38/P1+NjpxMHi1snVyeNc1tTJ4+PFxEBAXNbUyePjxcRAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQHzDxMPEwePBQEAAAAAAAAAAAAAA8MHF2MFAQEBA8PAAQEBAQEBAQEBAQAAAAAAAAAAAAAAA8PDw8PAAAAAAAAAAAAAAAA=="
+      }
+    ],
+    "receiver_recheck": [
+      {
+        "name": "QSQJRN0002",
+        "library": "DCNC0959",
+        "status": "ATTACHED",
+        "first": "4",
+        "last": "63",
+        "previous": "DCNC0959/QSQJRN0001",
+        "next": "",
+        "job": "YES",
+        "thread": "YES",
+        "minimize": "NO",
+        "luw": "NO",
+        "xid": "NO"
+      }
+    ],
+    "native_identity_evidence": {
+      "historical_schema_proof": false,
+      "from": {
+        "sequence": "58",
+        "library": "DCNC0959",
+        "receiver": "QSQJRN0002"
+      },
+      "profile": "online-native-observation-v1",
+      "visibility_proof": false,
+      "through": {
+        "sequence": "63",
+        "library": "DCNC0959",
+        "receiver": "QSQJRN0002"
+      },
+      "startup_proof": false,
+      "before": {
+        "receivers": [
+          {
+            "profile": [
+              "NO",
+              "YES",
+              "YES",
+              "NO",
+              "NO"
+            ],
+            "last": "63",
+            "next": {},
+            "previous": {
+              "library": "DCNC0959",
+              "name": "QSQJRN0001"
+            },
+            "name": {
+              "library": "DCNC0959",
+              "name": "QSQJRN0002"
+            },
+            "first": "4",
+            "status": "ATTACHED"
+          }
+        ],
+        "attached": {
+          "library": "DCNC0959",
+          "name": "QSQJRN0002"
+        },
+        "journal": {
+          "library": "DCNC0959",
+          "name": "QSQJRN"
+        },
+        "objects": [
+          {
+            "file": "488889",
+            "generation": "2829710039",
+            "kind": "JOURNAL",
+            "filesystem": "141016661229569",
+            "path": "/QSYS.LIB/DCNC0959.LIB/QSQJRN.JRN"
+          },
+          {
+            "file": "488890",
+            "generation": "2829710039",
+            "kind": "RECEIVER",
+            "filesystem": "141016661229569",
+            "path": "/QSYS.LIB/DCNC0959.LIB/QSQJRN0002.JRNRCV"
+          }
+        ]
+      },
+      "after": {
+        "receivers": [
+          {
+            "profile": [
+              "NO",
+              "YES",
+              "YES",
+              "NO",
+              "NO"
+            ],
+            "last": "63",
+            "next": {},
+            "previous": {
+              "library": "DCNC0959",
+              "name": "QSQJRN0001"
+            },
+            "name": {
+              "library": "DCNC0959",
+              "name": "QSQJRN0002"
+            },
+            "first": "4",
+            "status": "ATTACHED"
+          }
+        ],
+        "attached": {
+          "library": "DCNC0959",
+          "name": "QSQJRN0002"
+        },
+        "journal": {
+          "library": "DCNC0959",
+          "name": "QSQJRN"
+        },
+        "objects": [
+          {
+            "file": "488889",
+            "generation": "2829710039",
+            "kind": "JOURNAL",
+            "filesystem": "141016661229569",
+            "path": "/QSYS.LIB/DCNC0959.LIB/QSQJRN.JRN"
+          },
+          {
+            "file": "488890",
+            "generation": "2829710039",
+            "kind": "RECEIVER",
+            "filesystem": "141016661229569",
+            "path": "/QSYS.LIB/DCNC0959.LIB/QSQJRN0002.JRNRCV"
+          }
+        ]
+      }
+    },
+    "status": "captured",
+    "transport_disconnected": true
+  }
+}

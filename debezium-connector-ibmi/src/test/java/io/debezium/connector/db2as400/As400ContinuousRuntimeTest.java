@@ -30,9 +30,9 @@ import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
-import io.debezium.connector.db2as400.As400BindingHistoryTest.Fixture;
 import io.debezium.connector.db2as400.As400JdbcNativeIdentityEvidence.Candidates;
 import io.debezium.connector.db2as400.As400JdbcNativeIdentityEvidence.Target;
+import io.debezium.connector.db2as400.As400RecoveryTestSupport.Fixture;
 import io.debezium.ibmi.db2.journal.retrieve.JournalPosition;
 import io.debezium.ibmi.db2.journal.retrieve.RawJournalPage;
 import io.debezium.ibmi.db2.journal.retrieve.RetrieveJournal;
@@ -47,20 +47,20 @@ class As400ContinuousRuntimeTest {
         List<SourceRecord> records = new ArrayList<>();
         try (var output = f.output(); var runtime = f.runtime(f.initial, f::read, output, records::add)) {
             var saved = runtime.poll(f.initial).checkpoint();
-            assertThat(As400BindingHistoryTest.data(records)).containsExactly("c:A:8");
+            assertThat(As400RecoveryTestSupport.data(records)).containsExactly("c:A:8");
             f.ranges.clear();
             assertThat(runtime.poll(saved).entries()).isZero();
             assertThat(f.ranges).containsExactly("31:31", "42:42");
             f.tail = 44;
             saved = runtime.poll(saved).checkpoint();
-            assertThat(As400BindingHistoryTest.data(records)).containsExactly("c:A:8", "t:B", "c:B:100");
+            assertThat(As400RecoveryTestSupport.data(records)).containsExactly("c:A:8", "t:B", "c:B:100");
             f.tail = 56;
             saved = runtime.poll(saved).checkpoint();
             f.tail = 64;
             var finalPoll = runtime.poll(saved);
             assertThat(finalPoll.scan()).contains(Fixture.position(64));
             assertThat(finalPoll.checkpoint()).containsEntry("completed_through.sequence", "59");
-            assertThat(As400BindingHistoryTest.data(records)).containsExactly("c:A:8", "t:B", "c:B:100", "c:A:9");
+            assertThat(As400RecoveryTestSupport.data(records)).containsExactly("c:A:8", "t:B", "c:B:100", "c:A:9");
             assertThat(f.ranges).doesNotContain("31:44", "31:56", "46:64");
         }
     }
@@ -78,7 +78,7 @@ class As400ContinuousRuntimeTest {
         try (var output = replacement.output(); var runtime = replacement.runtime(saved, replacement::read, output, records::add)) {
             assertThat(runtime.poll(saved).checkpoint()).containsEntry("completed_through.sequence", "59");
         }
-        assertThat(As400BindingHistoryTest.data(records)).containsExactly("c:A:8", "t:B", "c:B:100", "c:A:9");
+        assertThat(As400RecoveryTestSupport.data(records)).containsExactly("c:A:8", "t:B", "c:B:100", "c:A:9");
     }
 
     @ParameterizedTest
@@ -107,7 +107,7 @@ class As400ContinuousRuntimeTest {
             if (fault.equals("stale-offset")) {
                 assertThat(f.ranges).isEmpty();
             }
-            assertThat(As400BindingHistoryTest.data(records)).containsExactly("c:A:8");
+            assertThat(As400RecoveryTestSupport.data(records)).containsExactly("c:A:8");
             assertThrows(Exception.class, () -> runtime.poll(saved));
         }
     }

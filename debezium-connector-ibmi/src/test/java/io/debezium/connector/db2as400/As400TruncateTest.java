@@ -324,7 +324,8 @@ class As400TruncateTest {
         assertThat(value.get("after")).isNull();
         assertThat(value.getStruct("source").getString("sequence")).isEqualTo("42");
         assertThat(value.getStruct("source").getInt64("ts_ms")).isEqualTo(SOURCE_TIME.toEpochMilli());
-        assertThat(offset.getTransactionContext()).isNull();
+        assertThat(offset.getTransactionContext().isTransactionInProgress()).isFalse();
+        assertThat(offset.getTransactionContext().getTransactionId()).isNull();
     }
 
     private void accept(char code, String type, char subtype, int sequence, int transaction, String file) throws Exception {

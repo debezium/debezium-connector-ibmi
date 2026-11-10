@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# Copyright Debezium Authors. Licensed under the Apache License, Version 2.0.
+set -euo pipefail
+probe_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+cd "$probe_root"
+probe_module=debezium-connector-ibmi
+probe_cp_file="$probe_root/$probe_module/target/native-identity-classpath.txt"
+if [[ $# == 1 && $1 == build ]]; then
+    ./mvnw -B -ntp test-compile -DskipTests -DskipITs
+    ./mvnw -B -ntp -pl "$probe_module" dependency:build-classpath -DincludeScope=test -Dmdep.outputFile="$probe_cp_file"
+    exit
+fi
+if ! { [[ $# == 2 && $1 == plan ]] || [[ $# == 3 && $1 == collect ]]; }; then
+    echo 'Usage: tools/native-identity-probe build | plan CONFIG | collect CONFIG NEW_REPORT' >&2
+    exit 2
+fi
+if [[ ! -s "$probe_cp_file" || ! -f "$probe_module/target/test-classes/io/debezium/connector/db2as400/As400NativeIdentityProbe.class" ]]; then
+    echo 'Build the probe first: tools/native-identity-probe build' >&2
+    exit 2
+fi
+probe_cp="$probe_module/target/test-classes:$probe_module/target/classes:journal-parsing/target/classes:jt400-override-ccsid/target/classes:$(cat -- "$probe_cp_file")"
+# Separate process deadline covers DNS/driver/server behavior beyond JDBC timeout hints.
+# A timeout/incomplete report never counts as a successful observation.
+exec timeout --signal=TERM --kill-after=5s 300s java -cp "$probe_cp" io.debezium.connector.db2as400.As400NativeIdentityProbe "$@"

@@ -1,0 +1,104 @@
+#!/usr/bin/env python3
+# Copyright Debezium Authors. Licensed under the Apache License, Version 2.0.
+"""Local operator plan only. Does not pause IBM i writers or enable a connector."""
+import argparse
+import json
+import os
+from pathlib import Path
+import re
+import time
+import uuid
+
+
+def force(path):
+    fd = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def properties(path):
+    return dict(line.split("=", 1) for line in path.read_text().splitlines() if line and not line.startswith("#"))
+
+
+def require(condition, message):
+    # Operator admission must not disappear when Python runs with -O.
+    if not condition:
+        raise ValueError(message)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    commands = parser.add_subparsers(dest="command", required=True)
+    prepare = commands.add_parser("prepare", help="Record an already-established operator pause and its bounded scope")
+    prepare.add_argument("directory", type=Path)
+    prepare.add_argument("--operator", required=True)
+    prepare.add_argument("--journal", required=True, help="LIBRARY/JOURNAL")
+    prepare.add_argument("--captured", required=True, help="Comma-separated LIBRARY.TABLE names")
+    prepare.add_argument("--controlled", required=True, help="Every controlled file sharing the journal, including uncaptured files")
+    prepare.add_argument("--seconds", type=int, required=True)
+    prepare.add_argument("--rows", type=int, required=True)
+    prepare.add_argument("--bytes", type=int, required=True)
+    prepare.add_argument("--chunk-rows", type=int, help="Rows per chunk (default: 256; supply with --chunk-bytes)")
+    prepare.add_argument("--chunk-bytes", type=int, help="Bytes per chunk (default: 1000000; supply with --chunk-rows)")
+    prepare.add_argument("--legacy-list-plan", action="store_true", help="Historical list-based experiment only; rejected by normal connector startup")
+    prepare.add_argument("--all-journal-writers-stopped", action="store_true", required=True)
+    prepare.add_argument("--maintenance-stopped", action="store_true", required=True)
+    prepare.add_argument("--operator-managed-retention", action="store_true", required=True)
+    for name in ["status", "revoke"]:
+        command = commands.add_parser(name)
+        command.add_argument("directory", type=Path)
+    args = parser.parse_args()
+    if args.command == "prepare":
+        require(re.fullmatch(r"[A-Za-z0-9@._-]{1,100}", args.operator), "Invalid operator identifier")
+        require(re.fullmatch(r"[A-Z][A-Z0-9_]{0,9}/[A-Z][A-Z0-9_]{0,9}", args.journal), "Invalid journal")
+        scopes = {}
+        for name in ["captured", "controlled"]:
+            values = getattr(args, name).split(",")
+            require(1 <= len(values) <= 100 and len(set(values)) == len(values), "Scope must be nonempty, bounded and unique")
+            require(all(re.fullmatch(r"[A-Z][A-Z0-9_]{0,9}\.[A-Z][A-Z0-9_]{0,9}", v) for v in values), "Invalid table scope")
+            scopes[name] = sorted(values)
+        require(set(scopes["captured"]) <= set(scopes["controlled"]), "Controlled scope omits captured files")
+        require((args.chunk_rows is None) == (args.chunk_bytes is None), "Both chunk bounds required")
+        require(not args.legacy_list_plan or args.chunk_rows is None, "Legacy list plans cannot declare chunk bounds")
+        chunked = not args.legacy_list_plan
+        require(1 <= args.seconds <= 1800, "Unsupported window limit")
+        if chunked:
+            if args.chunk_rows is None:
+                args.chunk_rows, args.chunk_bytes = 256, 1_000_000
+            require(1 <= args.chunk_rows <= 256 and 1 <= args.chunk_bytes <= 1_000_000, "Unsupported chunk limit")
+            require(1 <= args.rows <= 2**63 - 1 and 1 <= args.bytes <= 2**63 - 1, "Finite positive total budgets required")
+        else:
+            require(1 <= args.rows <= 9000 and 1 <= args.bytes <= 16_000_000, "Unsupported materialization limit")
+        now = time.time_ns() // 1_000_000
+        plan = {"version": "1", "window.id": str(uuid.uuid4()), "operator": args.operator, "journal": args.journal,
+                "captured": ",".join(scopes["captured"]), "controlled": ",".join(scopes["controlled"]),
+                "assurance": "all-journal-writers-ddl-maintenance-paused", "retention": "operator-managed",
+                "opened.ms": str(now), "expires.ms": str(now + args.seconds * 1000), "snapshot.rows": str(args.rows), "snapshot.bytes": str(args.bytes)}
+        if chunked:
+            plan.update({"version": "2", "chunk.rows": str(args.chunk_rows), "chunk.bytes": str(args.chunk_bytes)})
+        args.directory.mkdir(mode=0o700)
+        path = args.directory / "plan.properties"
+        with path.open("x") as output:
+            output.write("".join(k + "=" + v + "\n" for k, v in sorted(plan.items())))
+            output.flush()
+            os.fsync(output.fileno())
+        force(args.directory)
+        force(args.directory.parent)
+    elif args.command == "revoke":
+        with (args.directory / "revoked").open("x") as output:
+            output.write(str(time.time_ns() // 1_000_000) + "\n")
+            output.flush()
+            os.fsync(output.fileno())
+        force(args.directory)
+    result = {"plan": properties(args.directory / "plan.properties"), "enrolled": (args.directory / "enrolled").exists(),
+              "revoked": (args.directory / "revoked").exists(), "source_pause_proven_by_this_file": False,
+              "native_drain_proven_by_this_file": False}
+    status = args.directory / "status.properties"
+    result["status"] = properties(status) if status.exists() else {"phase": "AWAITING_ENROLLMENT"}
+    print(json.dumps(result, indent=2))
+
+
+if __name__ == "__main__":
+    main()

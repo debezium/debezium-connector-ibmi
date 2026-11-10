@@ -425,10 +425,10 @@ public class As400TaskStopProbeConnector extends As400ConnectOwnershipProbeConne
 
     }
 
-    private static final class FixtureSchema implements DatabaseSchema<TableId> {
+    static final class FixtureSchema implements DatabaseSchema<TableId> {
         private final TableSchema schema;
 
-        private FixtureSchema(As400OffsetContext offset) {
+        FixtureSchema(As400OffsetContext offset) {
             Schema row = SchemaBuilder.struct().name("probe.Value").field("ID", Schema.INT32_SCHEMA).optional().build();
             Schema key = SchemaBuilder.struct().name("probe.Key").field("ID", Schema.INT32_SCHEMA).build();
             Envelope envelope = Envelope.defineSchema().withName("probe.Envelope").withRecord(row).withSource(offset.getSourceInfoSchema())
@@ -456,12 +456,12 @@ public class As400TaskStopProbeConnector extends As400ConnectOwnershipProbeConne
         }
     }
 
-    private static final class FixtureCoordinator extends ChangeEventSourceCoordinator<As400Partition, As400OffsetContext> {
+    static final class FixtureCoordinator extends ChangeEventSourceCoordinator<As400Partition, As400OffsetContext> {
         private final java.util.function.Consumer<ChangeEventSourceContext> run;
         private final String generation;
 
-        private FixtureCoordinator(As400ConnectorConfig config, ErrorHandler errors, EventDispatcher<As400Partition, TableId> dispatcher,
-                                   DatabaseSchema<TableId> schema, java.util.function.Consumer<ChangeEventSourceContext> run, String generation) {
+        FixtureCoordinator(As400ConnectorConfig config, ErrorHandler errors, EventDispatcher<As400Partition, TableId> dispatcher,
+                           DatabaseSchema<TableId> schema, java.util.function.Consumer<ChangeEventSourceContext> run, String generation) {
             super(Offsets.of(new As400Partition("synthetic"), null), errors, As400RpcConnector.class, config,
                     mock(ChangeEventSourceFactory.class),
                     mock(ChangeEventSourceMetricsFactory.class,

@@ -6,6 +6,7 @@
 package io.debezium.connector.db2as400;
 
 import java.io.IOException;
+import java.math.BigInteger;
 import java.sql.SQLNonTransientConnectionException;
 import java.time.Duration;
 import java.util.Date;
@@ -21,14 +22,18 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import io.debezium.DebeziumException;
+import io.debezium.config.CommonConnectorConfig.EventProcessingFailureHandlingMode;
 import io.debezium.connector.db2as400.As400RpcConnection.BlockingReceiverConsumer;
 import io.debezium.data.Envelope.Operation;
 import io.debezium.ibmi.db2.journal.retrieve.FileChangeEntryDecoder;
 import io.debezium.ibmi.db2.journal.retrieve.FileChangeEntryDecoder.FileChange;
+import io.debezium.ibmi.db2.journal.retrieve.JournalEntryDeocder;
 import io.debezium.ibmi.db2.journal.retrieve.JournalEntryType;
+import io.debezium.ibmi.db2.journal.retrieve.RawJournalPage;
 import io.debezium.ibmi.db2.journal.retrieve.exception.FatalException;
 import io.debezium.ibmi.db2.journal.retrieve.exception.InvalidPositionException;
 import io.debezium.ibmi.db2.journal.retrieve.rjne0200.EntryHeader;
+import io.debezium.ibmi.db2.journal.retrieve.rjne0200.EntryHeaderDecoder;
 import io.debezium.pipeline.ErrorHandler;
 import io.debezium.pipeline.EventDispatcher;
 import io.debezium.pipeline.monitor.OffsetActivityMonitor;
@@ -53,6 +58,7 @@ public class As400StreamingChangeEventSource implements StreamingChangeEventSour
     private static final Logger log = LoggerFactory.getLogger(As400StreamingChangeEventSource.class);
 
     private final HashMap<String, Object[]> beforeMap = new HashMap<>();
+    private final Map<TableId, EntryHeader> migrationBeforeHeaders = new HashMap<>();
     private final FileChangeEntryDecoder fileChangeDecoder = new FileChangeEntryDecoder();
     private static Set<Character> alwaysProcess = Stream.of('J', 'C').collect(Collectors.toCollection(HashSet::new));
 
@@ -161,8 +167,8 @@ public class As400StreamingChangeEventSource implements StreamingChangeEventSour
                     catch (final FatalException e) {
                         throw new DebeziumException("Unable to process offset " + offsetContext.getPosition(), e);
                     }
-                    catch (final TruncateException e) {
-                        // Never acknowledge a clear that could not be represented safely.
+                    catch (TruncateException | RowProcessingException | TransactionMetadataException e) {
+                        // Stop before the RPC loop can acknowledge a failed record.
                         errorHandler.setProducerThrowable(e);
                         return;
                     }
@@ -264,172 +270,286 @@ public class As400StreamingChangeEventSource implements StreamingChangeEventSour
     // TODO tidy up exception handling
     BlockingReceiverConsumer processJournalEntries(As400Partition partition, As400OffsetContext offsetContext)
             throws IOException, SQLNonTransientConnectionException {
-        return (nextOffset, r, eheader) -> {
-            try {
-                final JournalEntryType journalEntryType = eheader.getJournalEntryType();
+        return (nextOffset, reader, header) -> processJournalEntry(partition, offsetContext, nextOffset, reader::decode, header, false);
+    }
 
-                if (journalEntryType == null || ignore(journalEntryType)) {
-                    log.debug("excluding table {} entry type {}", eheader.getFile(), eheader.getEntryType());
-                    return;
-                }
+    @FunctionalInterface
+    private interface EntryValues {
+        <T> T decode(JournalEntryDeocder<T> decoder) throws Exception;
+    }
 
-                final boolean captureTruncates = !connectorConfig.getSkippedOperations().contains(Operation.TRUNCATE);
-                if (journalEntryType == JournalEntryType.MEMBER_CLEARED && !captureTruncates) {
-                    return;
-                }
-                FileChange fileChange = null;
-                if (journalEntryType == JournalEntryType.FILE_CHANGE && captureTruncates) {
-                    try {
-                        fileChange = r.decode(fileChangeDecoder);
-                    }
-                    catch (Exception e) {
-                        throw new TruncateException("Cannot classify D/CG journal entry " + eheader.getSequenceNumber(), e);
-                    }
-                }
-                final String file = fileChange == null ? eheader.getFile() : fileChange.file();
-                final String library = fileChange == null ? eheader.getLibrary() : fileChange.library();
-                if ((journalEntryType == JournalEntryType.MEMBER_CLEARED || (fileChange != null && fileChange.clearsRows()))
-                        && (file.isEmpty() || library.isEmpty())) {
-                    throw new TruncateException("Missing table identity for clear at journal entry " + eheader.getSequenceNumber());
-                }
-                String longName = file;
+    /** Same legacy dispatcher for bounded owned native pages; no RPC cursor is acknowledged here. */
+    void processOwnedEntry(As400Partition partition, As400OffsetContext offset, RawJournalPage.Entry entry)
+            throws IOException, SQLNonTransientConnectionException {
+        if (connectorConfig.getEventProcessingFailureHandlingMode() != EventProcessingFailureHandlingMode.FAIL) {
+            throw new IllegalArgumentException("A migration prefix requires fail-on-error legacy dispatch");
+        }
+        byte[] bytes = entry.data();
+        var header = new EntryHeaderDecoder().decode(bytes, 0);
+        As400SourceMetadata.from(header, entry.position());
+        processJournalEntry(partition, offset, header.getSequenceNumber(), new EntryValues() {
+            @Override
+            public <T> T decode(JournalEntryDeocder<T> decoder) throws Exception {
+                return decoder.decode(header, bytes, 0);
+            }
+        }, header, true);
+    }
+
+    /** A progress barrier cannot discard an update's cached before-image on restart. */
+    boolean hasPendingBeforeImage() {
+        return !beforeMap.isEmpty();
+    }
+
+    private void processJournalEntry(As400Partition partition, As400OffsetContext offsetContext, BigInteger nextOffset,
+                                     EntryValues r, EntryHeader eheader, boolean migration)
+            throws IOException, SQLNonTransientConnectionException {
+        final JournalEntryType journalEntryType = eheader.getJournalEntryType();
+        try {
+
+            if (journalEntryType == null || ignore(journalEntryType)) {
+                log.debug("excluding table {} entry type {}", eheader.getFile(), eheader.getEntryType());
+                return;
+            }
+
+            final boolean captureTruncates = !connectorConfig.getSkippedOperations().contains(Operation.TRUNCATE);
+            if (journalEntryType == JournalEntryType.MEMBER_CLEARED && !captureTruncates) {
+                return;
+            }
+            FileChange fileChange = null;
+            if (journalEntryType == JournalEntryType.FILE_CHANGE && captureTruncates) {
                 try {
-                    longName = jdbcConnection.getLongName(library, file);
+                    fileChange = r.decode(fileChangeDecoder);
                 }
-                catch (final IllegalStateException e) {
-                    log.error("failed to look up long name", e);
+                catch (Exception e) {
+                    throw new TruncateException("Cannot classify D/CG journal entry " + eheader.getSequenceNumber(), e);
                 }
-                final TableId tableId = new TableId(database, library, longName);
-
-                final boolean includeTable = connectorConfig.getTableFilters().dataCollectionFilter()
-                        .isIncluded(tableId);
-
-                if (!alwaysProcess.contains(eheader.getJournalCode()) && !includeTable) { // always process journal J
-                    // and transaction C
-                    // messages
-                    log.debug("excluding table {} journal code {}", tableId, eheader.getJournalCode());
-                    return;
+            }
+            final String file = fileChange == null ? eheader.getFile() : fileChange.file();
+            final String library = fileChange == null ? eheader.getLibrary() : fileChange.library();
+            if ((journalEntryType == JournalEntryType.MEMBER_CLEARED || (fileChange != null && fileChange.clearsRows()))
+                    && (file.isEmpty() || library.isEmpty())) {
+                throw new TruncateException("Missing table identity for clear at journal entry " + eheader.getSequenceNumber());
+            }
+            String longName = file;
+            try {
+                longName = jdbcConnection.getLongName(library, file);
+            }
+            catch (final IllegalStateException e) {
+                if (migration) {
+                    throw e;
                 }
+                log.error("failed to look up long name", e);
+            }
+            final TableId tableId = new TableId(database, library, longName);
 
-                log.debug("next event: {} - {} type: {} table: {}", eheader.getTime(), eheader.getSequenceNumber(),
-                        eheader.getEntryType(), tableId.table());
-                switch (journalEntryType) {
-                    case START_COMMIT: {
-                        // start commit
-                        final String txId = eheader.getCommitCycle().toString();
-                        log.debug("begin transaction: {}", txId);
-                        final TransactionContext txc = new TransactionContext();
+            final boolean includeTable = connectorConfig.getTableFilters().dataCollectionFilter()
+                    .isIncluded(tableId);
+
+            if (!alwaysProcess.contains(eheader.getJournalCode()) && !includeTable) { // always process journal J
+                // and transaction C
+                // messages
+                log.debug("excluding table {} journal code {}", tableId, eheader.getJournalCode());
+                return;
+            }
+
+            log.debug("next event: {} - {} type: {} table: {}", eheader.getTime(), eheader.getSequenceNumber(),
+                    eheader.getEntryType(), tableId.table());
+            switch (journalEntryType) {
+                case START_COMMIT: {
+                    // start commit
+                    final String txId = eheader.getCommitCycle().toString();
+                    log.debug("begin transaction: {}", txId);
+                    final TransactionContext txc = txMap.computeIfAbsent(txId, ignored -> new TransactionContext());
+                    offsetContext.setTransaction(txc);
+                    // The monitor owns BEGIN emission and counters when enabled.
+                    if (!connectorConfig.shouldProvideTransactionMetadata() && !txc.isTransactionInProgress()) {
                         txc.beginTransaction(txId);
-                        txMap.put(txId, txc);
-                        log.debug("start transaction id {} tx {} table {}", nextOffset, txId, tableId);
-                        dispatcher.dispatchTransactionStartedEvent(partition, txId, offsetContext,
+                    }
+                    log.debug("start transaction id {} tx {} table {}", nextOffset, txId, tableId);
+                    dispatcher.dispatchTransactionStartedEvent(partition, txId, offsetContext,
+                            eheader.getTime());
+                }
+                    break;
+                case END_COMMIT: {
+                    // end commit
+                    final String txId = eheader.getCommitCycle().toString();
+                    final TransactionContext txc = txMap.get(txId);
+                    log.debug("commit transaction id {} tx {} table {}", nextOffset, txId, tableId);
+                    if (txc != null) {
+                        offsetContext.setTransaction(txc);
+                        dispatcher.dispatchTransactionCommittedEvent(partition, offsetContext,
                                 eheader.getTime());
+                        txc.endTransaction();
+                        txMap.remove(txId);
+                        offsetContext.endTransaction();
                     }
+                }
+                    break;
+                case FILE_CHANGE, FILE_CREATED: {
+                    if (fileChange != null && fileChange.clearsRows()) {
+                        dispatchTruncate(partition, offsetContext, tableId, eheader, file, library, fileChange.member());
                         break;
-                    case END_COMMIT: {
-                        // end commit
-                        // TOOD transaction must be provided by the OffsetContext
-                        final String txId = eheader.getCommitCycle().toString();
-                        final TransactionContext txc = txMap.remove(txId);
-                        log.debug("commit transaction id {} tx {} table {}", nextOffset, txId, tableId);
-                        if (txc != null) {
-                            txc.endTransaction();
-                            dispatcher.dispatchTransactionCommittedEvent(partition, offsetContext,
-                                    eheader.getTime());
+                    }
+                    // table has changed - reload schema
+                    schema.clearCache(tableId.table(), tableId.schema());
+                    schema.getRecordFormat(tableId.table(), tableId.schema());
+                }
+                    break;
+                case MEMBER_CLEARED: {
+                    if (eheader.getMember().isEmpty()) {
+                        throw new TruncateException("Missing member in F/CR journal entry " + eheader.getSequenceNumber());
+                    }
+                    dispatchTruncate(partition, offsetContext, tableId, eheader, file, library, eheader.getMember());
+                }
+                    break;
+                case BEFORE_IMAGE: {
+                    // before image
+                    tableId.schema();
+                    final Object[] dataBefore = r.decode(schema.getFileDecoder());
+                    if (migration && migrationBeforeHeaders.putIfAbsent(tableId, eheader) != null) {
+                        throw new IllegalArgumentException("Overlapping migration before-images require explicit recovery");
+                    }
+                    cacheBefore(tableId, dataBefore);
+                }
+                    break;
+                case AFTER_IMAGE: {
+                    // after image
+                    // before image is meant to have been immediately before
+                    final Object[] dataBefore = getBefore(tableId);
+                    if (migration && dataBefore == null) {
+                        throw new IllegalArgumentException("Migration update lacks its before-image at journal entry " + eheader.getSequenceNumber());
+                    }
+                    if (migration) {
+                        requireMigrationPair(migrationBeforeHeaders.remove(tableId), eheader);
+                    }
+                    final Object[] dataNext = r.decode(schema.getFileDecoder());
+
+                    offsetContext.updateSourceInfo(eheader);
+
+                    selectRowTransaction(offsetContext, eheader);
+                    final String txId = eheader.getCommitCycle().toString();
+
+                    log.debug("update event id {} tx {} table {}", nextOffset, txId, tableId);
+
+                    dispatchRow(partition, tableId, eheader, new As400ChangeRecordEmitter(partition,
+                            offsetContext, Operation.UPDATE, dataBefore, dataNext, clock, connectorConfig));
+                }
+                    break;
+                case ADD_ROW1, ADD_ROW2: {
+                    // record added
+                    final Object[] dataNext = r.decode(schema.getFileDecoder());
+                    offsetContext.updateSourceInfo(eheader);
+
+                    selectRowTransaction(offsetContext, eheader);
+                    final String txId = eheader.getCommitCycle().toString();
+
+                    log.debug("insert event id {} tx {} table {}", offsetContext.getPosition(), txId,
+                            tableId);
+                    dispatchRow(partition, tableId, eheader, new As400ChangeRecordEmitter(partition,
+                            offsetContext, Operation.CREATE, null, dataNext, clock, connectorConfig));
+                }
+                    break;
+                case DELETE_ROW, ROLLBACK_DELETE_ROW: {
+                    // record deleted
+                    final Object[] dataBefore = r.decode(schema.getFileDecoder());
+
+                    offsetContext.updateSourceInfo(eheader);
+
+                    selectRowTransaction(offsetContext, eheader);
+                    final String txId = eheader.getCommitCycle().toString();
+
+                    log.debug("delete event id {} tx {} table {}", offsetContext.getPosition(), txId,
+                            tableId);
+                    dispatchRow(partition, tableId, eheader, new As400ChangeRecordEmitter(partition,
+                            offsetContext, Operation.DELETE, dataBefore, null, clock, connectorConfig));
+                }
+                    break;
+                default:
+                    break;
+            }
+        }
+        catch (TruncateException | RowProcessingException | SQLNonTransientConnectionException e) {
+            throw e;
+        }
+        catch (final Exception e) {
+            boolean row = journalEntryType != null && switch (journalEntryType) {
+                case BEFORE_IMAGE, AFTER_IMAGE, ADD_ROW1, ADD_ROW2, DELETE_ROW, ROLLBACK_DELETE_ROW -> true;
+                default -> false;
+            };
+            // A row decoder can use IOException for malformed in-memory data.
+            // FAIL must report it; preserve legacy retries elsewhere and in lossy modes.
+            if (e instanceof IOException io && (!row || connectorConfig.getEventProcessingFailureHandlingMode() != EventProcessingFailureHandlingMode.FAIL)) {
+                throw io;
+            }
+            boolean metadata = connectorConfig.shouldProvideTransactionMetadata()
+                    && (journalEntryType == JournalEntryType.START_COMMIT || journalEntryType == JournalEntryType.END_COMMIT);
+            if (row || metadata) {
+                String kind = row ? "row" : "transaction metadata";
+                switch (connectorConfig.getEventProcessingFailureHandlingMode()) {
+                    case FAIL:
+                        String message = "Failed to process " + kind + " at journal entry " + eheader.getSequenceNumber();
+                        if (row) {
+                            throw new RowProcessingException(message, e);
                         }
-                    }
+                        throw new TransactionMetadataException(message, e);
+                    case WARN:
+                        log.warn("Failed to process {} at journal entry {}", kind, eheader.getSequenceNumber(), e);
                         break;
-                    case FILE_CHANGE, FILE_CREATED: {
-                        if (fileChange != null && fileChange.clearsRows()) {
-                            dispatchTruncate(partition, offsetContext, tableId, eheader, file, library, fileChange.member());
-                            break;
-                        }
-                        // table has changed - reload schema
-                        schema.clearCache(tableId.table(), tableId.schema());
-                        schema.getRecordFormat(tableId.table(), tableId.schema());
-                    }
-                        break;
-                    case MEMBER_CLEARED: {
-                        if (eheader.getMember().isEmpty()) {
-                            throw new TruncateException("Missing member in F/CR journal entry " + eheader.getSequenceNumber());
-                        }
-                        dispatchTruncate(partition, offsetContext, tableId, eheader, file, library, eheader.getMember());
-                    }
-                        break;
-                    case BEFORE_IMAGE: {
-                        // before image
-                        tableId.schema();
-                        final Object[] dataBefore = r.decode(schema.getFileDecoder());
-
-                        cacheBefore(tableId, dataBefore);
-                    }
-                        break;
-                    case AFTER_IMAGE: {
-                        // after image
-                        // before image is meant to have been immediately before
-                        final Object[] dataBefore = getBefore(tableId);
-                        final Object[] dataNext = r.decode(schema.getFileDecoder());
-
-                        offsetContext.updateSourceInfo(eheader);
-
-                        final String txId = eheader.getCommitCycle().toString();
-                        final TransactionContext txc = txMap.get(txId);
-                        offsetContext.setTransaction(txc);
-
-                        log.debug("update event id {} tx {} table {}", nextOffset, txId, tableId);
-
-                        dispatcher.dispatchDataChangeEvent(partition, tableId, new As400ChangeRecordEmitter(partition,
-                                offsetContext, Operation.UPDATE, dataBefore, dataNext, clock, connectorConfig));
-                    }
-                        break;
-                    case ADD_ROW1, ADD_ROW2: {
-                        // record added
-                        final Object[] dataNext = r.decode(schema.getFileDecoder());
-                        offsetContext.updateSourceInfo(eheader);
-
-                        final String txId = eheader.getCommitCycle().toString();
-                        final TransactionContext txc = txMap.get(txId);
-                        offsetContext.setTransaction(txc);
-                        if (txc != null) {
-                            txc.event(tableId);
-                        }
-
-                        log.debug("insert event id {} tx {} table {}", offsetContext.getPosition(), txId,
-                                tableId);
-                        dispatcher.dispatchDataChangeEvent(partition, tableId, new As400ChangeRecordEmitter(partition,
-                                offsetContext, Operation.CREATE, null, dataNext, clock, connectorConfig));
-                    }
-                        break;
-                    case DELETE_ROW, ROLLBACK_DELETE_ROW: {
-                        // record deleted
-                        final Object[] dataBefore = r.decode(schema.getFileDecoder());
-
-                        offsetContext.updateSourceInfo(eheader);
-
-                        final String txId = eheader.getCommitCycle().toString();
-                        final TransactionContext txc = txMap.get(txId);
-                        offsetContext.setTransaction(txc);
-                        if (txc != null) {
-                            txc.event(tableId);
-                        }
-
-                        log.debug("delete event id {} tx {} table {}", offsetContext.getPosition(), txId,
-                                tableId);
-                        dispatcher.dispatchDataChangeEvent(partition, tableId, new As400ChangeRecordEmitter(partition,
-                                offsetContext, Operation.DELETE, dataBefore, null, clock, connectorConfig));
-                    }
-                        break;
-                    default:
+                    case SKIP:
+                        log.debug("Failed to process {} at journal entry {}", kind, eheader.getSequenceNumber(), e);
                         break;
                 }
             }
-            catch (TruncateException | IOException | SQLNonTransientConnectionException e) {
-                throw e;
-            }
-            catch (final Exception e) {
+            else {
+                if (migration) {
+                    throw new DebeziumException("Failed to process migration prefix at journal entry " + eheader.getSequenceNumber(), e);
+                }
                 log.error("Failed to process record", e);
             }
-        };
+        }
+    }
+
+    private static void requireMigrationPair(EntryHeader before, EntryHeader after) {
+        var row = after.getRecordInfo();
+        if (before == null || !before.getObjectName().equals(after.getObjectName())
+                || !before.getCommitCycle().equals(after.getCommitCycle())
+                || !before.getRecordInfo().recordNumber().equals(row.recordNumber())
+                || !before.getRecordInfo().objectJournalId().equals(row.objectJournalId())
+                || !before.getRecordInfo().objectType().equals(row.objectType())
+                || !As400ControlInventory.Producer.from(before).equals(As400ControlInventory.Producer.from(after))) {
+            throw new IllegalArgumentException("Migration update before-image belongs to a different source row or producer");
+        }
+    }
+
+    private void selectRowTransaction(As400OffsetContext offset, EntryHeader entry) {
+        TransactionContext transaction = txMap.get(entry.getCommitCycle().toString());
+        if (transaction == null && entry.getCommitCycle().signum() != 0 && connectorConfig.shouldProvideTransactionMetadata()) {
+            throw new IllegalStateException("Missing transaction start for commit cycle " + entry.getCommitCycle());
+        }
+        offset.setTransaction(transaction);
+    }
+
+    private void dispatchRow(As400Partition partition, TableId tableId, EntryHeader entry, As400ChangeRecordEmitter emitter)
+            throws InterruptedException {
+        // Table filtering already ran above. Skipped operations and unchanged
+        // updates return true; a rejected dispatch must not advance FAIL mode.
+        // WARN/SKIP deliberately retain Debezium's configured lossy behavior.
+        if (!dispatcher.dispatchDataChangeEvent(partition, tableId, emitter)
+                && connectorConfig.getEventProcessingFailureHandlingMode() == EventProcessingFailureHandlingMode.FAIL) {
+            throw new RowProcessingException("Failed to dispatch row for " + tableId + " at journal entry " + entry.getSequenceNumber(), null);
+        }
+    }
+
+    static class RowProcessingException extends DebeziumException {
+        RowProcessingException(String message, Throwable cause) {
+            super(message, cause);
+        }
+    }
+
+    static class TransactionMetadataException extends DebeziumException {
+        TransactionMetadataException(String message, Throwable cause) {
+            super(message, cause);
+        }
     }
 
     private void dispatchTruncate(As400Partition partition, As400OffsetContext offsetContext, TableId tableId,

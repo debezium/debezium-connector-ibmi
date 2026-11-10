@@ -69,11 +69,11 @@ class As400OutputContractTest {
             assertThat(((Struct) rows.get(2).value()).getStruct("source").getString("snapshot")).isEqualTo("last");
             run.ack(baseline);
             var initial = run.through("INITIAL");
-            var recovered = run.input.fixture.history().recover(initial.get(0).sourceOffset(), run.input.journalIdentity(), As400BindingHistoryTest.Fixture.POLICY);
+            var recovered = run.input.fixture.history().recover(initial.get(0).sourceOffset(), run.input.journalIdentity(), As400RecoveryTestSupport.Fixture.POLICY);
             assertThat(recovered.definitions()).hasSize(2); // Both bindings and the full journal remain recoverable.
             run.ack(initial);
             var stream = run.throughCheckpoint("42");
-            assertThat(As400BindingHistoryTest.data(stream)).isEmpty(); // A's commit still advances W.
+            assertThat(As400RecoveryTestSupport.data(stream)).isEmpty(); // A's commit still advances W.
             run.ack(stream);
             assertThat(run.durable.get().get("completed_through.sequence")).isEqualTo("42");
             assertThat(run.input.handoffs).hasValue(1);

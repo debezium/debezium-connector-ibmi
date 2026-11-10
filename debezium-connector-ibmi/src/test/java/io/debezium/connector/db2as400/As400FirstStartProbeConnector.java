@@ -29,7 +29,7 @@ import org.apache.kafka.connect.source.SourceRecord;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import io.debezium.config.Configuration;
-import io.debezium.connector.db2as400.As400BindingHistoryTest.Fixture;
+import io.debezium.connector.db2as400.As400RecoveryTestSupport.Fixture;
 import io.debezium.ibmi.db2.journal.retrieve.RawJournalPage;
 import io.debezium.relational.TableId;
 import io.debezium.relational.history.SchemaHistory;

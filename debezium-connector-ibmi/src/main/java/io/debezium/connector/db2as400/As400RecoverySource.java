@@ -45,13 +45,18 @@ import io.debezium.spi.schema.DataCollectionId;
 import io.debezium.spi.topic.TopicNamingStrategy;
 import io.debezium.util.Clock;
 
-/** Real coordinator source/factory; recovery or explicitly admitted first initialization, never a legacy reader. */
+/** Real coordinator source/factory for recovery, acknowledged snapshot initialization or explicitly admitted legacy handoff. */
 final class As400RecoverySource implements StreamingChangeEventSource<As400Partition, As400OffsetContext>,
         ChangeEventSourceFactory<As400Partition, As400OffsetContext>, DatabaseSchema<TableId> {
     private final As400TaskRecovery input;
     private final As400ConnectorConfig config;
     private volatile As400RecoveryOffsetContext offset;
     private final As400TaskInitialization initialization;
+    private final As400OffsetContext legacy;
+    private final Map<String, ?> legacyOffset;
+    private final As400OffsetContext startupContext;
+    private volatile boolean handoffInProgress;
+    private volatile SourceRecord handoffCommitBoundary;
     private final Object initializationState = new Object();
     private volatile String initializationEpoch;
     private volatile boolean handedOff;
@@ -78,6 +83,19 @@ final class As400RecoverySource implements StreamingChangeEventSource<As400Parti
     As400RecoverySource(As400TaskRecovery input, As400TaskInitialization initialization, As400ConnectorConfig config, As400RecoveryOffsetContext offset,
                         ChangeEventQueue<DataChangeEvent> queue, ErrorHandler errors, TopicNamingStrategy<TableId> topics,
                         DebeziumHeaderProducer headers, Supplier<Map<String, ?>> durable) {
+        this(input, initialization, config, offset, queue, errors, topics, headers, durable, null, null);
+    }
+
+    As400RecoverySource(As400TaskRecovery input, As400TaskInitialization initialization, As400ConnectorConfig config, As400RecoveryOffsetContext offset,
+                        ChangeEventQueue<DataChangeEvent> queue, ErrorHandler errors, TopicNamingStrategy<TableId> topics,
+                        DebeziumHeaderProducer headers, Supplier<Map<String, ?>> durable, As400OffsetContext legacy, Map<String, ?> legacyOffset) {
+        if (legacy != null && (initialization != null || offset != null || !(input instanceof As400TaskHandoff) || !input.allowLegacyHandoffRecovery())) {
+            throw new IllegalArgumentException("Conflicting startup origins");
+        }
+        this.legacy = legacy;
+        this.legacyOffset = legacy == null ? null : Map.copyOf(legacyOffset);
+        this.startupContext = legacy == null ? offset : legacy;
+        this.handoffInProgress = legacy != null;
         this.input = input;
         this.initialization = initialization;
         this.config = config;
@@ -107,6 +125,55 @@ final class As400RecoverySource implements StreamingChangeEventSource<As400Parti
         }
     }
 
+    boolean shouldCommitPoll(List<SourceRecord> records) {
+        return !handoffInProgress || records.stream().anyMatch(record -> record == handoffCommitBoundary);
+    }
+
+    private void initializeHandoff() throws Exception {
+        try (var lease = admission.enter()) {
+            check();
+            // Preserve the exact serialized legacy barrier, including handoff
+            // fields which the ordinary legacy OffsetContext intentionally omits.
+            Map<String, ?> saved = durable.get();
+            if (!legacyOffset.equals(saved)) {
+                throw new IllegalStateException("Legacy handoff lost its starting offset");
+            }
+            var initial = ((As400TaskHandoff) input).handoff(saved, new As400TaskHandoff.Output() {
+                @Override
+                public void emit(SourceRecord record) throws Exception {
+                    enqueue(record);
+                }
+
+                @Override
+                public void barrier(SourceRecord record) throws Exception {
+                    check();
+                    if (handoffCommitBoundary != null) {
+                        throw new IllegalStateException("Previous handoff boundary is unacknowledged");
+                    }
+                    handoffCommitBoundary = record;
+                    enqueue(record);
+                }
+
+                @Override
+                public String acknowledge(SourceRecord barrier) throws Exception {
+                    check();
+                    if (barrier != handoffCommitBoundary) {
+                        throw new IllegalStateException("Unregistered handoff boundary");
+                    }
+                    String receipt = awaitDurable(barrier);
+                    handoffCommitBoundary = null;
+                    return receipt;
+                }
+            });
+            check();
+            if (!initial.toOffset().equals(durable.get())) {
+                throw new IllegalStateException("Handoff did not install its exact durable F/W");
+            }
+            offset = new As400RecoveryOffsetContext(config, initial.toOffset(), input.journalIdentity(), input.fingerprint());
+            handoffInProgress = false;
+        }
+    }
+
     private void prepare() throws Exception {
         try (var lease = admission.enter()) {
             check();
@@ -116,9 +183,10 @@ final class As400RecoverySource implements StreamingChangeEventSource<As400Parti
             var recovered = input.recover(offset.getOffset());
             check();
             if (!recovered.journalIdentity().equals(input.journalIdentity()) || !recovered.fingerprint().equals(input.fingerprint())
-                    || recovered.initialization().isEmpty() || !offset.getOffset().equals(durable.get())) {
+                    || !offset.getOffset().equals(durable.get())) {
                 throw new IllegalStateException("Recovery requires matching initialized history and durable F/W");
             }
+            recovered.requireStartupOrigin(offset.getOffset(), input.allowLegacyHandoffRecovery());
             schemas = new As400NativeTableSchemas(recovered.definitions(), config, topics);
             history = recovered;
             if (metrics instanceof As400StreamingChangeEventSourceMetrics journalMetrics) {
@@ -616,7 +684,7 @@ final class As400RecoverySource implements StreamingChangeEventSource<As400Parti
         return new SnapshotChangeEventSource<>() {
             @Override
             public SnapshottingTask getSnapshottingTask(As400Partition partition, As400OffsetContext previous) {
-                if (previous != offset) {
+                if (previous != startupContext) {
                     throw new IllegalStateException("Coordinator context differs from admitted startup mode");
                 }
                 return new SnapshottingTask(false, initialization != null, List.of(), Map.of(), false);
@@ -634,6 +702,9 @@ final class As400RecoverySource implements StreamingChangeEventSource<As400Parti
                         listener.snapshotStarted(partition);
                         initialize(listener);
                     }
+                    if (legacy != null) {
+                        initializeHandoff();
+                    }
                     prepare();
                     if (initialization != null) {
                         listener.snapshotCompleted(partition);
@@ -647,7 +718,7 @@ final class As400RecoverySource implements StreamingChangeEventSource<As400Parti
                         listener.snapshotAborted(partition);
                     }
                     close();
-                    throw new IllegalStateException("Could not establish initialized bindings", e);
+                    throw new IllegalStateException("Could not establish acknowledged startup bindings", e);
                 }
             }
 

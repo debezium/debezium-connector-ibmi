@@ -15,6 +15,7 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.TreeMap;
+import java.util.function.Consumer;
 import java.util.function.Supplier;
 
 import io.debezium.config.Configuration;
@@ -60,7 +61,17 @@ final class As400BindingHistory {
     As400Checkpoint recordBaseline(String journal, JournalPosition baseline, String receiverIdentity,
                                    List<As400BindingDefinition> definitions, As400CaptureFingerprint.Policy policy)
             throws Exception {
-        return recordBaseline(journal, baseline, receiverIdentity, definitions, policy, Optional.empty());
+        return recordBaseline(journal, baseline, receiverIdentity, definitions, policy, Optional.empty(), Optional.empty());
+    }
+
+    /** Retain the complete discovery floor across a crash before activation. This is not output F/W. */
+    record Discovery(JournalPosition floor, String receiverIdentity) {
+    }
+
+    As400Checkpoint recordPendingBaseline(String journal, JournalPosition baseline, String receiverIdentity,
+                                          List<As400BindingDefinition> definitions, As400CaptureFingerprint.Policy policy, Discovery discovery)
+            throws Exception {
+        return recordBaseline(journal, baseline, receiverIdentity, definitions, policy, Optional.empty(), Optional.of(discovery));
     }
 
     /** Acknowledged external baseline, stored in the same record as its native binding epoch. */
@@ -76,15 +87,22 @@ final class As400BindingHistory {
                                               List<As400BindingDefinition> definitions, As400CaptureFingerprint.Policy policy,
                                               Initialization initialization)
             throws Exception {
-        return recordBaseline(journal, baseline, receiverIdentity, definitions, policy, Optional.of(initialization));
+        return recordBaseline(journal, baseline, receiverIdentity, definitions, policy, Optional.of(initialization), Optional.empty());
     }
 
     private As400Checkpoint recordBaseline(String journal, JournalPosition baseline, String receiverIdentity,
                                            List<As400BindingDefinition> definitions, As400CaptureFingerprint.Policy policy,
-                                           Optional<Initialization> initialization)
+                                           Optional<Initialization> initialization, Optional<Discovery> discovery)
             throws Exception {
         require(source.equals(policy.sourcePartition()), "History and output partitions differ");
-        var manifest = manifest(journal, baseline, receiverIdentity, definitions, policy, initialization);
+        var manifest = manifest(journal, baseline, receiverIdentity, definitions, policy, initialization, discovery);
+        storeBaselineIfAbsent(manifest);
+        var initial = As400Checkpoint.afterVerifiedBoundary(journal, manifest.fingerprint(), baseline, receiverIdentity);
+        recover(initial.toOffset(), journal, policy);
+        return initial;
+    }
+
+    private void storeBaselineIfAbsent(Manifest manifest) throws Exception {
         SchemaHistory writer = factory.get();
         requireQualified(writer);
         try {
@@ -102,9 +120,72 @@ final class As400BindingHistory {
         finally {
             writer.stop();
         }
-        var initial = As400Checkpoint.afterVerifiedBoundary(journal, manifest.fingerprint(), baseline, receiverIdentity);
-        recover(initial.toOffset(), journal, policy);
-        return initial;
+    }
+
+    /** Immutable candidate facts only. Connect's acknowledged main offset selects their authority. */
+    Pending recordOnlineCandidate(String journal, JournalPosition origin, String receiverIdentity, List<As400BindingDefinition> definitions,
+                                  As400CaptureFingerprint.Policy policy, Discovery discovery, Map<String, ?> legacy)
+            throws Exception {
+        require(source.equals(policy.sourcePartition()), "History and output partitions differ");
+        As400LegacyHandoff.position(As400LegacyHandoff.strings(legacy));
+        require(!legacy.containsKey(As400LegacyHandoff.VERSION) && !legacy.containsKey(As400LegacyHandoff.CHECKPOINT),
+                "Cannot propose new history after the handoff barrier");
+        storeBaselineIfAbsent(manifest(journal, origin, receiverIdentity, definitions, policy, Optional.empty(), Optional.of(discovery), true));
+        return pendingOnlineCandidate(legacy, policy).orElseThrow();
+    }
+
+    Optional<Pending> pendingOnlineCandidate(Map<String, ?> legacy, As400CaptureFingerprint.Policy policy) throws Exception {
+        require(source.equals(policy.sourcePartition()), "History and output partitions differ");
+        var durable = As400LegacyHandoff.strings(legacy);
+        As400LegacyHandoff.position(durable);
+        boolean barrier = durable.containsKey(As400LegacyHandoff.VERSION);
+        require(barrier == durable.containsKey(As400LegacyHandoff.CHECKPOINT)
+                && (!barrier || "1".equals(durable.get(As400LegacyHandoff.VERSION))), "Incomplete legacy activation barrier");
+        var recovered = read(new Validation(policy, candidate -> {
+        }, true, null), true);
+        require(!barrier || recovered.isPresent(), "An acknowledged legacy barrier requires its binding history");
+        return recovered.map(result -> new Pending(result.journalIdentity(), result.manifest.baseline(),
+                result.manifest.position.get("receiver.identity"), result.fingerprint(), result.definitions(),
+                discoveryFrom(result.manifest.position), Optional.empty()));
+    }
+
+    Recovered recoverOnlineCandidate(Map<String, ?> offset, String journal, As400CaptureFingerprint.Policy policy) throws Exception {
+        require(source.equals(policy.sourcePartition()), "History and output partitions differ");
+        require(offset != null && offset.get("capture_fingerprint") instanceof String, "Durable online F/W required");
+        var checkpoint = As400Checkpoint.fromOffset(offset, journal, (String) offset.get("capture_fingerprint"));
+        return read(new Validation(policy, candidate -> candidate.verify(checkpoint), true, checkpoint.captureFingerprint()), false).orElseThrow();
+    }
+
+    /** Append activation only after independent durable-offset readback of the exact legacy barrier. */
+    Recovered recordLegacyHandoff(As400LegacyHandoff handoff, As400CaptureFingerprint.Policy policy, As400JournalOrder order,
+                                  Supplier<Map<String, ?>> durable)
+            throws Exception {
+        require(handoff.barrier().equals(As400LegacyHandoff.strings(durable.get())), "Legacy barrier is not durably acknowledged");
+        handoff.verifyOrder(order);
+        var recovered = recover(handoff.initial().toOffset(), handoff.initial().journalIdentity(), policy);
+        require(recovered.initialization().isEmpty(), "An initialized snapshot cannot be replaced by a handoff");
+        recovered.verify(handoff.initial(), order);
+        if (recovered.handoff().isPresent()) {
+            require(recovered.handoff().orElseThrow().equals(handoff), "Conflicting legacy activation");
+        }
+        else {
+            SchemaHistory writer = factory.get();
+            requireQualified(writer);
+            try {
+                writer.configure(config, HistoryRecordComparator.INSTANCE, SchemaHistoryListener.NOOP, false);
+                require(writer.storageExists() && writer.exists(), "Pending binding history disappeared before activation");
+                writer.start();
+                require(handoff.barrier().equals(As400LegacyHandoff.strings(durable.get())), "Legacy barrier changed before activation");
+                writer.record(source, handoff.fields(), null, null, null, new TableChanges(), null);
+            }
+            finally {
+                writer.stop();
+            }
+        }
+        var activated = recover(handoff.initial().toOffset(), handoff.initial().journalIdentity(), policy);
+        require(activated.handoff().orElseThrow().equals(handoff)
+                && handoff.barrier().equals(As400LegacyHandoff.strings(durable.get())), "Uncertain handoff activation acknowledgement");
+        return activated;
     }
 
     Recovered recover(Map<String, ?> offset, String journal, As400CaptureFingerprint.Policy policy) throws Exception {
@@ -114,29 +195,100 @@ final class As400BindingHistory {
         // Parse the full checkpoint before opening history, even when the manifest is absent.
         require(expected instanceof String, "Missing binding fingerprint");
         var checkpoint = As400Checkpoint.fromOffset(offset, journal, (String) expected);
-        var listener = new Validation(policy, checkpoint);
+        return read(new Validation(policy, candidate -> candidate.verify(checkpoint)), false).orElseThrow();
+    }
+
+    /**
+     * Source facts left by an interrupted handoff, not permission to publish or a
+     * completed-output checkpoint. The caller must revalidate native history and
+     * independently acknowledge the barrier before activating these bindings.
+     */
+    record Pending(String journal, JournalPosition origin, String receiverIdentity, String fingerprint,
+            List<As400BindingDefinition> definitions, Optional<Discovery> discovery, Optional<As400LegacyHandoff> activation) {
+        Pending {
+            definitions = List.copyOf(definitions);
+        }
+    }
+
+    Optional<Pending> pending(Map<String, ?> legacy, As400CaptureFingerprint.Policy policy) throws Exception {
+        require(source.equals(policy.sourcePartition()), "History and output partitions differ");
+        var durable = As400LegacyHandoff.strings(legacy);
+        As400LegacyHandoff.position(durable);
+        boolean barrier = durable.containsKey(As400LegacyHandoff.VERSION);
+        require(barrier == durable.containsKey(As400LegacyHandoff.CHECKPOINT)
+                && (!barrier || "1".equals(durable.get(As400LegacyHandoff.VERSION))), "Incomplete legacy activation barrier");
+        var recovered = read(new Validation(policy, candidate -> require(initializationFrom(candidate.position).isEmpty(),
+                "A snapshot baseline cannot be resumed as pending legacy bindings")), true);
+        if (recovered.isEmpty()) {
+            require(!barrier, "An acknowledged legacy barrier requires its binding history");
+            return Optional.empty();
+        }
+        var result = recovered.orElseThrow();
+        result.handoff.ifPresent(value -> require(value.barrier().equals(durable), "Activated history requires its exact durable legacy barrier"));
+        // A crash may leave a committed barrier without the activation record.
+        // Its digest must be checked against the reconstructed candidate before
+        // recordLegacyHandoff can append activation; these facts alone admit nothing.
+        var fields = result.manifest.position;
+        return Optional.of(new Pending(result.journalIdentity(), result.manifest.baseline(), fields.get("receiver.identity"),
+                result.fingerprint(), result.definitions(), discoveryFrom(fields), result.handoff));
+    }
+
+    private Optional<Recovered> read(Validation listener, boolean allowAbsent) throws Exception {
         SchemaHistory reader = factory.get();
         requireQualified(reader);
         try {
             reader.configure(config, HistoryRecordComparator.INSTANCE, listener, false);
-            require(reader.storageExists() && reader.exists(), "Required binding history is absent");
+            if (listener.online && reader instanceof As400KafkaBindingHistory kafka) {
+                kafka.allowCandidateAppends();
+            }
+            if (!reader.storageExists() || !reader.exists()) {
+                require(allowAbsent, "Required binding history is absent");
+                return Optional.empty();
+            }
             reader.start();
-            // Listener validates EVERY record, including ones the default comparator
-            // would skip. No stale/future/foreign record can disappear by filtering.
+            // Validate every observed record, including ones the base comparator
+            // would skip. Online selection can choose among canonical immutable
+            // proposals; it cannot hide malformed, foreign-source or mixed records.
             reader.recover(source, Map.of(), new Tables(), null);
         }
         finally {
             reader.stop();
         }
         require(listener.manifest != null, "Required binding history is empty");
-        return new Recovered(listener.manifest);
+        return Optional.of(new Recovered(listener.manifest, Optional.ofNullable(listener.handoff)));
     }
 
     final class Recovered {
         private final Manifest manifest;
+        private final Optional<As400LegacyHandoff> handoff;
 
-        private Recovered(Manifest manifest) {
+        private Recovered(Manifest manifest, Optional<As400LegacyHandoff> handoff) {
             this.manifest = manifest;
+            this.handoff = handoff;
+        }
+
+        Optional<As400LegacyHandoff> handoff() {
+            return handoff;
+        }
+
+        boolean emptyOnlineOrigin(As400Checkpoint checkpoint) {
+            manifest.verify(checkpoint);
+            return "5".equals(manifest.position.get("version")) && !checkpoint.replayInclusive()
+                    && checkpoint.replayFrom().equals(checkpoint.completedThrough()) && checkpoint.replayFrom().equals(manifest.baseline());
+        }
+
+        void requireStartupOrigin(Map<String, ?> durable, boolean allowHandoff) {
+            if ("5".equals(manifest.position.get("version"))) {
+                require(allowHandoff && handoff.isEmpty(), "Online candidate recovery requires explicit Connect-offset admission");
+                manifest.verify(As400Checkpoint.fromOffset(durable, journalIdentity(), fingerprint()));
+                return;
+            }
+            if (initialization().isPresent()) {
+                require(handoff.isEmpty(), "Conflicting snapshot and handoff origins");
+                return;
+            }
+            require(allowHandoff && handoff.isPresent(), "Recovery requires acknowledged initialization or explicitly admitted legacy handoff");
+            handoff.orElseThrow().verifyResume(As400Checkpoint.fromOffset(durable, journalIdentity(), fingerprint()));
         }
 
         String fingerprint() {
@@ -177,10 +329,14 @@ final class As400BindingHistory {
             return position.get("fingerprint");
         }
 
+        JournalPosition baseline() {
+            return new JournalPosition(new BigInteger(position.get("sequence")), new JournalReceiver(position.get("receiver"), position.get("library")));
+        }
+
         void verify(As400Checkpoint checkpoint) {
             require(checkpoint.journalIdentity().equals(position.get("journal")) && checkpoint.captureFingerprint().equals(fingerprint()),
                     "History does not match durable checkpoint");
-            var baseline = new JournalPosition(new BigInteger(position.get("sequence")), new JournalReceiver(position.get("receiver"), position.get("library")));
+            var baseline = baseline();
             int c = baseline.offset().compareTo(checkpoint.replayFrom().offset());
             // This ordinary profile forbids journal sequence resets. The historical
             // baseline receiver need not be retained once F has moved beyond it.
@@ -192,8 +348,16 @@ final class As400BindingHistory {
     }
 
     private static Manifest manifest(String journal, JournalPosition baseline, String receiverIdentity, List<As400BindingDefinition> input,
-                                     As400CaptureFingerprint.Policy policy, Optional<Initialization> initialization)
+                                     As400CaptureFingerprint.Policy policy, Optional<Initialization> initialization, Optional<Discovery> discovery)
             throws Exception {
+        return manifest(journal, baseline, receiverIdentity, input, policy, initialization, discovery, false);
+    }
+
+    private static Manifest manifest(String journal, JournalPosition baseline, String receiverIdentity, List<As400BindingDefinition> input,
+                                     As400CaptureFingerprint.Policy policy, Optional<Initialization> initialization, Optional<Discovery> discovery,
+                                     boolean online)
+            throws Exception {
+        require(!online || initialization.isEmpty() && discovery.isPresent(), "Online candidate requires its native discovery origin");
         // Reuse checkpoint identifier/position validation without inventing a cursor.
         As400Checkpoint.afterVerifiedBoundary(journal, "v1:" + "0".repeat(64), baseline, receiverIdentity);
         require(!input.isEmpty() && input.size() <= MAX_TABLES, "Bounded complete captured table set required");
@@ -218,6 +382,19 @@ final class As400BindingHistory {
             fields.put("initialization.epoch", value.epoch());
             fields.put("initialization.baseline", value.baselineReceipt());
         });
+        discovery.ifPresent(value -> {
+            require(initialization.isEmpty(), "Snapshot and pending handoff origins are distinct");
+            As400Checkpoint.afterVerifiedBoundary(journal, "v1:" + "0".repeat(64), value.floor(), value.receiverIdentity());
+            require(value.floor().offset().compareTo(baseline.offset()) <= 0
+                    && (!value.floor().offset().equals(baseline.offset()) || value.floor().equals(baseline)), "Discovery floor follows or aliases the schema origin");
+            require(!value.floor().receiver().equals(baseline.receiver()) || value.receiverIdentity().equals(receiverIdentity),
+                    "Discovery and schema origin receiver identities differ");
+            fields.put("version", online ? "5" : "4");
+            fields.put("discovery.sequence", value.floor().offset().toString());
+            fields.put("discovery.receiver", value.floor().receiver().name());
+            fields.put("discovery.library", value.floor().receiver().library());
+            fields.put("discovery.receiver.identity", value.receiverIdentity());
+        });
         Map<String, String> fingerprint = new TreeMap<>(fields);
         fingerprint.put("tables", encoded);
         fingerprint.put("policy", policy.fingerprint(definitions.stream().map(As400BindingDefinition::identity).toList()));
@@ -233,13 +410,22 @@ final class As400BindingHistory {
 
     private final class Validation implements SchemaHistoryListener {
         private final As400CaptureFingerprint.Policy policy;
-        private final As400Checkpoint checkpoint;
+        private final Consumer<Manifest> validateOrigin;
+        private final boolean online;
+        private final String selectedFingerprint;
         private Manifest manifest;
+        private As400LegacyHandoff handoff;
         private int records;
 
-        Validation(As400CaptureFingerprint.Policy policy, As400Checkpoint checkpoint) {
+        Validation(As400CaptureFingerprint.Policy policy, Consumer<Manifest> validateOrigin) {
+            this(policy, validateOrigin, false, null);
+        }
+
+        Validation(As400CaptureFingerprint.Policy policy, Consumer<Manifest> validateOrigin, boolean online, String selectedFingerprint) {
             this.policy = policy;
-            this.checkpoint = checkpoint;
+            this.validateOrigin = validateOrigin;
+            this.online = online;
+            this.selectedFingerprint = selectedFingerprint;
         }
 
         @Override
@@ -248,11 +434,22 @@ final class As400BindingHistory {
                 require(++records <= 1024, "Binding history exceeds record bound");
                 Document doc = record.document();
                 require(strings(doc.getDocument("source")).equals(source) && !doc.has("ddl"), "Foreign or DDL history record");
-                Map<String, String> position = strings(doc.getDocument("position"));
-                Optional<Initialization> initialization = initializationFrom(position);
-                var array = doc.getArray("tableChanges");
-                require(array != null && array.size() > 0 && array.size() <= MAX_TABLES, "Incomplete binding history record");
                 require(DocumentWriter.defaultWriter().write(doc).length() <= MAX_MANIFEST_CHARS + 4096, "Oversized binding history record");
+                Map<String, String> position = strings(doc.getDocument("position"));
+                require(online == "5".equals(position.get("version")), "Online candidate history and strict activation history cannot be mixed");
+                var array = doc.getArray("tableChanges");
+                if ("3".equals(position.get("version"))) {
+                    require(manifest != null && initializationFrom(manifest.position).isEmpty()
+                            && array != null && array.size() == 0, "Handoff requires preceding immutable pending bindings");
+                    var activation = As400LegacyHandoff.restore(position);
+                    manifest.verify(activation.initial());
+                    require(handoff == null || handoff.equals(activation), "Conflicting legacy activations");
+                    handoff = activation;
+                    return;
+                }
+                require(handoff == null, "Binding record follows activation");
+                Optional<Initialization> initialization = initializationFrom(position);
+                require(array != null && array.size() > 0 && array.size() <= MAX_TABLES, "Incomplete binding history record");
                 List<As400BindingDefinition> definitions = new ArrayList<>();
                 for (var change : new JsonTableChangeSerializer().deserialize(array, false)) {
                     require(change.getType() == TableChanges.TableChangeType.CREATE && change.getPreviousId() == null, "Binding history is immutable");
@@ -261,11 +458,21 @@ final class As400BindingHistory {
                 require(new JsonTableChangeSerializer().serialize(changes(definitions)).equals(array), "Noncanonical or lossy table history");
                 var candidate = manifest(position.get("journal"),
                         new JournalPosition(new BigInteger(position.get("sequence")), new JournalReceiver(position.get("receiver"), position.get("library"))),
-                        position.get("receiver.identity"), definitions, policy, initialization);
-                require(candidate.position.equals(position), "Changed, incomplete or noncanonical binding history. "
-                        + "Pre-fix configured D/CG fingerprints that included converter credentials cannot be migrated automatically; "
-                        + "preserve this history and offsets and initialize a new empty generation under a new operator window");
-                candidate.verify(checkpoint);
+                        position.get("receiver.identity"), definitions, policy, initialization, discoveryFrom(position), online);
+                require(candidate.position.equals(position), online ? "Changed, incomplete or noncanonical online candidate history"
+                        : "Changed, incomplete or noncanonical binding history. "
+                                + "Pre-fix configured D/CG fingerprints that included converter credentials cannot be migrated automatically; "
+                                + "preserve this history and offsets and initialize a new empty generation under a new operator window");
+                if (online) {
+                    // Every observed record remains canonical and policy-bound.
+                    // Before publication choose the first immutable candidate;
+                    // after publication only the fenced Connect offset selects it.
+                    if (selectedFingerprint == null && manifest != null
+                            || selectedFingerprint != null && !selectedFingerprint.equals(candidate.fingerprint())) {
+                        return;
+                    }
+                }
+                validateOrigin.accept(candidate);
                 require(manifest == null || manifest.position.equals(candidate.position) && manifest.encodedTables.equals(candidate.encodedTables),
                         "Conflicting binding epochs");
                 manifest = candidate;
@@ -307,9 +514,17 @@ final class As400BindingHistory {
     }
 
     private static Optional<Initialization> initializationFrom(Map<String, String> position) {
-        require(Set.of("1", "2").contains(position.get("version")), "Unsupported binding history version");
-        return "1".equals(position.get("version")) ? Optional.empty()
-                : Optional.of(new Initialization(position.get("initialization.epoch"), position.get("initialization.baseline")));
+        require(Set.of("1", "2", "4", "5").contains(position.get("version")), "Unsupported binding history version");
+        return "2".equals(position.get("version"))
+                ? Optional.of(new Initialization(position.get("initialization.epoch"), position.get("initialization.baseline")))
+                : Optional.empty();
+    }
+
+    private static Optional<Discovery> discoveryFrom(Map<String, String> position) {
+        return Set.of("4", "5").contains(position.get("version")) ? Optional.of(new Discovery(
+                new JournalPosition(new BigInteger(position.get("discovery.sequence")),
+                        new JournalReceiver(position.get("discovery.receiver"), position.get("discovery.library"))),
+                position.get("discovery.receiver.identity"))) : Optional.empty();
     }
 
     private static void require(boolean condition, String message) {

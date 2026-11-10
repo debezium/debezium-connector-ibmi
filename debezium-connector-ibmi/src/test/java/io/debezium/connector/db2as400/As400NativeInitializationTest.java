@@ -33,7 +33,6 @@ import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
-import io.debezium.connector.db2as400.As400BindingHistoryTest.Fixture;
 import io.debezium.connector.db2as400.As400JdbcNativeIdentityEvidence.Candidates;
 import io.debezium.connector.db2as400.As400JdbcNativeIdentityEvidence.Identity;
 import io.debezium.connector.db2as400.As400JdbcNativeIdentityEvidence.Kind;
@@ -42,6 +41,7 @@ import io.debezium.connector.db2as400.As400OperatorTableEvidence.Format;
 import io.debezium.connector.db2as400.As400OperatorTableEvidence.NativeObject;
 import io.debezium.connector.db2as400.As400OperatorTableEvidence.Observation;
 import io.debezium.connector.db2as400.As400OperatorTableEvidence.Request;
+import io.debezium.connector.db2as400.As400RecoveryTestSupport.Fixture;
 import io.debezium.ibmi.db2.journal.retrieve.RawJournalPage;
 import io.debezium.ibmi.db2.journal.retrieve.RetrieveJournal;
 
@@ -79,7 +79,7 @@ class As400NativeInitializationTest {
             case "snapshot-failure" -> doThrow(new IllegalStateException("not acknowledged")).when(s.session).acknowledgeBaseline(anyString(), any(), anyList());
             case "lost-fence" -> when(s.session.checkHeld(any(), anyList())).thenReturn("epoch", "changed");
             case "changed-schema" -> when(s.acquisition.collect(anyList())).thenReturn(s.acquired, new As400NativeBindingAcquisition.Acquired(List.of(), List.of()));
-            case "history-failure", "lost-after-history", "changed-after-history" -> s.fixture.factory = () -> new As400BindingHistoryTest.FileHistory(s.fixture.file) {
+            case "history-failure", "lost-after-history", "changed-after-history" -> s.fixture.factory = () -> new As400RecoveryTestSupport.FileHistory(s.fixture.file) {
                 @Override
                 protected void storeRecord(io.debezium.relational.history.HistoryRecord record) {
                     super.storeRecord(record);

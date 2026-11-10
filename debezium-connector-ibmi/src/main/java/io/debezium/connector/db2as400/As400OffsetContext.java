@@ -47,7 +47,8 @@ public class As400OffsetContext extends CommonOffsetContext<SourceInfo> {
     public static final Field PROCESSED_FIELD = Field.create(PROCESSED);
 
     private final Map<String, String> partition;
-    private TransactionContext transactionContext;
+    private final TransactionContext nonTransactionalContext = new TransactionContext();
+    private TransactionContext transactionContext = nonTransactionalContext;
 
     private final As400ConnectorConfig connectorConfig;
     private final SourceInfo sourceInfo;
@@ -100,11 +101,18 @@ public class As400OffsetContext extends CommonOffsetContext<SourceInfo> {
     }
 
     public void setTransaction(TransactionContext transactionContext) {
-        this.transactionContext = transactionContext;
+        if (transactionContext == null) {
+            // Reuse an inactive context without clearing another interleaved cycle.
+            nonTransactionalContext.endTransaction();
+            this.transactionContext = nonTransactionalContext;
+        }
+        else {
+            this.transactionContext = transactionContext;
+        }
     }
 
     public void endTransaction() {
-        transactionContext = null;
+        setTransaction(null);
     }
 
     @Override

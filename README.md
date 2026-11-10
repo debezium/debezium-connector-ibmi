@@ -34,10 +34,12 @@ DEBEZIUM_REST_ADVERTISED_HOST_NAME
 
 ## Production
 
-It is highly recommended that the partitions and replicaion_factor is increased for production
+Choose the replication factor for the available Kafka brokers. Truncate capture
+requires one partition per table topic so the keyless clear remains ordered with
+row events. The example below assumes at least three brokers:
 
 ```
-PARTITIONS=3
+PARTITIONS=1
 REPLICATION_FACTOR=3
 ```
 
@@ -53,21 +55,42 @@ REPLICATION_FACTOR=3
 The connector can emit a standard Debezium truncate event (`op=t`, null key,
 null `before` and `after`) for `F/CR` member clears. This follow-up also classifies
 `D/CG` subtype `8` (SQL truncate) and subtype `3` (optimized bulk DELETE) using
-the object-level entry-specific data. Other D/CG subtypes refresh the schema.
+the object-level entry-specific data. The legacy reader refreshes the schema for
+other D/CG subtypes; the configured path rejects unqualified structural changes.
 
 [D/CG validation findings](docs/dcg-validation.md) describe the observed commit and
 rollback behavior and the work remaining in debezium/dbz#3027.
 
-D/CG capture remains limited to commit cycle zero and single-member files. The
-presence of a clear subtype does not prove that the operation has committed;
-transaction buffering and rollback handling are outside this follow-up.
+The local follow-up now also has an explicitly configured native D/CG candidate.
+It supports declared primary keys or explicit `dcg.key.mode=rrn` for native files
+without declared keys; see the [key contract](docs/dcg-configured-native.md#keys-for-native-physical-files).
+See the [configured profile and operator runbook](docs/dcg-configured-native.md)
+and [validation report](docs/dcg-configured-validation.md), with the current
+[source release checklist](docs/dcg-source-release-checklist.md). It uses normal task
+startup, immutable binding history, transaction buffering and durable F/W recovery.
+It defaults to disabled and has stricter source/runtime requirements than the
+legacy reader. The separate, default-off `truncate.transactional.enabled` option
+now connects the online handoff to normal startup for an existing completed
+streaming offset. It uses brief automatic native locks and standard table filters,
+without another snapshot or an administrator-managed write pause; see the
+[online configuration and restrictions](docs/dcg-online-configuration.md).
+
+The [code review and cleanup report](docs/dcg-code-review.md) records runtime
+dependency checks and performance comparisons. Historical protected-startup and
+custom-receipt experiments are excluded from the plugin and normal test suite;
+run `./mvnw test -Pdcg-prototype-tests -DskipITs` to include their retained tests.
+
+The behavior below describes the **legacy reader with `dcg.mode=disabled` and
+`truncate.transactional.enabled=false`**.
+In that path, D/CG capture remains limited to commit cycle zero and single-member
+files; a clear subtype by itself does not prove a transaction has committed.
 
 Truncate capture is **opt-in**. The inherited `skipped.operations` default is `t`.
 Set `skipped.operations=none`, or a list that does not contain `t`, to enable it.
 
 This initial implementation supports clears **outside commitment control on
 single-member files**. It queries `QSYS2.SYSPARTITIONSTAT` before emitting a clear
-and requires one matching member. The connector does not currently buffer
+and requires one matching member. The legacy reader does not buffer
 transactions, so an enabled clear with a nonzero commit-cycle identifier stops
 the connector through its error handler. It also stops for ambiguous member
 scope, malformed D/CG data, missing object identity, or failed truncate dispatch, rather than silently

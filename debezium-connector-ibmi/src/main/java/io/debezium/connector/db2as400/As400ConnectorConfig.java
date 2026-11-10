@@ -249,6 +249,11 @@ public class As400ConnectorConfig extends RelationalDatabaseConnectorConfig {
     public static final Field DCG_BUFFER_BYTES = Field.create("dcg.buffer.max.bytes").withType(Type.INT).withDefault(16777216)
             .withDescription("Maximum retained source payload bytes; excludes JVM object and output serialization overhead.");
 
+    public static final Field TRANSACTIONAL_TRUNCATE = Field.create("truncate.transactional.enabled")
+            .withType(Type.BOOLEAN).withDefault(false)
+            .withDescription(
+                    "Enable transactional truncate capture from an existing completed streaming offset using an automatic brief native lock boundary. Requires the qualified Kafka Connect and retention profile; defaults to false.");
+
     public static final Field DCG_MODE = Field.create("dcg.mode")
             .withType(Type.STRING).withDefault("disabled")
             .withDescription("Native D/CG profile: disabled, initialize with an operator window, or resume from durable F/W. Defaults to disabled.");
@@ -271,7 +276,8 @@ public class As400ConnectorConfig extends RelationalDatabaseConnectorConfig {
             RelationalDatabaseConnectorConfig.SNAPSHOT_SELECT_STATEMENT_OVERRIDES_BY_TABLE, SOCKET_TIMEOUT,
             MAX_SERVER_SIDE_ENTRIES, TOPIC_NAMING_STRATEGY, FROM_CCSID, TO_CCSID, SECURE,
             DIAGNOSTICS_FOLDER, TRIM_NON_XML_CHARSEQUENCE_FIELD_MODE, JOURNAL_CACHE_ADDITIONAL_DELAY,
-            DCG_MODE, DCG_JOURNAL, DCG_KEY_MODE, DCG_TABLES, DCG_CONTROLLED, DCG_LIBRARIES, DCG_WINDOW, DCG_RETENTION, DCG_BUFFER_TRANSACTIONS, DCG_BUFFER_ENTRIES,
+            TRANSACTIONAL_TRUNCATE, DCG_MODE, DCG_JOURNAL, DCG_KEY_MODE, DCG_TABLES, DCG_CONTROLLED, DCG_LIBRARIES, DCG_WINDOW, DCG_RETENTION, DCG_BUFFER_TRANSACTIONS,
+            DCG_BUFFER_ENTRIES,
             DCG_BUFFER_SAVEPOINTS, DCG_BUFFER_BYTES);
 
     public static ConfigDef configDef() {
@@ -288,7 +294,8 @@ public class As400ConnectorConfig extends RelationalDatabaseConnectorConfig {
                         As400OffsetContext.EVENT_SEQUENCE_FIELD,
                         As400OffsetContext.RECEIVER_FIELD,
                         As400OffsetContext.RECEIVER_LIBRARY_FIELD,
-                        As400OffsetContext.PROCESSED_FIELD, DCG_MODE, DCG_JOURNAL, DCG_KEY_MODE, DCG_TABLES, DCG_CONTROLLED, DCG_LIBRARIES, DCG_WINDOW, DCG_RETENTION,
+                        As400OffsetContext.PROCESSED_FIELD, TRANSACTIONAL_TRUNCATE, DCG_MODE, DCG_JOURNAL, DCG_KEY_MODE, DCG_TABLES, DCG_CONTROLLED, DCG_LIBRARIES,
+                        DCG_WINDOW, DCG_RETENTION,
                         DCG_BUFFER_TRANSACTIONS, DCG_BUFFER_ENTRIES, DCG_BUFFER_SAVEPOINTS, DCG_BUFFER_BYTES)
                 .create().configDef();
         return c;

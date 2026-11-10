@@ -155,12 +155,21 @@ final class As400OperatorCutReader {
         JournalPosition from = scan == null ? loaded.replayFrom() : scan.position();
         require((prefix ? qualified.order().compare(loaded.replayFrom(), from) <= 0 : qualified.order().compare(loaded.completedThrough(), from) <= 0) || scan == null,
                 "Scan position precedes durable completed output");
+        boolean emptyOnlineOrigin = recovered != null && recovered.emptyOnlineOrigin(loaded);
+        int originReserve = emptyOnlineOrigin && from.equals(loaded.replayFrom()) ? 1 : 0;
         if (scan != null || prefix) {
             var anchors = new java.util.LinkedHashSet<>(List.of(loaded.replayFrom(), loaded.completedThrough()));
             anchors.remove(from);
             for (JournalPosition anchor : anchors) {
                 require(++pages <= limits.pages(), "Ordinary anchor reads exceed configured bounds");
-                var page = reader.readRawPage(anchor, anchor, 1);
+                RawJournalPage page = reader.readRawPage(anchor, anchor, 1);
+                if (emptyOnlineOrigin && anchor.equals(loaded.replayFrom()) && page.entries().isEmpty() && page.continuation().isEmpty()) {
+                    require(++pages <= limits.pages(), "Empty online origin exceeds anchor bound");
+                    var audit = reader.readAuditHistoryPage(anchor, anchor, 1);
+                    page = new RawJournalPage(audit.entries(), audit.continuation(), audit.bytesReturned());
+                    require(page.entries().size() == 1, "Empty online origin marker is absent");
+                    As400JournalRecordContent.userMarker(page.entries().get(0));
+                }
                 require(page.entries().size() == 1 && page.entries().get(0).position().equals(anchor) && page.continuation().isEmpty(),
                         "Required durable history anchor is absent");
                 bytes += page.entries().get(0).data().length;
@@ -179,12 +188,13 @@ final class As400OperatorCutReader {
             JournalPosition next = new JournalPosition(first ? from.offset() : receiver.first(), receiver.name());
             JournalPosition through = new JournalPosition(receiver.last(), receiver.name());
             while (true) {
-                if (prefix && (pages >= limits.pages() || captured.size() >= limits.entries())) {
+                if (prefix && (pages >= limits.pages() - originReserve || captured.size() >= limits.entries() - originReserve)) {
                     complete = false;
                     break retrieval;
                 }
-                require(++pages <= limits.pages() && captured.size() < limits.entries(), "Ordinary replay history exceeds configured bounds");
-                RawJournalPage page = reader.readRawPage(next, through, limits.entries() - captured.size());
+                require(++pages <= limits.pages() - originReserve && captured.size() < limits.entries() - originReserve,
+                        "Ordinary replay history exceeds configured bounds");
+                RawJournalPage page = reader.readRawPage(next, through, limits.entries() - captured.size() - originReserve);
                 for (RawJournalPage.Entry entry : page.entries()) {
                     if (prefix && bytes + entry.data().length > limits.bytes()) {
                         complete = false;
@@ -199,6 +209,19 @@ final class As400OperatorCutReader {
                 }
                 next = page.continuation().orElseThrow();
             }
+        }
+        if (emptyOnlineOrigin && from.equals(loaded.replayFrom()) && captured.stream().noneMatch(e -> e.position().equals(from))) {
+            // Existing online baselines can also be ordinary CDC anchors. Only
+            // an absent exclusive origin may use the separately retained U/DN
+            // marker; no other missing F/W or scan anchor gets this exception.
+            require(++pages <= limits.pages() && captured.size() < limits.entries(), "Empty online origin exceeds anchor bound");
+            var page = reader.readAuditHistoryPage(from, from, 1);
+            require(page.entries().size() == 1 && page.entries().get(0).position().equals(from) && page.continuation().isEmpty(),
+                    "Empty online origin marker is absent");
+            As400JournalRecordContent.userMarker(page.entries().get(0));
+            captured.add(0, page.entries().get(0));
+            bytes += page.entries().get(0).data().length;
+            require(bytes <= limits.bytes(), "Empty online origin exceeds byte bound");
         }
         if (scan == null) {
             require(captured.stream().anyMatch(e -> e.position().equals(loaded.replayFrom())), "Replay floor anchor is absent");

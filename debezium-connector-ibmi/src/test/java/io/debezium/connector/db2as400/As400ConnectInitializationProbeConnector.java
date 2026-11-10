@@ -5,10 +5,10 @@
  */
 package io.debezium.connector.db2as400;
 
-import static io.debezium.connector.db2as400.As400BindingHistoryTest.Fixture.POLICY;
 import static io.debezium.connector.db2as400.As400ConnectProbeConnector.CONTROL;
 import static io.debezium.connector.db2as400.As400ConnectProbeConnector.append;
 import static io.debezium.connector.db2as400.As400ConnectProbeConnector.write;
+import static io.debezium.connector.db2as400.As400RecoveryTestSupport.Fixture.POLICY;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.Mockito.mock;
@@ -47,9 +47,9 @@ import io.debezium.config.Configuration;
 import io.debezium.connector.SnapshotRecord;
 import io.debezium.connector.base.ChangeEventQueue;
 import io.debezium.connector.common.CdcSourceTaskContext;
-import io.debezium.connector.db2as400.As400BindingHistoryTest.Fixture;
 import io.debezium.connector.db2as400.As400JdbcNativeIdentityEvidence.Candidates;
 import io.debezium.connector.db2as400.As400JdbcNativeIdentityEvidence.Target;
+import io.debezium.connector.db2as400.As400RecoveryTestSupport.Fixture;
 import io.debezium.connector.db2as400.As400SourceNormalizer.TableBinding;
 import io.debezium.data.Envelope;
 import io.debezium.ibmi.db2.journal.retrieve.JournalPosition;
@@ -193,7 +193,7 @@ public class As400ConnectInitializationProbeConnector extends As400ConnectProbeC
                                             List<As400OperatorTableEvidence.Request> captured)
                             throws Exception {
                         RuntimeTask.this.checkHeld();
-                        if (!journal.equals(As400BindingHistoryTest.Fixture.JOURNAL) || !captured.equals(setup.requests)) {
+                        if (!journal.equals(As400RecoveryTestSupport.Fixture.JOURNAL) || !captured.equals(setup.requests)) {
                             throw new IllegalStateException("Qualified session scope changed");
                         }
                         return epoch;
