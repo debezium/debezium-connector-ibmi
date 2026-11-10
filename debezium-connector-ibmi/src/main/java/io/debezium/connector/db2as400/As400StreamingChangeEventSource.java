@@ -69,6 +69,7 @@ public class As400StreamingChangeEventSource implements StreamingChangeEventSour
     private final As400DatabaseSchema schema;
     private final Duration pollInterval;
     private final As400ConnectorConfig connectorConfig;
+    private final boolean captureTruncates;
     private final Map<String, TransactionContext> txMap = new HashMap<>();
     private final String database;
     private As400OffsetContext offsetContext;
@@ -79,6 +80,7 @@ public class As400StreamingChangeEventSource implements StreamingChangeEventSour
                                            As400JdbcConnection jdbcConnection, EventDispatcher<As400Partition, TableId> dispatcher,
                                            ErrorHandler errorHandler, Clock clock, As400DatabaseSchema schema) {
         this.connectorConfig = connectorConfig;
+        this.captureTruncates = !connectorConfig.getSkippedOperations().contains(Operation.TRUNCATE);
         this.dataConnection = dataConnection;
         this.jdbcConnection = jdbcConnection;
         this.dispatcher = dispatcher;
@@ -155,8 +157,7 @@ public class As400StreamingChangeEventSource implements StreamingChangeEventSour
                     }
                     catch (final TruncateException e) {
                         // Never acknowledge a clear that could not be represented safely.
-                        errorHandler.setProducerThrowable(e);
-                        return;
+                        throw e;
                     }
                     catch (final InterruptedException e) {
                         if (context.isRunning()) {
@@ -233,14 +234,15 @@ public class As400StreamingChangeEventSource implements StreamingChangeEventSour
                     return;
                 }
 
-                final boolean captureTruncates = !connectorConfig.getSkippedOperations().contains(Operation.TRUNCATE);
                 if (journalEntryType == JournalEntryType.MEMBER_CLEARED && !captureTruncates) {
                     return;
                 }
                 final String file = eheader.getFile();
                 final String library = eheader.getLibrary();
                 if (journalEntryType == JournalEntryType.MEMBER_CLEARED && (file.isEmpty() || library.isEmpty())) {
-                    throw new TruncateException("Missing table identity for clear at journal entry " + eheader.getSequenceNumber());
+                    // Without a table identity we cannot determine whether this clear is in scope.
+                    log.warn("Skipping clear with missing file or library at journal entry {}", eheader.getSequenceNumber());
+                    return;
                 }
                 String longName = file;
                 try {
@@ -369,7 +371,7 @@ public class As400StreamingChangeEventSource implements StreamingChangeEventSour
                         break;
                 }
             }
-            catch (TruncateException | IOException | SQLNonTransientConnectionException e) {
+            catch (TruncateException | InterruptedException | IOException | SQLNonTransientConnectionException e) {
                 throw e;
             }
             catch (final Exception e) {
@@ -379,7 +381,8 @@ public class As400StreamingChangeEventSource implements StreamingChangeEventSour
     }
 
     private void dispatchTruncate(As400Partition partition, As400OffsetContext offsetContext, TableId tableId,
-                                  EntryHeader entry, String file, String library, String member) {
+                                  EntryHeader entry, String file, String library, String member)
+            throws InterruptedException {
         // The connector does not buffer transactions. A truncate cannot be undone by
         // replaying row-level rollback images, so do not emit an uncommitted clear.
         if (entry.getCommitCycle().signum() != 0) {
@@ -391,21 +394,34 @@ public class As400StreamingChangeEventSource implements StreamingChangeEventSour
                 throw new TruncateException("Cannot represent a clear as a table truncate for " + tableId
                         + ": expected one matching file member");
             }
+            // Clears have no row image to decode, so ensure the table schema is registered explicitly.
+            if (schema.getRecordFormat(file, library).isEmpty()) {
+                throw new TruncateException("Missing table schema for " + tableId + " at journal entry " + entry.getSequenceNumber());
+            }
             beforeMap.remove(String.format("%s-%s", tableId.schema(), tableId.table()));
             offsetContext.updateSourceInfo(entry);
             offsetContext.setTransaction(null);
-            boolean dispatched = dispatcher.dispatchDataChangeEvent(partition, tableId, new As400ChangeRecordEmitter(partition,
-                    offsetContext, Operation.TRUNCATE, null, null, clock, connectorConfig));
+            As400ChangeRecordEmitter emitter = new As400ChangeRecordEmitter(partition,
+                    offsetContext, Operation.TRUNCATE, null, null, clock, connectorConfig);
+            boolean dispatched;
+            try {
+                dispatched = dispatcher.dispatchDataChangeEvent(partition, tableId, emitter);
+            }
+            finally {
+                // Recover the original interruption even when core logged it and returned false.
+                emitter.rethrowTruncateInterruption();
+            }
             if (!dispatched) {
                 throw new TruncateException("Failed to dispatch clear for " + tableId + " at journal entry " + entry.getSequenceNumber());
             }
         }
-        catch (TruncateException e) {
+        catch (TruncateException | InterruptedException e) {
             throw e;
         }
         catch (Exception e) {
-            if (e instanceof InterruptedException) {
-                Thread.currentThread().interrupt();
+            // EventDispatcher can wrap an interrupted queue write in ConnectException.
+            if (e.getCause() instanceof InterruptedException interrupted) {
+                throw interrupted;
             }
             throw new TruncateException("Failed to capture clear for " + tableId + " at journal entry " + entry.getSequenceNumber(), e);
         }

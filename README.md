@@ -67,9 +67,12 @@ single-member files**. It queries `QSYS2.SYSPARTITIONSTAT` before emitting a cle
 and requires one matching member. The connector does not currently buffer
 transactions, so an enabled clear with a nonzero commit-cycle identifier stops
 the connector through its error handler. It also stops for ambiguous member
-scope, missing object identity, or failed truncate dispatch, rather than silently
-acknowledging the clear. Transactional truncates, including rolled-back truncates,
-require transaction buffering and restart-safe replay before they can be supported.
+scope, a missing member on an included table, unavailable table schema, or failed
+truncate dispatch, rather than silently acknowledging the clear. Clears with a
+missing file or library name are logged and skipped because the connector cannot
+determine whether they belong to an included table. Transactional truncates,
+including rolled-back truncates, require transaction buffering and restart-safe
+replay before they can be supported.
 Auto-commit alone does not guarantee a zero commit-cycle identifier; verify the
 source journal. Do not assume that adding `IMMEDIATE` alone bypasses this guard.
 
@@ -95,8 +98,12 @@ The main branch uses Debezium snapshot dependencies; build the matching core
 modules as described in `.github/workflows/cross-maven.yml` first if those
 artifacts are unavailable. `-DskipITs` keeps this build independent of a live IBM i.
 
-The live `As400ConnectorIT` class expects a disposable IBM i library named `DTEST`
-and table `TESTT`. It deletes rows during setup and clears and reloads the table.
+The live `As400ConnectorIT` class uses a disposable IBM i library named `DTEST`
+by default and table `TESTT`. Set `-Dtest.database.schema=YOURTEST` to use a separate
+library for concurrent testing; replace every `DTEST` reference in the fixture
+setup and cleanup below with that name. The name must contain only uppercase
+letters, digits, and underscores, begin with a letter, and be at most ten characters.
+The test deletes rows during setup and clears and reloads the table.
 Use a dedicated test environment and an account allowed to create this fixture,
 read its journal, and execute `CLRPFM`. Do not point it at an application library.
 
@@ -139,7 +146,10 @@ The properties flag prevents the test report from listing JVM system properties;
 review logs before sharing them because connection information can still appear.
 The tests run the connector in a local embedded Debezium engine and consume records
 in memory. They cover snapshot/insert streaming and clear/reload using both
-`CLRPFM` and SQL `TRUNCATE TABLE ... IMMEDIATE`, with commitment control disabled.
+`CLRPFM` and SQL `TRUNCATE TABLE ... IMMEDIATE`, with commitment control disabled,
+under `initial` and `no_data` snapshot modes. Both modes load table schemas;
+`no_data` skips snapshot rows so the clear is the first captured data event. Use a separate
+`-Ddbz.test.data.dir=/absolute/path/to/test-offsets` for concurrent runs.
 Each clear case asserts a keyless truncate followed by an insert. The SQL case
 requires a system where the operation produces `F/CR`; it does not establish
 support for `D/CG`. Inspect the fixture journal to record the entry type observed.
