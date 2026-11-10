@@ -23,8 +23,8 @@ import org.apache.kafka.connect.source.TransactionContext;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
-import io.debezium.connector.db2as400.As400BindingHistoryTest.Fixture;
 import io.debezium.connector.db2as400.As400RecoveryTaskTest.Running;
+import io.debezium.connector.db2as400.As400RecoveryTestSupport.Fixture;
 import io.debezium.ibmi.db2.journal.retrieve.RawJournalPage;
 import io.debezium.ibmi.db2.journal.retrieve.rjne0200.EntryHeaderDecoder;
 
@@ -42,7 +42,7 @@ class As400StreamingChunksTest {
             while (rows < 600) {
                 var records = run.next();
                 assertThat(retained(run)).isLessThanOrEqualTo(256);
-                for (String event : As400BindingHistoryTest.data(records)) {
+                for (String event : As400RecoveryTestSupport.data(records)) {
                     if (event.equals("t:DCOC1107.B")) {
                         clears++;
                     }
@@ -64,7 +64,7 @@ class As400StreamingChunksTest {
             while (!done) {
                 var records = run.next();
                 assertThat(retained(run)).isLessThanOrEqualTo(256);
-                for (String event : As400BindingHistoryTest.data(records)) {
+                for (String event : As400RecoveryTestSupport.data(records)) {
                     if (event.equals("t:DCOC1107.B")) {
                         clears++;
                     }

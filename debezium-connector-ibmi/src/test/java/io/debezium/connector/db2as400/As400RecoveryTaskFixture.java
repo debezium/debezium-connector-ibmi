@@ -22,9 +22,9 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 
 import io.debezium.config.Configuration;
-import io.debezium.connector.db2as400.As400BindingHistoryTest.Fixture;
 import io.debezium.connector.db2as400.As400JdbcNativeIdentityEvidence.Candidates;
 import io.debezium.connector.db2as400.As400JdbcNativeIdentityEvidence.Target;
+import io.debezium.connector.db2as400.As400RecoveryTestSupport.Fixture;
 import io.debezium.ibmi.db2.journal.retrieve.JournalPosition;
 import io.debezium.ibmi.db2.journal.retrieve.RawJournalPage;
 import io.debezium.ibmi.db2.journal.retrieve.RetrieveJournal;
@@ -82,7 +82,7 @@ class As400RecoveryTaskFixture implements As400TaskRecovery {
     public As400BindingHistory.Recovered recover(Map<String, ?> durable) throws Exception {
         recoveries.incrementAndGet();
         gate("history");
-        var history = fixture.history().recover(durable, journalIdentity(), Fixture.POLICY);
+        var history = recoverHistory(durable);
         var journals = mock(As400OperatorJournalEvidence.class);
         var identities = mock(As400JdbcNativeIdentityEvidence.class);
         var transport = mock(RetrieveJournal.class);
@@ -99,6 +99,10 @@ class As400RecoveryTaskFixture implements As400TaskRecovery {
         });
         reader = new As400OperatorCutReader(journals, identities, Fixture.JOURNAL, history, transport, new As400OperatorCutReader.Limits(16, 100, 1_000_000));
         return history;
+    }
+
+    As400BindingHistory.Recovered recoverHistory(Map<String, ?> durable) throws Exception {
+        return fixture.history().recover(durable, journalIdentity(), Fixture.POLICY);
     }
 
     @Override

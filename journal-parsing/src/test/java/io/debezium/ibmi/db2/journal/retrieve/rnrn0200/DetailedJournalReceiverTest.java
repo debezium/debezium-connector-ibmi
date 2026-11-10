@@ -9,13 +9,13 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 
 import java.math.BigInteger;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Date;
 import java.util.List;
 import java.util.Optional;
 
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import io.debezium.ibmi.db2.journal.retrieve.JournalReceiver;
 
@@ -30,42 +30,18 @@ class DetailedJournalReceiverTest {
             new JournalReceiverInfo(new JournalReceiver("1", "lib"), new Date(1), JournalStatus.Partial, Optional.of(1)), BigInteger.ONE, BigInteger.TWO,
             Optional.of(dr2.info().receiver()), 1, 1);
 
-    @BeforeEach
-    void setUp() throws Exception {
+    @ParameterizedTest
+    @ValueSource(booleans = { false, true })
+    void shouldSelectLatestCompleteChainRegardlessOfCatalogOrder(boolean reversed) {
+        var input = new ArrayList<>(List.of(dr1, dr2, dr3));
+        if (reversed) {
+            java.util.Collections.reverse(input);
+        }
+        assertEquals(List.of(dr2, dr3), DetailedJournalReceiver.lastJoined(input));
     }
 
     @Test
-    void testLatestChain() {
-        List<DetailedJournalReceiver> l = new ArrayList<>(Arrays.asList(
-                dr1));
-
-        List<DetailedJournalReceiver> active = List.of(
-                dr2,
-                dr3);
-
-        l.addAll(active);
-
-        List<DetailedJournalReceiver> firstChain = DetailedJournalReceiver.lastJoined(l);
-        assertEquals(active, firstChain);
-    }
-
-    @Test
-    void testLatestChainSorting() {
-        List<DetailedJournalReceiver> inactive = Arrays.asList(
-                dr1);
-        List<DetailedJournalReceiver> active = List.of(
-                dr2,
-                dr3);
-
-        List<DetailedJournalReceiver> l = new ArrayList<>(active); // added in wrong date order
-        l.addAll(inactive);
-
-        List<DetailedJournalReceiver> firstChain = DetailedJournalReceiver.lastJoined(l);
-        assertEquals(active, firstChain);
-    }
-
-    @Test
-    void testWithStatus() {
+    void shouldPreserveReceiverCoordinatesWhenChangingStatus() {
         DetailedJournalReceiver dr = dr1;
         DetailedJournalReceiver expected = new DetailedJournalReceiver(
                 new JournalReceiverInfo(dr1.info().receiver(), dr1.info().attachTime(), JournalStatus.Attached, dr1.info().chain()), // mark as partial - not available

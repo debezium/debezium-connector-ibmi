@@ -35,7 +35,7 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import io.debezium.config.Configuration;
-import io.debezium.connector.db2as400.As400BindingHistoryTest.Fixture;
+import io.debezium.connector.db2as400.As400RecoveryTestSupport.Fixture;
 
 class As400RecoveryTaskTest {
     @TempDir
@@ -47,7 +47,7 @@ class As400RecoveryTaskTest {
         try (var first = new Running(directory, initial, initial)) {
             first.start();
             List<SourceRecord> batch = first.throughCheckpoint("42");
-            assertThat(As400BindingHistoryTest.data(batch)).containsExactly("c:DCOC1107.A:8");
+            assertThat(As400RecoveryTestSupport.data(batch)).containsExactly("c:DCOC1107.A:8");
             assertThat(first.input.reads).hasValue(1);
             assertThat(first.durable.get()).isEqualTo(initial);
             SourceRecord barrier = batch.get(batch.size() - 1);
@@ -65,7 +65,7 @@ class As400RecoveryTaskTest {
                 replacement.input.tail = 64;
                 replacement.start();
                 var rest = replacement.throughCheckpoint("59");
-                assertThat(As400BindingHistoryTest.data(rest)).containsExactly("t:DCOC1107.B", "c:DCOC1107.B:100", "c:DCOC1107.A:9");
+                assertThat(As400RecoveryTestSupport.data(rest)).containsExactly("t:DCOC1107.B", "c:DCOC1107.B:100", "c:DCOC1107.A:9");
                 replacement.ack(rest);
                 await(() -> replacement.input.reads.get() > 1);
                 assertThat(replacement.durable.get().get("completed_through.sequence")).isEqualTo("59");
@@ -83,7 +83,7 @@ class As400RecoveryTaskTest {
             List<SourceRecord> prefix = new ArrayList<>();
             do {
                 prefix.addAll(first.next());
-            } while (!As400BindingHistoryTest.data(prefix).contains("t:DCOC1107.B"));
+            } while (!As400RecoveryTestSupport.data(prefix).contains("t:DCOC1107.B"));
             first.ack(prefix);
             saved = first.durable.get();
             assertThat(saved.get("completed_through.sequence")).isEqualTo("42");
@@ -93,7 +93,7 @@ class As400RecoveryTaskTest {
             replacement.input.tail = 64;
             replacement.start();
             var replay = replacement.throughCheckpoint("59");
-            assertThat(As400BindingHistoryTest.data(replay)).containsExactly("t:DCOC1107.B", "c:DCOC1107.B:100", "c:DCOC1107.A:9");
+            assertThat(As400RecoveryTestSupport.data(replay)).containsExactly("t:DCOC1107.B", "c:DCOC1107.B:100", "c:DCOC1107.A:9");
             replacement.ack(replay);
         }
     }
@@ -191,7 +191,7 @@ class As400RecoveryTaskTest {
                     replacement.input.tail = 64;
                     replacement.start();
                     var output = replacement.throughCheckpoint("59");
-                    assertThat(As400BindingHistoryTest.data(output)).containsExactly("c:DCOC1107.A:8", "t:DCOC1107.B", "c:DCOC1107.B:100", "c:DCOC1107.A:9");
+                    assertThat(As400RecoveryTestSupport.data(output)).containsExactly("c:DCOC1107.A:8", "t:DCOC1107.B", "c:DCOC1107.B:100", "c:DCOC1107.A:9");
                     replacement.ack(output);
                     await(() -> replacement.input.reads.get() > 1);
                     assertThat(replacement.durable.get().get("completed_through.sequence")).isEqualTo("59");
@@ -311,6 +311,7 @@ class As400RecoveryTaskTest {
         final As400RecoveryTaskFixture input;
         final AdmittedTask task;
         final AtomicReference<Map<String, ?>> durable;
+        final SourceTaskContext context;
         boolean started;
 
         Running(Path directory, Map<String, String> baseline, Map<String, ?> saved) throws Exception {
@@ -328,7 +329,7 @@ class As400RecoveryTaskTest {
                 offsets.put(input.partition().getSourcePartition(), durable.get());
                 return offsets;
             });
-            var context = mock(SourceTaskContext.class);
+            context = mock(SourceTaskContext.class);
             when(context.offsetStorageReader()).thenReturn(reader);
             task.initialize(context);
         }

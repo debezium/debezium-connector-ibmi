@@ -35,20 +35,28 @@ final class As400KafkaBindingHistory extends KafkaSchemaHistory {
     private static final Duration TIMEOUT = Duration.ofSeconds(30);
     private Properties readConfig;
     private String topic;
+    private boolean candidateAppends;
 
     @Override
     public void configure(Configuration config, HistoryRecordComparator comparator, SchemaHistoryListener listener, boolean useCatalogBeforeSchema) {
         super.configure(config, comparator, listener, useCatalogBeforeSchema);
+        candidateAppends = false;
         topic = config.getString(TOPIC);
         readConfig = config.subset(CONFIGURATION_FIELD_PREFIX_STRING + "consumer.", true).edit()
                 .with(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, config.getString(BOOTSTRAP_SERVERS))
                 .with(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, ByteArrayDeserializer.class)
                 .with(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, ByteArrayDeserializer.class)
                 .with(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, false)
+                .with(ConsumerConfig.ALLOW_AUTO_CREATE_TOPICS_CONFIG, false)
                 .with(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "none")
                 .with(ConsumerConfig.ISOLATION_LEVEL_CONFIG, "read_uncommitted")
                 .with(ConsumerConfig.DEFAULT_API_TIMEOUT_MS_CONFIG, 30_000)
                 .with(ConsumerConfig.REQUEST_TIMEOUT_MS_CONFIG, 10_000).build().asProperties();
+    }
+
+    /** Only immutable online proposals may append beyond this read's fixed log cut. */
+    void allowCandidateAppends() {
+        candidateAppends = true;
     }
 
     @Override
@@ -72,6 +80,9 @@ final class As400KafkaBindingHistory extends KafkaSchemaHistory {
                 var batch = consumer.poll(Duration.ofMillis(100));
                 for (var record : batch) {
                     checkInterrupted();
+                    if (candidateAppends && next == end && record.offset() >= end) {
+                        break;
+                    }
                     require(record.offset() == next && record.offset() < end, "Missing, reordered or concurrently appended history record");
                     require(record.value() != null, "Null binding history record");
                     bytes += record.value().length;
@@ -90,8 +101,9 @@ final class As400KafkaBindingHistory extends KafkaSchemaHistory {
                     next++;
                 }
             }
+            long currentEnd = consumer.endOffsets(partitions, TIMEOUT).get(partition);
             require(consumer.beginningOffsets(partitions, TIMEOUT).get(partition) == 0
-                    && consumer.endOffsets(partitions, TIMEOUT).get(partition) == end, "Binding history changed during recovery");
+                    && (candidateAppends ? currentEnd >= end : currentEnd == end), "Binding history changed during recovery");
         }
     }
 

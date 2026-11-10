@@ -116,3 +116,50 @@ flags are fixture definitions for this known CREATE TABLE, not independently
 collected identity evidence. The packaged native run independently acquires all
 catalog fields. Source capture hashes and sanitization details are retained in
 the local report described in `docs/dcg-temporal-validation.md`.
+
+`automatic-fence-native-scope.json` preserves the successful current-metadata
+candidate from isolated DCNC0946 on 2026-11-09. Its journal inventory comes from
+WRKJRNA's native outfile and independent JOURNAL_INFO counts; exact member queries
+find EXTRA/DATA in addition to A/B/M/U. These are unmodified metadata responses,
+not application data or certified historical bindings. The native identity values
+belong to that removed disposable fixture. The test requires candidate-only status
+and reuses the original native binding validators. See
+`docs/dcg-lock-scope-validation.md` for reproduction, negative coverage and limits.
+
+
+`late-membership.json` is the native DCNC0959 negative fixture. Its row-only
+projections deliberately omit earlier maintenance so the last unknown-binding
+check can be exercised independently. The complete all-code capture is separately
+rejected for pointer-backed maintenance; the fixture never authorizes that omission
+in a connector. `prospective-native.json` is the DCNC0961 prospective-schema
+fixture: native origin 59, actual completed row cut 66, then clear/reload with an
+unrelated row before commit. It includes older C/J history and observed journal,
+receiver, file/member and schema evidence. Both remain `startup_proof=false`.
+See [the validation report](../../../../../docs/dcg-short-boundary-validation.md#continued-work-late-membership-and-prospective-schema-history)
+for capture, cleanup, failed attempts and qualification limits.
+
+`equal-width-alter.json` preserves native DCNC0965 INTEGER -> REAL -> INTEGER
+metadata and the complete all-code journal capture. File/member journal IDs remain
+constant; native object identities change, and the format definition returns to
+its original value. The actual F/CH subtype 0 rejects before the REAL row is
+misdecoded or F/W advances. Cleanup was verified.
+
+`prospective-boundary.json` is the separate DCNC0966 active-writer bundle. It
+contains the actual requested scope and SQL program, drained holder evidence,
+before/after metadata, full raw A/N/Z audit, older controls and prospective rows.
+Rows occurred both before and after N while the metadata collector ran. It remains
+`startup_proof=false`; original fixtures are not overwritten or promoted. See
+[the joined-boundary report](../../../../../docs/dcg-short-boundary-validation.md#joined-boundary-evidence-active-writers-and-schema-replacement)
+for limits, rejected attempts and native/local testing distinctions.
+
+`pending-receiver-boundary.json` preserves the actual pending-receiver samples,
+complete native directory/identity observations and raw all-code audit bytes from
+DCNC0976 on 2026-11-09. The busy attempt discovers receiver floor 4; the later
+candidate discovers floor 46, including the original cycle referenced by a
+terminal after the pending flag cleared. Neither floor was supplied from the
+fixture's known transaction start. Bytes and original SHA-256 values are retained;
+these are disposable fixture records and remain candidate evidence, not startup
+proof. Regression mutations exercise observations outside the audit interval,
+receiver replacement, incomplete pages, missing records and unknown pending flags.
+Fixture cleanup was verified. See `docs/dcg-native-startup-collection.md` for the
+exact live-versus-local verification boundary.

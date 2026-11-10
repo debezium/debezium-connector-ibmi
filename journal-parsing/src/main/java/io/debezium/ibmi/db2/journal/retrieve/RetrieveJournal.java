@@ -15,6 +15,7 @@ import java.text.SimpleDateFormat;
 import java.time.Instant;
 import java.util.Arrays;
 import java.util.Date;
+import java.util.List;
 import java.util.Optional;
 
 import org.slf4j.Logger;
@@ -50,6 +51,7 @@ public class RetrieveJournal {
 
     private static final JournalCode[] REQUIRED_JOURNAL_CODES = new JournalCode[]{ JournalCode.D, JournalCode.R,
             JournalCode.C, JournalCode.F };
+    private static final JournalCode[] HISTORY_CONTROL_CODES = new JournalCode[]{ JournalCode.C, JournalCode.J };
     private static final JournalEntryType[] REQURED_ENTRY_TYPES = new JournalEntryType[]{ JournalEntryType.PT,
             JournalEntryType.PX, JournalEntryType.UP, JournalEntryType.UB, JournalEntryType.DL, JournalEntryType.DR,
             JournalEntryType.CT, JournalEntryType.CG, JournalEntryType.CR, JournalEntryType.SC, JournalEntryType.CM };
@@ -183,6 +185,51 @@ public class RetrieveJournal {
      * oversized-entry skipping. The caller supplies and verifies receiver identity.
      */
     public RawJournalPage readRawPage(JournalPosition from, JournalPosition through, int maximumEntries) throws Exception {
+        return readRawPage(from, through, maximumEntries, RawSelection.CDC);
+    }
+
+    /**
+     * Bounded discovery of commitment and journal-maintenance controls only.
+     * This selection cannot establish row/lifecycle completeness or a publication
+     * checkpoint. It has a distinct result type and never advances the legacy
+     * position. All C/J types are returned without file, job or entry-count filters.
+     */
+    public ControlPage readControlHistoryPage(JournalPosition from, JournalPosition through, int maximumEntries) throws Exception {
+        RawJournalPage page = readRawPage(from, through, maximumEntries, RawSelection.CONTROLS);
+        return new ControlPage(page.entries(), page.continuation(), page.bytesReturned());
+    }
+
+    /**
+     * All-code audit for an explicitly bounded native startup interval. Unlike
+     * CDC and control discovery this omits code selection entirely, including
+     * codes not represented by the local enum. It preserves the same owned
+     * response, structured error, pointer, continuation and cancellation checks.
+     * Completion is not an incarnation, schema or transaction-history proof.
+     */
+    public AuditPage readAuditHistoryPage(JournalPosition from, JournalPosition through, int maximumEntries) throws Exception {
+        RawJournalPage page = readRawPage(from, through, maximumEntries, RawSelection.AUDIT);
+        return new AuditPage(page.entries(), page.continuation(), page.bytesReturned());
+    }
+
+    public record AuditPage(List<RawJournalPage.Entry> entries, Optional<JournalPosition> continuation, int bytesReturned) {
+        public AuditPage {
+            entries = List.copyOf(entries);
+        }
+    }
+
+    private enum RawSelection {
+        CDC,
+        CONTROLS,
+        AUDIT
+    }
+
+    public record ControlPage(List<RawJournalPage.Entry> entries, Optional<JournalPosition> continuation, int bytesReturned) {
+        public ControlPage {
+            entries = List.copyOf(entries);
+        }
+    }
+
+    private RawJournalPage readRawPage(JournalPosition from, JournalPosition through, int maximumEntries, RawSelection selection) throws Exception {
         RawJournalPage.validateRange(from, through, maximumEntries);
         if (config.journalBufferSize() < 512 || config.journalBufferSize() > 16 * 1024 * 1024) {
             throw new IllegalArgumentException("Bounded raw response buffer required");
@@ -193,7 +240,7 @@ public class RetrieveJournal {
             AS400 connection = config.as400().connection();
             try {
                 callAdmitted(start, new PositionRange(false, start, through),
-                        new JournalProcessedPosition(through, Instant.EPOCH, true), connection, maximumEntries);
+                        new JournalProcessedPosition(through, Instant.EPOCH, true), connection, maximumEntries, selection);
                 lifecycle.checkOpen();
                 return rawPage;
             }
@@ -246,11 +293,11 @@ public class RetrieveJournal {
     private RetrievalState callAdmitted(JournalProcessedPosition previousPosition, PositionRange range,
                                         JournalProcessedPosition end, AS400 connection)
             throws Exception {
-        return callAdmitted(previousPosition, range, end, connection, 0);
+        return callAdmitted(previousPosition, range, end, connection, 0, RawSelection.CDC);
     }
 
     private RetrievalState callAdmitted(JournalProcessedPosition previousPosition, PositionRange range,
-                                        JournalProcessedPosition end, AS400 connection, int rawEntryLimit)
+                                        JournalProcessedPosition end, AS400 connection, int rawEntryLimit, RawSelection selection)
             throws Exception {
         lifecycle.checkOpen();
         final ServiceProgramCall spc = new ServiceProgramCall(connection);
@@ -273,7 +320,9 @@ public class RetrieveJournal {
             // NBRENT is deliberately omitted: IBM i treats the count limit as a
             // completed selection and may return continuation=0 before the cut ends.
             builder.withVariableNullIndicators();
-            builder.filterJournalCodes(REQUIRED_JOURNAL_CODES);
+            if (selection != RawSelection.AUDIT) {
+                builder.filterJournalCodes(selection == RawSelection.CONTROLS ? HISTORY_CONTROL_CODES : REQUIRED_JOURNAL_CODES);
+            }
         }
         builder.withRange(range);
         final ProgramParameter[] parameters = builder.build();
@@ -311,6 +360,10 @@ public class RetrieveJournal {
                 }
                 rawPage = RawJournalPage.decodeResult(parameters[0].getOutputData(), parameters[5].getOutputData(),
                         range.start().asJournalPosition(), range.end(), rawEntryLimit);
+                if (selection == RawSelection.CONTROLS
+                        && rawPage.entries().stream().anyMatch(e -> e.header().getJournalCode() != 'C' && e.header().getJournalCode() != 'J')) {
+                    throw new RetrieveJournalException("Control-history response contains an unrequested journal code");
+                }
             }
         }
         catch (Exception e) {

@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# Copyright Debezium Authors. Licensed under the Apache License, Version 2.0.
+set -euo pipefail
+probe_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+cd "$probe_root"
+if [[ $# -ne 4 ]]; then
+    echo 'Usage: tools/dcg-planned-start-probe NEW_EVIDENCE_DIRECTORY DCNCdddd ROWS_PER_TABLE MODE (real IBM i fixture writes; local Docker)' >&2
+    exit 2
+fi
+probe_python=${PYTHON:-python3}
+"$probe_python" -c 'import aesql'
+./mvnw -B -ntp test-compile -DskipTests -DskipITs
+./mvnw -B -ntp -pl debezium-connector-ibmi dependency:build-classpath -DincludeScope=test -Dmdep.outputFile=target/connect-probe-classpath.txt
+exec "$probe_python" -B tools/dcg-planned-start-probe.py "$@"

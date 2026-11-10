@@ -4,10 +4,10 @@
 # Licensed under the Apache Software License version 2.0, available at http://www.apache.org/licenses/LICENSE-2.0
 #
 # Cross CI workflow is triggered on a `pull_request` event.
-# It builds the Debezium core before building the Db2 connector basing on either the `master` branch or the `pull_request` branch.
+# It builds the Debezium core before building the IBM i connector basing on either the `main` branch or the `pull_request` branch.
 # If a `pull_request` with same branch name is present in the Debezium's upstream core repository, then the core build of this `pull_request`
 # will be based on `pull_request` branch of user's Debezium core repository.
-# Otherwise the core build of this `pull_request` will be based on the `master` branch of Debezium's upstream core repository.
+# Otherwise the core build of this `pull_request` will be based on the `main` branch of Debezium's upstream core repository.
 
 name: Cross Maven CI
 
@@ -33,6 +33,12 @@ jobs:
   build:
     needs: [ check-signed-commits ]
     runs-on: ubuntu-latest
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        # Oldest admitted minor plus the Debezium 3.8 build/test baseline.
+        kafka: ['4.2.0', '4.3.1']
     steps:
       - name: Checkout ibmi repository
         uses: actions/checkout@v6
@@ -45,7 +51,7 @@ jobs:
         run: |
           next_url="https://api.github.com/repos/debezium/debezium/pulls?per_page=100&sort=updated"
           branch_found=false
-          while [ ! -z $next_url ] && ! $branch_found; do
+          while [[ -n "$next_url" ]] && ! $branch_found; do
             response=$(curl -si -X "GET" --url "$next_url")
             next_url=$(echo "$response" | grep -oP '(?<=<)[^>]*(?=>; rel="next")' || true)
             echo "$response" | sed -n '/\[/,$ p' | jq -r '.[] | {branch: .head.ref}' | jq -r '.branch' > /tmp/pulls_page.txt
@@ -53,7 +59,7 @@ jobs:
             while IFS=" " read -r BRANCH; do
               if [ "$branch_name" = "$BRANCH" ]; then
                 branch_found=true
-                echo "BRANCH_FOUND=true" >> $GITHUB_OUTPUT
+                echo "BRANCH_FOUND=true" >> "$GITHUB_OUTPUT"
               fi
             done < /tmp/pulls_page.txt
           done
@@ -86,3 +92,27 @@ jobs:
         run: ./ibmi/mvnw clean install -f core/pom.xml -pl debezium-bom,debezium-connector-common,debezium-util,debezium-config,debezium-embedded,debezium-storage,debezium-assembly-descriptors -am -DskipTests -DskipITs -Dformat.formatter.goal=validate -Dformat.imports.goal=check -Dhttp.keepAlive=false -Dmaven.wagon.http.pool=false -Dmaven.wagon.httpconnectionManager.ttlSeconds=120
       - name: Maven build ibmi
         run: ./ibmi/mvnw clean install -f ibmi/pom.xml -Passembly -Dformat.formatter.goal=validate -Dformat.imports.goal=check -Dhttp.keepAlive=false -Dmaven.wagon.http.pool=false -Dmaven.wagon.httpconnectionManager.ttlSeconds=120 -DfailFlakyTests=false -DskipITs
+
+      - name: Native runner admission tests (offline)
+        working-directory: ibmi
+        run: python3 -B -m unittest discover -s tools -p 'test_*.py'
+      - name: Local Connect publication and missing-offset contracts
+        working-directory: ibmi
+        env:
+          DCG_KAFKA_VERSION: ${{ matrix.kafka }}
+          DCG_PROBE_BOUNDARY: connector
+        run: |
+          tools/dcg-ownership-probe "$RUNNER_TEMP/dcg-ack" ack
+          tools/dcg-ownership-probe "$RUNNER_TEMP/dcg-offsets" offsets
+      - name: Preserve local Connect evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dcg-connect-${{ matrix.kafka }}
+          path: |
+            ${{ runner.temp }}/dcg-ack/report.json
+            ${{ runner.temp }}/dcg-ack/*.log
+            ${{ runner.temp }}/dcg-ack/control/
+            ${{ runner.temp }}/dcg-offsets/report.json
+            ${{ runner.temp }}/dcg-offsets/*.log
+            ${{ runner.temp }}/dcg-offsets/control/

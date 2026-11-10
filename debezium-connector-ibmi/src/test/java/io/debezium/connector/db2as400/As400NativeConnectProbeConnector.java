@@ -5,10 +5,10 @@
  */
 package io.debezium.connector.db2as400;
 
-import static io.debezium.connector.db2as400.As400BindingHistoryTest.Fixture.POLICY;
 import static io.debezium.connector.db2as400.As400ConnectProbeConnector.CONTROL;
 import static io.debezium.connector.db2as400.As400ConnectProbeConnector.append;
 import static io.debezium.connector.db2as400.As400ConnectProbeConnector.write;
+import static io.debezium.connector.db2as400.As400RecoveryTestSupport.Fixture.POLICY;
 
 import java.lang.reflect.Proxy;
 import java.nio.channels.FileChannel;

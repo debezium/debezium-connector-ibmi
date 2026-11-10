@@ -232,7 +232,13 @@ final class As400JournalLifecycle implements AutoCloseable {
         }
         if (window != null) {
             Step expected = window.expected.get(window.step);
-            require(entry.type().equals(expected.type()), "Incomplete or mismatched lifecycle sequence");
+            // A native clear-only savepoint rollback can restore the member via
+            // F/EJ instead of F/MD. This is only the opening step of an already
+            // matched undo window; the same identities, F/EJ flags and complete
+            // D/EF, D/JF, F/JM, C/SB restoration remain mandatory.
+            boolean savepointJournalRestart = window.subtype == null && window.marker != null
+                    && expected.type().equals("F/MD") && entry.type().equals("F/EJ");
+            require(entry.type().equals(expected.type()) || savepointJournalRestart, "Incomplete or mismatched lifecycle sequence");
             if (h.getJournalCode() != 'C' && !entry.type().equals("D/CG")) {
                 auxiliary(entry, expected.table(), entry.type().equals("F/MD") ? 0 : 0x10);
             }

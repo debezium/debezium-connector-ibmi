@@ -45,6 +45,19 @@ public class As400RpcConnector extends RelationalBaseSourceConnector {
     }
 
     @Override
+    public org.apache.kafka.connect.source.ConnectorTransactionBoundaries canDefineTransactionBoundaries(Map<String, String> props) {
+        return As400DcgConfig.configured(Configuration.from(props))
+                ? org.apache.kafka.connect.source.ConnectorTransactionBoundaries.SUPPORTED
+                : org.apache.kafka.connect.source.ConnectorTransactionBoundaries.UNSUPPORTED;
+    }
+
+    @Override
+    public org.apache.kafka.connect.source.ExactlyOnceSupport exactlyOnceSupport(Map<String, String> props) {
+        // Whole-batch replay may repeat an already committed prefix.
+        return org.apache.kafka.connect.source.ExactlyOnceSupport.UNSUPPORTED;
+    }
+
+    @Override
     public Class<? extends Task> taskClass() {
         return As400ConnectorTask.class;
     }
@@ -67,6 +80,21 @@ public class As400RpcConnector extends RelationalBaseSourceConnector {
 
     @Override
     protected void validateConnection(Map<String, ConfigValue> configValues, Configuration config) {
+        if (As400DcgConfig.configured(config)) {
+            // Use the same bounded, read-only, terminally admitted connection
+            // profile as the configured task, not the legacy JDBC defaults.
+            try (var io = new As400DcgNativeIo(As400DcgConfig.configuredProfile(config)); var connection = io.connection(false)) {
+                connection.setReadOnly(true);
+                if (!connection.isValid(2)) {
+                    throw new SQLException("Native connection is not valid");
+                }
+            }
+            catch (Exception error) {
+                configValues.computeIfAbsent(RelationalDatabaseConnectorConfig.HOSTNAME.name(), ConfigValue::new)
+                        .addErrorMessage("Cannot validate configured D/CG connection: " + error.getMessage());
+            }
+            return;
+        }
         As400ConnectorConfig aconfig = new As400ConnectorConfig(config);
         JdbcConfiguration jdbcConfig = aconfig.getJdbcConfig();
         As400JdbcConnection jdbcConnection = new As400JdbcConnection(jdbcConfig);
@@ -83,7 +111,20 @@ public class As400RpcConnector extends RelationalBaseSourceConnector {
 
     @Override
     protected Map<String, ConfigValue> validateAllFields(Configuration config) {
-        return config.validate(As400ConnectorConfig.ALL_FIELDS);
+        var values = config.validate(As400ConnectorConfig.ALL_FIELDS);
+        try {
+            if (As400DcgConfig.configured(config)) {
+                values.putAll(config.validate(io.debezium.config.Field.setOf(RelationalDatabaseConnectorConfig.HOSTNAME)));
+                As400DcgConfig.configuredProfile(config);
+            }
+        }
+        catch (IllegalArgumentException error) {
+            String field = config.getString("truncate.transactional.enabled", "false").equals("false")
+                    ? As400ConnectorConfig.DCG_MODE.name()
+                    : As400ConnectorConfig.TRANSACTIONAL_TRUNCATE.name();
+            values.get(field).addErrorMessage(error.getMessage());
+        }
+        return values;
     }
 
 }

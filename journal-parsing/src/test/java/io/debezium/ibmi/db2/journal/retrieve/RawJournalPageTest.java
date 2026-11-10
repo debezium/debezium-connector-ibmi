@@ -28,6 +28,7 @@ import java.util.Set;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import com.ibm.as400.access.AS400;
@@ -176,6 +177,97 @@ class RawJournalPageTest {
     }
 
     @ParameterizedTest
+    @CsvSource({ "false,controls", "false,maintenance", "false,empty", "false,unrequested", "false,pointer", "false,api-error",
+            "true,controls", "true,maintenance", "true,empty", "true,unrequested", "true,pointer", "true,api-error", "true,unknown" })
+    void historySelectionsCannotBypassRawFailuresOrTerminalStop(boolean audit, String scenario) throws Exception {
+        AS400 as400 = mock(AS400.class);
+        var lifecycle = new JournalReadLifecycle();
+        var reader = new RetrieveJournal(new RetrieveConfigBuilder().withAs400(() -> as400)
+                .withJournalInfo(new JournalInfo("JRN", "LIB", false)).withServerFiltering(true)
+                .withIncludeFiles(List.of(new FileFilter("LIB", "TEST"))).build(), mock(JournalInfoRetrieval.class), lifecycle);
+        byte[] response = scenario.equals("empty") ? nativeHex("empty-response")
+                : scenario.equals("unrequested") ? page()
+                        : page(RawJournalPage.decode(page(), pos(75), pos(100), 100).entries().stream()
+                                .filter(e -> e.header().getJournalCode() == 'C').map(RawJournalPage.Entry::data).toList());
+        if (scenario.equals("maintenance")) {
+            text(response, 64 + 98, 1, "J"); // Synthetic unexpected-maintenance discovery, never a data row.
+            text(response, 64 + 99, 2, "RR");
+        }
+        if (scenario.equals("unknown")) {
+            text(response, 64 + 98, 1, "Y"); // Code absent from JournalCode enum must remain visible to the audit.
+            text(response, 64 + 99, 2, "ZZ");
+        }
+        if (scenario.equals("pointer")) {
+            ByteBuffer.wrap(response).putInt(64 + 72, 13);
+        }
+        List<ProgramParameter[]> requests = new ArrayList<>();
+        try (var calls = mockConstruction(ServiceProgramCall.class, (call, context) -> {
+            when(call.getServerJob()).thenReturn(mock(Job.class));
+            when(call.run()).thenReturn(true);
+            when(call.getMessageList()).thenReturn(new AS400Message[0]);
+            doAnswer(invocation -> {
+                ProgramParameter[] p = invocation.getArgument(1);
+                p[0] = mock(ProgramParameter.class);
+                when(p[0].getOutputData()).thenReturn(response);
+                p[5] = mock(ProgramParameter.class);
+                byte[] error = scenario.equals("empty") || scenario.equals("api-error") ? nativeHex("empty-error") : noError();
+                when(p[5].getOutputData()).thenReturn(error);
+                requests.add(p);
+                return null;
+            }).when(call).setProgram(anyString(), org.mockito.ArgumentMatchers.any(ProgramParameter[].class));
+        })) {
+            if (Set.of("pointer", "api-error").contains(scenario) || !audit && scenario.equals("unrequested")) {
+                assertThrows(Exception.class, () -> {
+                    if (audit) {
+                        reader.readAuditHistoryPage(pos(75), pos(100), 100);
+                    }
+                    else {
+                        reader.readControlHistoryPage(pos(75), pos(100), 100);
+                    }
+                });
+            }
+            else {
+                var entries = audit ? reader.readAuditHistoryPage(pos(75), pos(100), 100).entries()
+                        : reader.readControlHistoryPage(pos(75), pos(100), 100).entries();
+                assertEquals(scenario.equals("empty"), entries.isEmpty());
+                if (!audit) {
+                    assertTrue(entries.stream().allMatch(e -> Set.of('C', 'J').contains(e.header().getJournalCode())));
+                }
+                if (scenario.equals("unknown")) {
+                    assertEquals('Y', entries.get(0).header().getJournalCode());
+                }
+                if (scenario.equals("maintenance")) {
+                    assertEquals("RR", entries.get(0).header().getEntryType());
+                }
+            }
+            assertNull(reader.getPosition());
+            byte[] criteria = requests.get(0)[4].getInputData();
+            Set<Integer> keys = new java.util.HashSet<>();
+            for (int i = 0, offset = 4; i < ByteBuffer.wrap(criteria).getInt(0); i++) {
+                int key = ByteBuffer.wrap(criteria).getInt(offset + 4);
+                keys.add(key);
+                if (key == 7) {
+                    assertEquals(2, ByteBuffer.wrap(criteria).getInt(offset + 12));
+                    assertEquals("C", ((String) new AS400Text(10).toObject(criteria, offset + 16)).trim());
+                    assertEquals("J", ((String) new AS400Text(10).toObject(criteria, offset + 36)).trim());
+                }
+                offset += ByteBuffer.wrap(criteria).getInt(offset);
+            }
+            assertEquals(audit ? Set.of(1, 2, 4, 15) : Set.of(1, 2, 4, 7, 15), keys); // No entry count/type, file, job, program or user filters.
+            lifecycle.requestStop();
+            assertThrows(Exception.class, () -> {
+                if (audit) {
+                    reader.readAuditHistoryPage(pos(75), pos(100), 100);
+                }
+                else {
+                    reader.readControlHistoryPage(pos(75), pos(100), 100);
+                }
+            });
+            assertEquals(1, calls.constructed().size());
+        }
+    }
+
+    @ParameterizedTest
     @ValueSource(booleans = { false, true })
     void failedOrPointerBackedRawResponseCancelsOnlyItsCapturedJobBeforeUnregistering(boolean pointer) throws Exception {
         AS400 transport = mock(AS400.class);
@@ -278,6 +370,10 @@ class RawJournalPageTest {
             new String(input.readAllBytes(), StandardCharsets.UTF_8).lines().filter(line -> !line.startsWith("#") && !line.isBlank())
                     .forEach(line -> entries.add(HexFormat.of().parseHex(line)));
         }
+        return page(entries);
+    }
+
+    private static byte[] page(List<byte[]> entries) {
         byte[] page = new byte[64 + entries.stream().mapToInt(e -> e.length).sum()];
         ByteBuffer.wrap(page).putInt(0, page.length).putInt(4, 64).putInt(8, entries.size());
         text(page, 12, 1, "0");

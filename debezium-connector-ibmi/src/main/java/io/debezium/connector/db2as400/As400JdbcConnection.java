@@ -88,11 +88,27 @@ public class As400JdbcConnection extends JdbcConnection implements Connect<Conne
             AS400JDBCDriverForcedCcsid.class.getName(), As400JdbcConnection.class.getClassLoader());
 
     public As400JdbcConnection(JdbcConfiguration config) {
-        super(withDefaults(config), FACTORY, "\"", "\"");
+        this(config, FACTORY);
+    }
+
+    /** Internal native-session adapter; the supplied factory owns terminal admission. */
+    As400JdbcConnection(JdbcConfiguration config, ConnectionFactory factory) {
+        super(withDefaults(config), factory, "\"", "\"");
         this.fromCcsid = config.getInteger(As400ConnectorConfig.FROM_CCSID);
         this.toCcsid = config.getInteger(As400ConnectorConfig.TO_CCSID);
         this.config = config;
-        realDatabaseName = retrieveRealDatabaseName();
+        try {
+            realDatabaseName = retrieveRealDatabaseName();
+        }
+        catch (RuntimeException failure) {
+            try {
+                close();
+            }
+            catch (Exception cleanup) {
+                failure.addSuppressed(cleanup);
+            }
+            throw failure;
+        }
         log.debug("connection: {}", connectionString());
     }
 

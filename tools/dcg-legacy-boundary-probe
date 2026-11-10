@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# Copyright Debezium Authors. Licensed under the Apache License, Version 2.0.
+set -euo pipefail
+probe_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+cd "$probe_root"
+if [[ $# != 1 ]]; then
+    echo 'Usage: tools/dcg-legacy-boundary-probe NEW_EVIDENCE_DIRECTORY (local Docker; no IBM i)' >&2
+    exit 2
+fi
+./mvnw -B -ntp test-compile -DskipTests -DskipITs
+./mvnw -B -ntp -pl debezium-connector-ibmi dependency:build-classpath -DincludeScope=test -Dmdep.outputFile=target/connect-probe-classpath.txt
+exec python3 tools/dcg-legacy-boundary-probe.py "$1"

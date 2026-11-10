@@ -26,10 +26,18 @@ final class As400RecoveryAcknowledgements {
     private RuntimeException failure;
 
     static void requireProfile(Map<String, String> properties) {
-        if (!"requested".equals(properties.get("exactly.once.support")) || !"poll".equals(properties.get("transaction.boundary"))
+        requireProfile(properties, "poll");
+    }
+
+    static void requireConnectorProfile(Map<String, String> properties) {
+        requireProfile(properties, "connector");
+    }
+
+    private static void requireProfile(Map<String, String> properties, String boundary) {
+        if (!"requested".equals(properties.get("exactly.once.support")) || !boundary.equals(properties.get("transaction.boundary"))
                 || !"none".equals(properties.get("errors.tolerance")) || !properties.getOrDefault("transforms", "").isEmpty()
                 || !"fail".equals(properties.get("event.converting.failure.handling.mode"))) {
-            throw new IllegalArgumentException("Qualified test EOS/poll profile without filtering or tolerated errors required");
+            throw new IllegalArgumentException("Qualified test EOS transaction profile without filtering or tolerated errors required");
         }
         // Worker EOS enablement/version is independently fixed and recorded by the
         // launcher. These connector settings alone do NOT qualify another runtime.

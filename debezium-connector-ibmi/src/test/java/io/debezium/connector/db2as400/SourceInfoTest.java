@@ -42,37 +42,18 @@ public class SourceInfoTest {
     }
 
     @Test
-    public void versionIsPresent() {
-        assertThat(source.struct().getString(SourceInfo.DEBEZIUM_VERSION_KEY)).isEqualTo(Module.version());
+    public void shouldIncludeConnectorAndJournalCoordinatesWhenBuildingSourceRecord() {
+        var record = source.struct();
+        assertThat(record.getString(SourceInfo.DEBEZIUM_VERSION_KEY)).isEqualTo(Module.version());
+        assertThat(record.getString(SourceInfo.DEBEZIUM_CONNECTOR_KEY)).isEqualTo(Module.name());
+        assertThat(record.getString(RECEIVER_KEY)).isEqualTo("RECV008");
+        assertThat(record.getString(RECEIVER_LIBRARY_KEY)).isEqualTo("RCV_LIB");
+        assertThat(record.getString(SEQUENCE_KEY)).isEqualTo("82");
+        assertThat(record.getInt64("ts_ms")).isEqualTo(123_456L);
     }
 
     @Test
-    public void connectorIsPresent() {
-        assertThat(source.struct().getString(SourceInfo.DEBEZIUM_CONNECTOR_KEY)).isEqualTo(Module.name());
-    }
-
-    @Test
-    public void shouldHaveReceiver() {
-        assertThat(source.struct().getString(RECEIVER_KEY)).isEqualTo("RECV008");
-    }
-
-    @Test
-    public void shouldHaveReceiverLib() {
-        assertThat(source.struct().getString(RECEIVER_LIBRARY_KEY)).isEqualTo("RCV_LIB");
-    }
-
-    @Test
-    public void shouldHaveSequence() {
-        assertThat(source.struct().getString(SEQUENCE_KEY)).isEqualTo("82");
-    }
-
-    @Test
-    public void shouldHaveTimestamp() {
-        assertThat(source.struct().getInt64("ts_ms")).isEqualTo(123_456L);
-    }
-
-    @Test
-    public void schemaIsCorrect() {
+    public void shouldPreserveThePublishedSourceSchema() {
         final Schema schema = SchemaBuilder.struct()
                 .name("io.debezium.connector.db2as400.Source")
                 .version(SchemaFactory.SOURCE_INFO_DEFAULT_SCHEMA_VERSION)

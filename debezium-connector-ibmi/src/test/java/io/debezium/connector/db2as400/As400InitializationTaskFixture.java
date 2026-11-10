@@ -16,7 +16,7 @@ import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
-import io.debezium.connector.db2as400.As400BindingHistoryTest.Fixture;
+import io.debezium.connector.db2as400.As400RecoveryTestSupport.Fixture;
 import io.debezium.ibmi.db2.journal.retrieve.JournalReceiver;
 
 /** Controlled source session only. No native connection, public setting or implicit first-start permission. */

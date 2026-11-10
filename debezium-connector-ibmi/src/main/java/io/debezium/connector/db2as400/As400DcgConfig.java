@@ -47,18 +47,68 @@ final class As400DcgConfig {
         return !"disabled".equals(mode);
     }
 
+    static boolean transactionalTruncateEnabled(Configuration config) {
+        String value = config.getString("truncate.transactional.enabled", "false");
+        if (!Set.of("true", "false").contains(value)) {
+            throw new IllegalArgumentException("truncate.transactional.enabled must be true or false");
+        }
+        return Boolean.parseBoolean(value);
+    }
+
+    static boolean configured(Configuration config) {
+        // Evaluate both fields, including invalid/conflicting admissions.
+        boolean online = transactionalTruncateEnabled(config);
+        boolean operator = enabled(config);
+        if (online && operator) {
+            throw new IllegalArgumentException("Transactional truncate migration cannot select dcg.mode initialization or resume");
+        }
+        return online || operator;
+    }
+
+    static As400DcgConfig configuredProfile(Configuration config) {
+        configured(config);
+        return transactionalTruncateEnabled(config) ? onlineCandidate(config) : new As400DcgConfig(config);
+    }
+
+    String controlTopic() {
+        return "__debezium-truncate." + prefix;
+    }
+
+    As400CaptureFingerprint.Policy onlinePolicy() {
+        var output = new TreeMap<>(policy.output());
+        output.put("control.topic", controlTopic());
+        return new As400CaptureFingerprint.Policy(policy.filters(), policy.skippedOperations(), policy.decoder(), policy.schema(), output,
+                policy.transactionMetadata(), policy.tombstones(), policy.sourcePartition());
+    }
+
     As400DcgConfig(Configuration config) {
+        this(config, false);
+    }
+
+    /** Shared online contract; the normal task additionally requires explicit transactional truncate admission. */
+    static As400DcgConfig onlineCandidate(Configuration config) {
+        return new As400DcgConfig(config, true);
+    }
+
+    private As400DcgConfig(Configuration config, boolean online) {
         raw = config;
-        if (!enabled(config)) {
+        if (!online && (!enabled(config) || transactionalTruncateEnabled(config))) {
             throw new IllegalArgumentException("Explicit D/CG admission required");
         }
-        mode = required(config, MODE);
+        if (online && (enabled(config) || config.getString("dcg.tables") != null || config.getString("dcg.controlled.tables") != null
+                || config.getString("dcg.initialization.window") != null || config.getString("dcg.journaled.libraries") != null)) {
+            throw new IllegalArgumentException("Online candidate must discover its complete native scope and cannot select an operator initialization");
+        }
+        mode = online ? "online-candidate" : required(config, MODE);
         requireSnapshotMode(config);
         String keyMode = config.getString("dcg.key.mode", "primary-key");
         if (!Set.of("primary-key", "rrn").contains(keyMode)) {
             throw new IllegalArgumentException("dcg.key.mode must be primary-key or rrn");
         }
         rrnKeys = keyMode.equals("rrn");
+        if (online && rrnKeys) {
+            throw new IllegalArgumentException("Online key migration requires separate legacy RRN compatibility validation");
+        }
         int transactions = bounded(config, "dcg.buffer.max.transactions", 64, 1, 1024);
         int entries = bounded(config, "dcg.buffer.max.entries", 10000, 1, 100000);
         int savepoints = bounded(config, "dcg.buffer.max.savepoints", 1024, 1, 100000);
@@ -72,8 +122,8 @@ final class As400DcgConfig {
             throw new IllegalArgumentException("dcg.journal must be LIBRARY/JOURNAL");
         }
         journal = new JournalReceiver(name(j[1]), name(j[0]));
-        captured = tables(required(config, "dcg.tables"));
-        controlled = tables(required(config, "dcg.controlled.tables"));
+        captured = online ? List.of() : tables(required(config, "dcg.tables"));
+        controlled = online ? List.of() : tables(required(config, "dcg.controlled.tables"));
         if (!controlled.equals(captured) || controlled.stream().anyMatch(t -> !t.startsWith(library + "."))) {
             throw new IllegalArgumentException("First configured D/CG profile requires one library and capture of every controlled journal file");
         }
@@ -100,7 +150,7 @@ final class As400DcgConfig {
         require(config, "errors.tolerance", "none");
         require(config, "event.converting.failure.handling.mode", "fail");
         require(config, "skipped.operations", "none");
-        require(config, "provide.transaction.metadata", "true");
+        require(config, "provide.transaction.metadata", online ? "false" : "true");
         require(config, "tombstones.on.delete", "true");
         require(config, "topic.naming.strategy", SchemaTopicNamingStrategy.class.getName());
         require(config, "decimal.handling.mode", "precise");
@@ -146,7 +196,10 @@ final class As400DcgConfig {
             throw new IllegalArgumentException("initialize requires an absolute persistent dcg.initialization.window directory");
         }
         Map<String, String> output = new TreeMap<>();
-        output.put("version", "native-configured-v1");
+        output.put("version", online ? "native-online-candidate-v2" : "native-configured-v1");
+        if (online) {
+            output.put("binding.catalog", "verified-native-server");
+        }
         output.put("history.topic", historyTopic);
         if (rrnKeys) {
             output.put("key.mode", "rrn-v1");
@@ -179,16 +232,17 @@ final class As400DcgConfig {
         var connector = new As400ConnectorConfig(config);
         As400BatchDispatcher.requireConfiguration(connector);
         var filter = connector.getTableFilters().dataCollectionFilter();
-        if (captured.stream().noneMatch(t -> filter.isIncluded(new TableId(null, t.split("\\.")[0], t.split("\\.")[1])))) {
+        if (!online && captured.stream().noneMatch(t -> filter.isIncluded(new TableId(null, t.split("\\.")[0], t.split("\\.")[1])))) {
             throw new IllegalArgumentException("Table filters select no file in the controlled journal inventory");
         }
         // Preserve the existing no-filter fingerprint; filtered generations pin
         // their selection and still acquire/replay every controlled binding.
         Map<String, String> decoderPolicy = new TreeMap<>(selection);
         decoderPolicy.put("version", "strict-row-v1");
-        policy = new As400CaptureFingerprint.Policy(Map.of("captured", String.join(",", captured), "controlled", String.join(",", controlled),
+        policy = new As400CaptureFingerprint.Policy(Map.of("captured", online ? "native-discovered" : String.join(",", captured),
+                "controlled", online ? "native-discovered" : String.join(",", controlled),
                 "journal", config.getString("dcg.journal"), "server", server, "journaled.libraries", libraries.isEmpty() ? "none" : libraries),
-                Set.of(), decoderPolicy, Map.of("version", "fixed-v1"), output, true, true, Map.of("server", prefix));
+                Set.of(), decoderPolicy, Map.of("version", "fixed-v1"), output, !online, true, Map.of("server", prefix));
     }
 
     void requireRuntime(SourceTaskContext context) {

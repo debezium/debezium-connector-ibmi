@@ -52,7 +52,7 @@ import io.debezium.storage.kafka.history.KafkaSchemaHistory;
 /** Explicit test entry point. Requires a separately owned, freshly created DCNI fixture. Never a connector mode. */
 public class As400NativeInitializationProbe implements AutoCloseable {
     static final ObjectMapper JSON = new ObjectMapper();
-    static final As400CaptureFingerprint.Policy POLICY = As400BindingHistoryTest.Fixture.POLICY;
+    static final As400CaptureFingerprint.Policy POLICY = As400RecoveryTestSupport.Fixture.POLICY;
     final Properties credentials;
     final String library;
     final String bootstrap;
@@ -321,11 +321,11 @@ public class As400NativeInitializationProbe implements AutoCloseable {
                 }
             }
             replay.verifyOrdinaryCut();
-            assertThat(As400BindingHistoryTest.data(records)).containsExactly("t:B", "c:B:100", "c:A:8", "c:M:2");
+            assertThat(As400RecoveryTestSupport.data(records)).containsExactly("t:B", "c:B:100", "c:A:8", "c:M:2");
             save("recovered-offset.json", replay.checkpoint().toOffset());
         }
         save("raw-replay.json", raw);
-        save("recover-result.json", Map.of("status", "passed", "data", As400BindingHistoryTest.data(records), "current_table_metadata_used", false,
+        save("recover-result.json", Map.of("status", "passed", "data", As400RecoveryTestSupport.data(records), "current_table_metadata_used", false,
                 "output_schema_scope", "test dispatcher ID projection; full M values independently strict-decoded"));
     }
 

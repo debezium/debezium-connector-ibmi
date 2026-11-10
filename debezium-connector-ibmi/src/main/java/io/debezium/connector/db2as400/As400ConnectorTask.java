@@ -90,8 +90,17 @@ public class As400ConnectorTask extends BaseSourceTask<As400Partition, As400Offs
     protected ChangeEventSourceCoordinator<As400Partition, As400OffsetContext> start(Configuration config) {
         LOGGER.info("starting connector task {}", version());
         configuredTransactions = null;
-        if (As400DcgConfig.enabled(config)) {
-            throw new org.apache.kafka.connect.errors.ConnectException("Configured D/CG startup requires the initialization integration");
+        if (As400DcgConfig.configured(config)) {
+            try {
+                var admission = As400DcgConfig.transactionalTruncateEnabled(config)
+                        ? new As400DcgSession.Admission(As400NativeHandoffSession.open(connectorConfig, context, taskContext), null)
+                        : As400DcgSession.open(config, context);
+                configuredTransactions = context.transactionContext();
+                return startRecovery(config, admission.recovery(), admission.initialization());
+            }
+            catch (Exception error) {
+                throw new org.apache.kafka.connect.errors.ConnectException("Cannot admit configured native D/CG task", error);
+            }
         }
         As400TaskInitialization initialization = initializationForTesting(config);
         if (initialization != null) {
@@ -119,7 +128,13 @@ public class As400ConnectorTask extends BaseSourceTask<As400Partition, As400Offs
         this.schema = new As400DatabaseSchema(connectorConfig, jdbcConnection, topicNamingStrategy, schemaNameAdjuster, customConverterRegistry, taskContext);
 
         Offsets<As400Partition, As400OffsetContext> previousOffsetPartition = getPreviousOffsets(
-                new As400Partition.Provider(connectorConfig), new As400OffsetContext.Loader(connectorConfig));
+                new As400Partition.Provider(connectorConfig), saved -> {
+                    if (saved.containsKey(As400LegacyHandoff.VERSION)) {
+                        throw new IllegalArgumentException(
+                                "A durable truncate handoff requires transactional truncate recovery; disabling it cannot resume legacy streaming");
+                    }
+                    return new As400OffsetContext.Loader(connectorConfig).load(saved);
+                });
         As400OffsetContext previousOffset = previousOffsetPartition.getTheOnlyOffset();
 
         // Manual Bean Registration
@@ -212,6 +227,10 @@ public class As400ConnectorTask extends BaseSourceTask<As400Partition, As400Offs
                                                                                            As400TaskInitialization initialization) {
         recoverySource = null;
         try {
+            if (configuredTransactions == null && input.allowLegacyHandoffRecovery() && "connector".equals(raw.getString("transaction.boundary"))) {
+                As400RecoveryAcknowledgements.requireConnectorProfile(raw.asMap());
+                configuredTransactions = java.util.Objects.requireNonNull(context.transactionContext(), "Connect transaction context required");
+            }
             As400DcgConfig.requireSnapshotMode(raw);
             As400BatchDispatcher.requireConfiguration(connectorConfig);
             if (configuredTransactions == null) {
@@ -221,15 +240,25 @@ public class As400ConnectorTask extends BaseSourceTask<As400Partition, As400Offs
             if (!connectorConfig.getSignalingDataCollectionIds().isEmpty() || !raw.getString("signal.enabled.channels", "").isEmpty()) {
                 throw new IllegalArgumentException("Recovery-only admission does not permit snapshot signals");
             }
+            var legacyStart = new java.util.concurrent.atomic.AtomicReference<Map<String, ?>>();
             Offsets<As400Partition, As400OffsetContext> offsets = getPreviousOffsets(() -> Set.of(input.partition()),
                     saved -> {
                         if (initialization != null) {
                             throw new IllegalArgumentException("Explicit first start requires absent offsets; pending initialization cannot resume");
                         }
+                        if (input instanceof As400TaskHandoff && input.allowLegacyHandoffRecovery() && !saved.containsKey(As400Checkpoint.VERSION)) {
+                            if (configuredTransactions == null) {
+                                throw new IllegalArgumentException("Legacy handoff requires actual connector-managed transactions");
+                            }
+                            As400LegacyHandoff.position(As400LegacyHandoff.strings(saved));
+                            legacyStart.set(Map.copyOf(saved));
+                            return new As400OffsetContext.Loader(connectorConfig).load(saved);
+                        }
                         return new As400RecoveryOffsetContext(connectorConfig, saved, input.journalIdentity(), input.fingerprint());
                     });
-            As400RecoveryOffsetContext recovered = (As400RecoveryOffsetContext) offsets.getTheOnlyOffset();
-            if (recovered == null && initialization == null) {
+            As400OffsetContext previous = offsets.getTheOnlyOffset();
+            As400RecoveryOffsetContext recovered = previous instanceof As400RecoveryOffsetContext saved ? saved : null;
+            if (previous == null && initialization == null) {
                 throw new IllegalArgumentException("Missing durable F/W: explicit initialization is required");
             }
             registerServiceProviders(connectorConfig.getServiceRegistry());
@@ -253,7 +282,7 @@ public class As400ConnectorTask extends BaseSourceTask<As400Partition, As400Offs
             TopicNamingStrategy<TableId> topics = connectorConfig.getTopicNamingStrategy(As400ConnectorConfig.TOPIC_NAMING_STRATEGY, true);
             var headers = connectorConfig.getServiceRegistry().tryGetService(DebeziumHeaderProducer.class);
             var source = new As400RecoverySource(input, initialization, connectorConfig, recovered, queue, errorHandler, topics, headers,
-                    () -> context.offsetStorageReader().offset(input.partition().getSourcePartition()));
+                    () -> context.offsetStorageReader().offset(input.partition().getSourcePartition()), recovered == null ? previous : null, legacyStart.get());
             recoverySource = source;
             connectorConfig.getBeanRegistry().add(StandardBeanNames.DATABASE_SCHEMA, source);
             var metadata = new As400EventMetadataProvider();
@@ -360,7 +389,7 @@ public class As400ConnectorTask extends BaseSourceTask<As400Partition, As400Offs
         final List<SourceRecord> sourceRecords = records.stream().map(DataChangeEvent::getRecord)
                 .collect(Collectors.toList());
 
-        if (configuredTransactions != null && !sourceRecords.isEmpty()) {
+        if (configuredTransactions != null && !sourceRecords.isEmpty() && (recovery == null || recovery.shouldCommitPoll(sourceRecords))) {
             // Public Connect transaction request: commit this poll's records and
             // their conservative offsets together. This is not source exactly once.
             configuredTransactions.commitTransaction();

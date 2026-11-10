@@ -15,3 +15,7 @@ journal-parsing/logs/
 
 .idea/
 *.iml
+
+# Local Python test and probe caches.
+__pycache__/
+*.py[cod]

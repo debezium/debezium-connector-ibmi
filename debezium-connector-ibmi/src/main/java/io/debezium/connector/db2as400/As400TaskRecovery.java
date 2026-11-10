@@ -21,6 +21,11 @@ interface As400TaskRecovery extends As400ContinuousRuntime.Intervals, AutoClosea
         return As400ContinuousRuntime.Limits.experimental();
     }
 
+    /** Public native admission remains disabled until online handoff qualification is complete. */
+    default boolean allowLegacyHandoffRecovery() {
+        return false;
+    }
+
     As400Partition partition();
 
     String journalIdentity();
