@@ -10,10 +10,6 @@
     <name>Debezium Connector for iSeries Db2</name>
     <packaging>jar</packaging>
 
-    <properties>
-        <dcg.test.classes.directory>${project.build.directory}/test-classes</dcg.test.classes.directory>
-    </properties>
-
     <dependencyManagement>
         <dependencies>
             <dependency>
@@ -124,7 +120,6 @@
         </dependency>
     </dependencies>
     <build>
-        <testOutputDirectory>${dcg.test.classes.directory}</testOutputDirectory>
         <plugins>
         </plugins>
         <resources>
@@ -153,64 +148,6 @@
     Define several useful profiles
     -->
     <profiles>
-        <!-- Historical protected-startup/receipt experiments are not part of the supported runtime. -->
-        <profile>
-            <id>dcg-prototype-tests</id>
-            <properties>
-                <dcg.test.classes.directory>${project.build.directory}/prototype-test-classes</dcg.test.classes.directory>
-            </properties>
-            <build>
-                <plugins>
-                    <plugin>
-                        <groupId>org.apache.maven.plugins</groupId>
-                        <artifactId>maven-surefire-plugin</artifactId>
-                        <configuration>
-                            <reportsDirectory>${project.build.directory}/prototype-surefire-reports</reportsDirectory>
-                        </configuration>
-                    </plugin>
-                    <plugin>
-                        <groupId>org.codehaus.mojo</groupId>
-                        <artifactId>build-helper-maven-plugin</artifactId>
-                        <executions>
-                            <execution>
-                                <id>dcg-prototype-test-sources</id>
-                                <phase>generate-test-sources</phase>
-                                <goals>
-                                    <goal>add-test-source</goal>
-                                </goals>
-                                <configuration>
-                                    <sources>
-                                        <source>src/prototype-test/java</source>
-                                    </sources>
-                                </configuration>
-                            </execution>
-                        </executions>
-                    </plugin>
-                    <plugin>
-                        <groupId>net.revelc.code.formatter</groupId>
-                        <artifactId>formatter-maven-plugin</artifactId>
-                        <configuration>
-                            <directories>
-                                <directory>${project.build.sourceDirectory}</directory>
-                                <directory>${project.build.testSourceDirectory}</directory>
-                                <directory>${project.basedir}/src/prototype-test/java</directory>
-                            </directories>
-                        </configuration>
-                    </plugin>
-                    <plugin>
-                        <groupId>net.revelc.code</groupId>
-                        <artifactId>impsort-maven-plugin</artifactId>
-                        <configuration>
-                            <directories>
-                                <directory>${project.build.sourceDirectory}</directory>
-                                <directory>${project.build.testSourceDirectory}</directory>
-                                <directory>${project.basedir}/src/prototype-test/java</directory>
-                            </directories>
-                        </configuration>
-                    </plugin>
-                </plugins>
-            </build>
-        </profile>
         <profile>
             <id>assembly</id>
             <activation>

@@ -33,4 +33,4 @@ Original captured-byte SHA-256 values (before trimming/sanitization):
 - ID 3: `81bf8b4687f0ef55abdd0afb380bd974f622752a52decc3a7ac982c542f52887`
 
 The native capture and local validation are documented in
-[the decoder validation note](../../../../../docs/dcg-null-indicator-validation.md).
+[the decoder validation note](https://github.com/gardnmi/debezium-connector-ibmi/blob/fc4ffaa2aa7bf8acc5d9630d493450391814f8c0/docs/dcg-null-indicator-validation.md).

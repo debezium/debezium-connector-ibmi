@@ -17,11 +17,9 @@ exercises selected snapshot/CDC output and normal Converter serialization.
 `As400BatchDispatcherTest` includes keyless truncate and tombstone conversion.
 Avro tests use an in-memory schema registry; no external registry is contacted.
 
-The active review series omits the historical owner/receipt and protected-startup
-Java prototypes. To run them, apply the separate `optional-prototypes.patch` to a
-disposable checkout of the series, then use `-Pdcg-prototype-tests`. The profile
-alone does not supply the omitted sources. They do not enter the distribution JAR
-and do not establish source exactly-once guarantees for the supported runtime.
+Historical custom-owner/receipt and protected-startup prototypes are not part of
+this checkout, build or distribution. Their archived experiments are separate
+from the supported runtime and do not establish source exactly-once guarantees.
 
 ## Local Kafka
 
@@ -37,8 +35,7 @@ Directories must not already exist. Versions select digest-pinned images in
 cases on both versions with `DCG_PROBE_BOUNDARY=connector`, exercising the actual
 task's commit request and production runtime-version/capability admission. The
 source is synthetic in these local cases; they do not establish native startup
-proof. The active experiment also runs with historical prototype Java sources
-absent. The default `poll` keeps the original experiment
+proof. The default `poll` keeps the original experiment
 and failure reproduction unchanged. Additional `interrupted`, `mixed` and `fencing` cases
 exercise whole-batch replay, metadata, tombstones and legitimate reassignment.
 Every runner retains independent broker output/offset evidence and verifies its
@@ -46,8 +43,7 @@ own container/network cleanup. Failures also collect broker evidence.
 
 The original `partition` reproduction intentionally preserves the problematic
 timeout profile. It is not a passing CI smoke test. The corrected-profile matrix
-uses `dcg-timeout-profile-probe.py`; see the timeout validation report for exact
-timings. Do not weaken assertions or replace that original reproduction.
+uses `dcg-timeout-profile-probe.py`; see the [archived timeout validation report](https://github.com/gardnmi/debezium-connector-ibmi/blob/fc4ffaa2aa7bf8acc5d9630d493450391814f8c0/docs/dcg-timeout-profile-validation.md) for exact timings. Do not weaken assertions or replace that original reproduction.
 
 ## Optional native tests
 
@@ -92,4 +88,4 @@ neither an AWS session nor a private credential package is required by the runne
 configuration and cleanup contract. It adds DATE, TIME and TIMESTAMP(0/3/6/9),
 nulls, pre-epoch values, end-of-day TIME, temporal clear/reload commit and rollback,
 and replacement while that clear is open. It preserves the packaged smoke
-assertions. See [temporal evidence and limits](dcg-temporal-validation.md).
+assertions. See [temporal evidence and limits](https://github.com/gardnmi/debezium-connector-ibmi/blob/fc4ffaa2aa7bf8acc5d9630d493450391814f8c0/docs/dcg-temporal-validation.md).

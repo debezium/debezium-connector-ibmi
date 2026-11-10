@@ -55,7 +55,7 @@ import io.debezium.pipeline.source.spi.ChangeEventSource.ChangeEventSourceContex
  * exercise the real decoder, lifecycle validator, buffer, checkpoint and dispatcher.
  * The fixture supplies a known closed history anchor, stable historical bindings,
  * complete read coverage and exclusive legacy ownership. An ordinary legacy offset
- * supplies NONE of those facts; see docs/dcg-legacy-handoff-proof.md.
+ * supplies NONE of those facts; see docs/dcg-architecture.md (online handoff).
  */
 class As400LegacyHandoffTest {
     private static final Map<String, String> BOTH = Map.of("table.include.list", "DCOC1107\\.(A|B)");

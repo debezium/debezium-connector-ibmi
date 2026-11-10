@@ -135,7 +135,7 @@ in a connector. `prospective-native.json` is the DCNC0961 prospective-schema
 fixture: native origin 59, actual completed row cut 66, then clear/reload with an
 unrelated row before commit. It includes older C/J history and observed journal,
 receiver, file/member and schema evidence. Both remain `startup_proof=false`.
-See [the validation report](../../../../../docs/dcg-short-boundary-validation.md#continued-work-late-membership-and-prospective-schema-history)
+See [the validation report](https://github.com/gardnmi/debezium-connector-ibmi/blob/fc4ffaa2aa7bf8acc5d9630d493450391814f8c0/docs/dcg-short-boundary-validation.md#continued-work-late-membership-and-prospective-schema-history)
 for capture, cleanup, failed attempts and qualification limits.
 
 `equal-width-alter.json` preserves native DCNC0965 INTEGER -> REAL -> INTEGER
@@ -149,7 +149,7 @@ contains the actual requested scope and SQL program, drained holder evidence,
 before/after metadata, full raw A/N/Z audit, older controls and prospective rows.
 Rows occurred both before and after N while the metadata collector ran. It remains
 `startup_proof=false`; original fixtures are not overwritten or promoted. See
-[the joined-boundary report](../../../../../docs/dcg-short-boundary-validation.md#joined-boundary-evidence-active-writers-and-schema-replacement)
+[the joined-boundary report](https://github.com/gardnmi/debezium-connector-ibmi/blob/fc4ffaa2aa7bf8acc5d9630d493450391814f8c0/docs/dcg-short-boundary-validation.md#joined-boundary-evidence-active-writers-and-schema-replacement)
 for limits, rejected attempts and native/local testing distinctions.
 
 `pending-receiver-boundary.json` preserves the actual pending-receiver samples,
