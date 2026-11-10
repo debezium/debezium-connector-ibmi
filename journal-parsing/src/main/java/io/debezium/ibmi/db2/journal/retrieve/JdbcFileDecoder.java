@@ -66,6 +66,7 @@ public class JdbcFileDecoder extends JournalFileEntryDecoder {
     private final SchemaCacheIF schemaCache;
     private final CcsidCache ccsidCache;
     private final BytesPerChar octetLengthCache;
+    private final int toCcsid;
 
     public JdbcFileDecoder(Connect<Connection, SQLException> con, String database, SchemaCacheIF schemaCache,
                            int fromCcsid, int toCcsid) {
@@ -73,6 +74,7 @@ public class JdbcFileDecoder extends JournalFileEntryDecoder {
         this.jdbcConnect = con;
         this.schemaCache = schemaCache;
         this.databaseName = database;
+        this.toCcsid = toCcsid;
         ccsidCache = new CcsidCache(con, fromCcsid, toCcsid);
         octetLengthCache = new BytesPerChar(con);
     }
@@ -287,6 +289,17 @@ public class JdbcFileDecoder extends JournalFileEntryDecoder {
         return new AS400VarChar(length, bytesPerChar);
     }
 
+    private Optional<Integer> overriddenCcsid(String schema, String table, String column) {
+        if (toCcsid == -1) {
+            return Optional.empty();
+        }
+        final Integer ccsid = ccsidCache.getCcsid(schema, table, column);
+        if (ccsid != null && ccsid == toCcsid) {
+            return Optional.of(ccsid);
+        }
+        return Optional.empty();
+    }
+
     public AS400DataType toDataType(String schema, String table, String columnName, String type, int length,
                                     Integer precision) {
         switch (type) {
@@ -294,10 +307,14 @@ public class JdbcFileDecoder extends JournalFileEntryDecoder {
                 return as400Boolean;
             case "DECIMAL":
                 return new AS400PackedDecimal(length, precision);
-            case "CHAR () FOR BIT DATA": // password fields - treat as binary
-                return new AS400ByteArray(length);
-            case "VARCHAR () FOR BIT DATA": // password fields - treat as binary
-                return new AS400VarBin(length);
+            case "CHAR () FOR BIT DATA":
+                return overriddenCcsid(schema, table, columnName)
+                        .<AS400DataType> map(c -> getText(length, c))
+                        .orElseGet(() -> new AS400ByteArray(length));
+            case "VARCHAR () FOR BIT DATA":
+                return overriddenCcsid(schema, table, columnName)
+                        .<AS400DataType> map(c -> getVarText(length, octetLengthCache.getBytesPerChar(schema, table, columnName), c))
+                        .orElseGet(() -> new AS400VarBin(length));
             case "CHAR":
                 return getText(length, ccsidCache.getCcsid(schema, table, columnName));
             case "NCHAR":
@@ -341,11 +358,17 @@ public class JdbcFileDecoder extends JournalFileEntryDecoder {
             default:
                 final Optional<Integer> varLength = bitDataLengthFromRegex(type, length, VAR_BIT_DATA);
                 if (varLength.isPresent()) {
-                    return new AS400VarBin(varLength.get());
+                    final int vLen = varLength.get();
+                    return overriddenCcsid(schema, table, columnName)
+                            .<AS400DataType> map(c -> getVarText(vLen, octetLengthCache.getBytesPerChar(schema, table, columnName), c))
+                            .orElseGet(() -> new AS400VarBin(vLen));
                 }
                 final Optional<Integer> fixedLenght = bitDataLengthFromRegex(type, length, BIT_DATA);
                 if (fixedLenght.isPresent()) {
-                    return new AS400ByteArray(fixedLenght.get());
+                    final int fLen = fixedLenght.get();
+                    return overriddenCcsid(schema, table, columnName)
+                            .<AS400DataType> map(c -> getText(fLen, c))
+                            .orElseGet(() -> new AS400ByteArray(fLen));
                 }
         }
         throw new IllegalArgumentException(String.format("Unsupported type %s for column %s", type, columnName));
