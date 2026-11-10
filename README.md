@@ -48,6 +48,133 @@ REPLICATION_FACTOR=3
 * No support for remote journals and fail over
 * No support for clobs/xml and similar large text/blobs
 
+## Table clears and truncate events
+
+The connector can emit a standard Debezium truncate event (`op=t`, null key,
+null `before` and `after`) for an `F/CR` journal entry, such as a physical-file
+member cleared by `CLRPFM`.
+
+SQL `TRUNCATE TABLE ... IMMEDIATE` can also produce `F/CR`; capture applies only
+when that journal representation is used. `D/CG` entries retain the existing
+schema-refresh behavior. Capturing `D/CG` SQL truncates and optimized bulk deletes
+is outside this implementation's scope.
+
+Truncate capture is **opt-in**. The inherited `skipped.operations` default is `t`.
+Set `skipped.operations=none`, or a list that does not contain `t`, to enable it.
+
+This initial implementation supports clears **outside commitment control on
+single-member files**. It queries `QSYS2.SYSPARTITIONSTAT` before emitting a clear
+and requires one matching member. The connector does not currently buffer
+transactions, so an enabled clear with a nonzero commit-cycle identifier stops
+the connector through its error handler. It also stops for ambiguous member
+scope, a missing member on an included table, unavailable table schema, or failed
+truncate dispatch, rather than silently acknowledging the clear. Clears with a
+missing file or library name are logged and skipped because the connector cannot
+determine whether they belong to an included table. Transactional truncates,
+including rolled-back truncates, require transaction buffering and restart-safe
+replay before they can be supported.
+Auto-commit alone does not guarantee a zero commit-cycle identifier; verify the
+source journal. Do not assume that adding `IMMEDIATE` alone bypasses this guard.
+
+Use one Kafka partition per table topic when consuming truncates: a keyless clear
+has no ordering guarantee relative to keyed row events in other partitions.
+Transforms and sinks must preserve and handle `op=t`; enabling this source feature
+does not enable sink truncate handling. In particular, check any unwrap transform
+and sink configuration before enabling capture. A truncate event is not a series
+of per-key deletes and does not remove earlier keys from Kafka's compacted history.
+Existing stale destination rows still need reconciliation if no subsequent clear
+is applied.
+
+### Testing truncate capture
+
+Run the unit tests and build the plugin with JDK 21:
+
+```sh
+./mvnw clean install -Passembly -DskipITs \
+  -Dformat.formatter.goal=validate -Dformat.imports.goal=check
+```
+
+The main branch uses Debezium snapshot dependencies; build the matching core
+modules as described in `.github/workflows/cross-maven.yml` first if those
+artifacts are unavailable. `-DskipITs` keeps this build independent of a live IBM i.
+
+The live `As400ConnectorIT` class uses a disposable IBM i library named `DTEST`
+by default and table `TESTT`. Set `-Dtest.database.schema=YOURTEST` to use a separate
+library for concurrent testing; replace every `DTEST` reference in the fixture
+setup and cleanup below with that name. The name must contain only uppercase
+letters, digits, and underscores, begin with a letter, and be at most ten characters.
+The test deletes rows during setup and clears and reloads the table.
+Use a dedicated test environment and an account allowed to create this fixture,
+read its journal, and execute `CLRPFM`. Do not point it at an application library.
+
+Using an IBM i SQL client with commitment control disabled (`*NONE`), execute
+`CREATE SCHEMA DTEST` first. **Stop if it fails or DTEST already exists**; do not
+reuse or drop someone else's library. After successful creation, create the table:
+
+```sql
+CREATE SCHEMA DTEST;
+CREATE TABLE DTEST.TESTT (
+    ID INTEGER NOT NULL PRIMARY KEY,
+    NAME VARCHAR(40) CCSID 37 NOT NULL
+);
+```
+
+SQL schema creation supplies the fixture's `QSQJRN` journal and receiver. Verify
+that `DTEST.TESTT` is journaled to `DTEST.QSQJRN` and has one member named `TESTT`.
+Keep the fixture on a disposable system where creating and clearing it is safe.
+
+Create a private Java properties file outside the checkout with the connection
+settings below; restrict access to that file and do not commit it:
+
+```properties
+database.hostname=<test-host>
+database.user=<test-user>
+database.password=<test-password>
+```
+
+After the build above, run only this integration-test class from the repository root:
+
+```sh
+./mvnw -pl debezium-connector-ibmi \
+  -Dit.test=As400ConnectorIT \
+  -Dfailsafe.systemPropertiesFile=/absolute/path/to/private-test.properties \
+  -DenablePropertiesElement=false \
+  failsafe:integration-test failsafe:verify
+```
+
+The properties flag prevents the test report from listing JVM system properties;
+review logs before sharing them because connection information can still appear.
+The tests run the connector in a local embedded Debezium engine and consume records
+in memory. They cover snapshot/insert streaming and clear/reload using both
+`CLRPFM` and SQL `TRUNCATE TABLE ... IMMEDIATE`, with commitment control disabled,
+under `initial` and `no_data` snapshot modes. Both modes load table schemas;
+`no_data` skips snapshot rows so the clear is the first captured data event. Use a separate
+`-Ddbz.test.data.dir=/absolute/path/to/test-offsets` for concurrent runs.
+Each clear case asserts a keyless truncate followed by an insert. The SQL case
+requires a system where the operation produces `F/CR`; it does not establish
+support for `D/CG`. Inspect the fixture journal to record the entry type observed.
+These tests do not exercise Kafka, transforms, or a downstream sink.
+
+After the connector has stopped, remove only the fixture created for this run.
+Verify the library still contains only its test table and generated catalog,
+journal, and receiver objects, and that its journal has no other users. With
+commitment control disabled, drop `DTEST.TESTT RESTRICT`, then `DTEST RESTRICT`:
+
+```sql
+DROP TABLE DTEST.TESTT RESTRICT;
+DROP SCHEMA DTEST RESTRICT;
+```
+
+If the server asks whether to delete the fixture's unsaved journal receiver
+(`CPA7025`), confirm only the receiver belonging to this disposable fixture.
+The SQL client can appear to hang while this inquiry is pending. Verify that both
+the SQL schema and the IBM i library are gone, and remove the private credentials
+file. Do not use `CASCADE` to bypass unexpected dependencies.
+
+Before release, validate member-scope and commitment-control rejection on a live
+system, restart/replay behavior, and the complete source/transform/sink path.
+Transactional truncates and general optimized-DELETE support remain out of scope.
+
 # Problems
 
 ## running with a self signed certificate

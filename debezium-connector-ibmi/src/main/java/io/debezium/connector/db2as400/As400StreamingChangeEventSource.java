@@ -26,6 +26,7 @@ import io.debezium.data.Envelope.Operation;
 import io.debezium.ibmi.db2.journal.retrieve.JournalEntryType;
 import io.debezium.ibmi.db2.journal.retrieve.exception.FatalException;
 import io.debezium.ibmi.db2.journal.retrieve.exception.InvalidPositionException;
+import io.debezium.ibmi.db2.journal.retrieve.rjne0200.EntryHeader;
 import io.debezium.pipeline.ErrorHandler;
 import io.debezium.pipeline.EventDispatcher;
 import io.debezium.pipeline.monitor.OffsetActivityMonitor;
@@ -68,6 +69,7 @@ public class As400StreamingChangeEventSource implements StreamingChangeEventSour
     private final As400DatabaseSchema schema;
     private final Duration pollInterval;
     private final As400ConnectorConfig connectorConfig;
+    private final boolean captureTruncates;
     private final Map<String, TransactionContext> txMap = new HashMap<>();
     private final String database;
     private As400OffsetContext offsetContext;
@@ -78,6 +80,7 @@ public class As400StreamingChangeEventSource implements StreamingChangeEventSour
                                            As400JdbcConnection jdbcConnection, EventDispatcher<As400Partition, TableId> dispatcher,
                                            ErrorHandler errorHandler, Clock clock, As400DatabaseSchema schema) {
         this.connectorConfig = connectorConfig;
+        this.captureTruncates = !connectorConfig.getSkippedOperations().contains(Operation.TRUNCATE);
         this.dataConnection = dataConnection;
         this.jdbcConnection = jdbcConnection;
         this.dispatcher = dispatcher;
@@ -152,6 +155,10 @@ public class As400StreamingChangeEventSource implements StreamingChangeEventSour
                     catch (final FatalException e) {
                         throw new DebeziumException("Unable to process offset " + offsetContext.getPosition(), e);
                     }
+                    catch (final TruncateException e) {
+                        // Never acknowledge a clear that could not be represented safely.
+                        throw e;
+                    }
                     catch (final InterruptedException e) {
                         if (context.isRunning()) {
                             log.error("Interrupted processing offset {} retry {}", offsetContext.getPosition(), retries);
@@ -216,7 +223,7 @@ public class As400StreamingChangeEventSource implements StreamingChangeEventSour
     }
 
     // TODO tidy up exception handling
-    private BlockingReceiverConsumer processJournalEntries(As400Partition partition, As400OffsetContext offsetContext)
+    BlockingReceiverConsumer processJournalEntries(As400Partition partition, As400OffsetContext offsetContext)
             throws IOException, SQLNonTransientConnectionException {
         return (nextOffset, r, eheader) -> {
             try {
@@ -227,14 +234,24 @@ public class As400StreamingChangeEventSource implements StreamingChangeEventSour
                     return;
                 }
 
-                String longName = eheader.getFile();
+                if (journalEntryType == JournalEntryType.MEMBER_CLEARED && !captureTruncates) {
+                    return;
+                }
+                final String file = eheader.getFile();
+                final String library = eheader.getLibrary();
+                if (journalEntryType == JournalEntryType.MEMBER_CLEARED && (file.isEmpty() || library.isEmpty())) {
+                    // Without a table identity we cannot determine whether this clear is in scope.
+                    log.warn("Skipping clear with missing file or library at journal entry {}", eheader.getSequenceNumber());
+                    return;
+                }
+                String longName = file;
                 try {
-                    longName = jdbcConnection.getLongName(eheader.getLibrary(), eheader.getFile());
+                    longName = jdbcConnection.getLongName(library, file);
                 }
                 catch (final IllegalStateException e) {
                     log.error("failed to look up long name", e);
                 }
-                final TableId tableId = new TableId(database, eheader.getLibrary(), longName);
+                final TableId tableId = new TableId(database, library, longName);
 
                 final boolean includeTable = connectorConfig.getTableFilters().dataCollectionFilter()
                         .isIncluded(tableId);
@@ -278,6 +295,13 @@ public class As400StreamingChangeEventSource implements StreamingChangeEventSour
                         // table has changed - reload schema
                         schema.clearCache(tableId.table(), tableId.schema());
                         schema.getRecordFormat(tableId.table(), tableId.schema());
+                    }
+                        break;
+                    case MEMBER_CLEARED: {
+                        if (eheader.getMember().isEmpty()) {
+                            throw new TruncateException("Missing member in F/CR journal entry " + eheader.getSequenceNumber());
+                        }
+                        dispatchTruncate(partition, offsetContext, tableId, eheader, file, library, eheader.getMember());
                     }
                         break;
                     case BEFORE_IMAGE: {
@@ -347,13 +371,70 @@ public class As400StreamingChangeEventSource implements StreamingChangeEventSour
                         break;
                 }
             }
-            catch (IOException | SQLNonTransientConnectionException e) {
+            catch (TruncateException | InterruptedException | IOException | SQLNonTransientConnectionException e) {
                 throw e;
             }
             catch (final Exception e) {
                 log.error("Failed to process record", e);
             }
         };
+    }
+
+    private void dispatchTruncate(As400Partition partition, As400OffsetContext offsetContext, TableId tableId,
+                                  EntryHeader entry, String file, String library, String member)
+            throws InterruptedException {
+        // The connector does not buffer transactions. A truncate cannot be undone by
+        // replaying row-level rollback images, so do not emit an uncommitted clear.
+        if (entry.getCommitCycle().signum() != 0) {
+            throw new TruncateException("Cannot capture a clear under commitment control for " + tableId
+                    + "; transactional truncate capture requires transaction buffering");
+        }
+        try {
+            if (!jdbcConnection.isOnlyMember(library, file, member)) {
+                throw new TruncateException("Cannot represent a clear as a table truncate for " + tableId
+                        + ": expected one matching file member");
+            }
+            // Clears have no row image to decode, so ensure the table schema is registered explicitly.
+            if (schema.getRecordFormat(file, library).isEmpty()) {
+                throw new TruncateException("Missing table schema for " + tableId + " at journal entry " + entry.getSequenceNumber());
+            }
+            beforeMap.remove(String.format("%s-%s", tableId.schema(), tableId.table()));
+            offsetContext.updateSourceInfo(entry);
+            offsetContext.setTransaction(null);
+            As400ChangeRecordEmitter emitter = new As400ChangeRecordEmitter(partition,
+                    offsetContext, Operation.TRUNCATE, null, null, clock, connectorConfig);
+            boolean dispatched;
+            try {
+                dispatched = dispatcher.dispatchDataChangeEvent(partition, tableId, emitter);
+            }
+            finally {
+                // Recover the original interruption even when core logged it and returned false.
+                emitter.rethrowTruncateInterruption();
+            }
+            if (!dispatched) {
+                throw new TruncateException("Failed to dispatch clear for " + tableId + " at journal entry " + entry.getSequenceNumber());
+            }
+        }
+        catch (TruncateException | InterruptedException e) {
+            throw e;
+        }
+        catch (Exception e) {
+            // EventDispatcher can wrap an interrupted queue write in ConnectException.
+            if (e.getCause() instanceof InterruptedException interrupted) {
+                throw interrupted;
+            }
+            throw new TruncateException("Failed to capture clear for " + tableId + " at journal entry " + entry.getSequenceNumber(), e);
+        }
+    }
+
+    static class TruncateException extends DebeziumException {
+        TruncateException(String message) {
+            super(message);
+        }
+
+        TruncateException(String message, Throwable cause) {
+            super(message, cause);
+        }
     }
 
     private boolean ignore(JournalEntryType journalCode) {

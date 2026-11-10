@@ -5,10 +5,13 @@
  */
 package io.debezium.connector.db2as400;
 
+import org.apache.kafka.connect.data.Struct;
+
 import io.debezium.data.Envelope.Operation;
 import io.debezium.pipeline.spi.OffsetContext;
 import io.debezium.relational.RelationalChangeRecordEmitter;
 import io.debezium.relational.RelationalDatabaseConnectorConfig;
+import io.debezium.relational.TableSchema;
 import io.debezium.util.Clock;
 
 public class As400ChangeRecordEmitter extends RelationalChangeRecordEmitter<As400Partition> {
@@ -16,6 +19,7 @@ public class As400ChangeRecordEmitter extends RelationalChangeRecordEmitter<As40
     private final Operation operation;
     private final Object[] data;
     private final Object[] dataNext;
+    private InterruptedException truncateInterruption;
 
     public As400ChangeRecordEmitter(As400Partition partition, OffsetContext offset, Operation operation, Object[] data, Object[] dataNext, Clock clock,
                                     RelationalDatabaseConnectorConfig connectorConfig) {
@@ -39,6 +43,25 @@ public class As400ChangeRecordEmitter extends RelationalChangeRecordEmitter<As40
     @Override
     protected Object[] getNewColumnValues() {
         return dataNext;
+    }
+
+    @Override
+    protected void emitTruncateRecord(Receiver<As400Partition> receiver, TableSchema tableSchema) throws InterruptedException {
+        Struct envelope = tableSchema.getEnvelopeSchema().truncate(getOffset().getSourceInfo(), getClock().currentTimeAsInstant());
+        try {
+            receiver.changeRecord(getPartition(), tableSchema, Operation.TRUNCATE, null, envelope, getOffset(), null);
+        }
+        catch (InterruptedException e) {
+            // EventDispatcher may wrap or consume this exception depending on its failure handling mode.
+            truncateInterruption = e;
+            throw e;
+        }
+    }
+
+    void rethrowTruncateInterruption() throws InterruptedException {
+        if (truncateInterruption != null) {
+            throw truncateInterruption;
+        }
     }
 
 }
