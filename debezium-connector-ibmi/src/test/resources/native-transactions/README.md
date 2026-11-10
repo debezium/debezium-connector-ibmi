@@ -1,5 +1,9 @@
 # Native D/CG transaction characterization
 
+Historical `docs/dcg-*.md` references below identify reports in the
+[development archive](https://github.com/gardnmi/debezium-connector-ibmi/tree/fc4ffaa2aa7bf8acc5d9630d493450391814f8c0/docs).
+Current behavior and test commands are in the [contributor guide](../../../../../docs/dcg-contributor-testing.md).
+
 Captured on isolated edgeqa IBM i 7.5 on 2026-11-07; database group SF99950
 level 11 was installed. These are bounded native observations, not startup proof
 or approval to enable transactional streaming.
@@ -95,11 +99,13 @@ it. Actual thread bytes and payloads remain unchanged. Raw captures, independent
 source checks and verified cleanup are described in
 `docs/dcg-native-lifecycle-discrimination.md`.
 
-`As400NativeLifecycleCandidateTest` evaluates an explicitly test-only two-pass
-classifier over complete returned captures and the opt-in conservative
-CONSUME_TARGET buffer policy. It does not install a production filter, supply
-startup proof or change the default unresolved policy. Prior strict full-stream
-rejection tests and fixtures remain intact.
+`As400IncrementalLifecycleTest` sends these complete captures through the shipped
+incremental lifecycle validator, replay coordinator and dispatcher. It checks
+commit/rollback, every-entry restart, missing/mismatched companions, member
+restoration and references to consumed savepoints. The earlier two-pass hypothesis
+checker was removed; these regressions now exercise the actual implementation.
+Default unresolved-policy rejection remains in `As400SourceNormalizerTest` and
+`As400NativeThreadReplayTest`.
 
 `temporal-rows.json` contains eight actual R/PT, R/UB, R/UP and R/DL images
 captured on 2026-11-08 in fresh isolated library DCNC9385. The schema has integer

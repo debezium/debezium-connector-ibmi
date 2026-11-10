@@ -24,6 +24,7 @@ import java.sql.SQLException;
 import java.sql.SQLNonTransientConnectionException;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -46,6 +47,7 @@ import io.debezium.ibmi.db2.journal.retrieve.JdbcFileDecoder;
 import io.debezium.ibmi.db2.journal.retrieve.JournalProcessedPosition;
 import io.debezium.ibmi.db2.journal.retrieve.JournalReadLifecycle;
 import io.debezium.ibmi.db2.journal.retrieve.JournalReceiver;
+import io.debezium.ibmi.db2.journal.retrieve.RawJournalPage;
 import io.debezium.ibmi.db2.journal.retrieve.RetrievalState;
 import io.debezium.ibmi.db2.journal.retrieve.RetrieveJournal;
 import io.debezium.pipeline.DataChangeEvent;
@@ -63,20 +65,10 @@ class As400LegacyRowFailureTest {
     @ParameterizedTest
     @ValueSource(strings = { "matched", "missing", "thread", "record", "member-id", "cycle", "overlap" })
     void migrationCannotUseAMissingOrForeignBeforeImageForTheOldKey(String mode) throws Exception {
-        byte[] bytes;
-        try (var input = getClass().getResourceAsStream("/native-transactions/open-clear-progress.json")) {
-            var json = new com.fasterxml.jackson.databind.ObjectMapper().readTree(input);
-            var row = java.util.stream.StreamSupport.stream(json.path("entries").spliterator(), false)
-                    .filter(e -> e.path("sequence").asText().equals("42")).findFirst().orElseThrow();
-            bytes = java.util.HexFormat.of().parseHex(row.path("hex").asText());
-        }
-        new com.ibm.as400.access.AS400Text(30, 37).toBytes("TEST      LIB       TEST      ", bytes, 157);
-        new com.ibm.as400.access.AS400Text(2, 37).toBytes("UP", bytes, 99);
-        var header = new io.debezium.ibmi.db2.journal.retrieve.rjne0200.EntryHeaderDecoder().decode(bytes, 0);
-        var receiver = header.hasReceiver() ? new JournalReceiver(header.getReceiver(), header.getReceiverLibrary())
-                : As400RecoveryTestSupport.Fixture.RECEIVER;
-        var entry = new io.debezium.ibmi.db2.journal.retrieve.RawJournalPage.Entry(
-                new io.debezium.ibmi.db2.journal.retrieve.JournalPosition(header.getSequenceNumber(), receiver), header, bytes);
+        var entry = nativeRow("UP");
+        byte[] bytes = entry.data();
+        var header = entry.header();
+        var receiver = entry.position().receiver();
         try (var f = new Fixture(Map.of(), false)) {
             when(f.decoder.decode(any(), any(), org.mockito.ArgumentMatchers.anyInt())).thenReturn(new Object[]{ 2 });
             if (!mode.equals("missing")) {
@@ -135,21 +127,7 @@ class As400LegacyRowFailureTest {
     @ParameterizedTest
     @ValueSource(strings = { "success", "decode", "false", "conversion", "lookup", "warn", "skip" })
     void ownedNativeEntryUsesTheSameRealDispatcherAndCannotAuthorizeFailedOrLossyProgress(String mode) throws Exception {
-        byte[] bytes;
-        try (var input = getClass().getResourceAsStream("/native-transactions/open-clear-progress.json")) {
-            var json = new com.fasterxml.jackson.databind.ObjectMapper().readTree(input);
-            var row = java.util.stream.StreamSupport.stream(json.path("entries").spliterator(), false)
-                    .filter(e -> e.path("sequence").asText().equals("42")).findFirst().orElseThrow();
-            bytes = java.util.HexFormat.of().parseHex(row.path("hex").asText());
-        }
-        // Controlled routing only: keep the native row layout/sequence and map
-        // its object-name field to this existing dispatch fixture's schema.
-        new com.ibm.as400.access.AS400Text(30, 37).toBytes("TEST      LIB       TEST      ", bytes, 157);
-        var header = new io.debezium.ibmi.db2.journal.retrieve.rjne0200.EntryHeaderDecoder().decode(bytes, 0);
-        var receiver = header.hasReceiver() ? new JournalReceiver(header.getReceiver(), header.getReceiverLibrary())
-                : As400RecoveryTestSupport.Fixture.RECEIVER;
-        var entry = new io.debezium.ibmi.db2.journal.retrieve.RawJournalPage.Entry(
-                new io.debezium.ibmi.db2.journal.retrieve.JournalPosition(header.getSequenceNumber(), receiver), header, bytes);
+        var entry = nativeRow("PT");
         try (var f = new Fixture(java.util.List.of("warn", "skip").contains(mode)
                 ? Map.of("event.processing.failure.handling.mode", mode)
                 : Map.of(), false)) {
@@ -445,6 +423,38 @@ class As400LegacyRowFailureTest {
             assertThat(replacement.offset.getOffset()).isEqualTo(completed.sourceOffset());
             verifyNoInteractions(replacement.errors);
         }
+    }
+
+    @Test
+    void shouldAdvanceRpcPositionOnlyAfterTheCurrentRowCallbackReturns() throws Exception {
+        try (var f = new Fixture(Map.of(), false)) {
+            var callbackOffsets = new ArrayList<Map<String, ?>>();
+            f.rpc.getJournalEntries(f.running, f.offset, (sequence, reader, header) -> {
+                f.offset.updateSourceInfo(header);
+                assertThat(f.offset.getSourceInfo().getString("sequence")).isEqualTo("42");
+                callbackOffsets.add(Map.copyOf(f.offset.getOffset()));
+            }, mock(WatchDog.class));
+            assertThat(callbackOffsets).hasSize(1);
+            assertThat(callbackOffsets.get(0).get(As400OffsetContext.EVENT_SEQUENCE)).isEqualTo("40");
+            assertThat(f.offset.getOffset().get(As400OffsetContext.EVENT_SEQUENCE)).isEqualTo("42");
+        }
+    }
+
+    /** Fresh owned bytes for each test; only routing and entry type are synthetic. */
+    private static RawJournalPage.Entry nativeRow(String type) throws IOException {
+        byte[] bytes;
+        try (var input = As400LegacyRowFailureTest.class.getResourceAsStream("/native-transactions/open-clear-progress.json")) {
+            var json = new com.fasterxml.jackson.databind.ObjectMapper().readTree(input);
+            var row = java.util.stream.StreamSupport.stream(json.path("entries").spliterator(), false)
+                    .filter(e -> e.path("sequence").asText().equals("42")).findFirst().orElseThrow();
+            bytes = java.util.HexFormat.of().parseHex(row.path("hex").asText());
+        }
+        new com.ibm.as400.access.AS400Text(30, 37).toBytes("TEST      LIB       TEST      ", bytes, 157);
+        new com.ibm.as400.access.AS400Text(2, 37).toBytes(type, bytes, 99);
+        var header = new io.debezium.ibmi.db2.journal.retrieve.rjne0200.EntryHeaderDecoder().decode(bytes, 0);
+        var receiver = header.hasReceiver() ? new JournalReceiver(header.getReceiver(), header.getReceiverLibrary())
+                : As400RecoveryTestSupport.Fixture.RECEIVER;
+        return new RawJournalPage.Entry(new io.debezium.ibmi.db2.journal.retrieve.JournalPosition(header.getSequenceNumber(), receiver), header, bytes);
     }
 
     private static Configuration configuration(Map<String, String> overrides) {

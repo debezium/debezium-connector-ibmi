@@ -307,22 +307,33 @@ class As400IncrementalLifecycleTest {
     }
 
     @ParameterizedTest
-    @ValueSource(strings = { "flags", "jid", "thread", "cycle", "pointer", "profile", "missing-ch", "missing-ej", "receiver" })
-    void mismatchedOrMissingCompanionsNeverReachOutput(String fault) throws Exception {
+    @ValueSource(strings = { "flags", "extra-flags", "jid", "member", "thread", "cycle", "pointer", "profile", "missing-ch", "missing-ej", "receiver",
+            "reordered", "subtype", "target" })
+    void shouldRejectMismatchedOrIncompleteCompanionsBeforeOutput(String fault) throws Exception {
         var entries = entries("thread-enabled", "T_commit");
         int target = index(entries, "F/EJ");
         if (fault.equals("missing-ch") || fault.equals("missing-ej")) {
             entries.remove(index(entries, fault.equals("missing-ch") ? "F/CH" : "F/EJ"));
         }
+        else if (fault.equals("reordered")) {
+            java.util.Collections.swap(entries, target + 1, target + 2);
+        }
         else {
-            if (fault.equals("profile")) {
-                target = index(entries, "D/JF");
-            }
+            target = switch (fault) {
+                case "profile" -> index(entries, "D/JF");
+                case "subtype" -> index(entries, "D/CG");
+                case "target" -> index(entries, "C/SQ");
+                default -> target;
+            };
             Entry old = entries.get(target);
             byte[] bytes = old.bytes().clone();
             switch (fault) {
                 case "flags" -> bytes[218] = 0;
+                case "extra-flags" -> bytes[218] |= 0x20;
                 case "jid" -> bytes[197] ^= 1;
+                case "member" -> new AS400Text(10).toBytes("OTHER", bytes, 177);
+                case "subtype" -> new AS400Text(1).toBytes("5", bytes, old.header().getEntrySpecificDataOffset() + 16 + 108);
+                case "target" -> new AS400Text(20).toBytes("00000000000000000001", bytes, old.header().getEntrySpecificDataOffset() + 16);
                 case "thread" -> ByteBuffer.wrap(bytes).putLong(40, 999);
                 case "cycle" -> ByteBuffer.wrap(bytes).putLong(64, 999);
                 case "pointer" -> ByteBuffer.wrap(bytes).putInt(72, 1);
@@ -334,15 +345,63 @@ class As400IncrementalLifecycleTest {
             JournalPosition position = fault.equals("receiver") ? new JournalPosition(old.position().offset(), new JournalReceiver("OTHER", "LIB")) : old.position();
             entries.set(target, new Entry(new EntryHeaderDecoder().decode(bytes, 0), bytes, position));
         }
+        assertRejectedWithoutPublication("thread-enabled", "T_commit", entries);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = { "no-rollback", "flagged-delete", "wrong-jid", "wrong-thread", "no-replacement-marker" })
+    void shouldRejectMemberDeletionWithoutMatchingRollbackAndReplacement(String fault) throws Exception {
+        var entries = entries("thread-enabled", "T_savepoint");
+        int deletion = index(entries, "F/MD");
+        if (fault.equals("no-rollback")) {
+            entries.remove(deletion - 1);
+        }
+        else if (fault.equals("no-replacement-marker")) {
+            entries.remove(deletion + 4);
+        }
+        else {
+            Entry old = entries.get(deletion);
+            byte[] bytes = old.bytes().clone();
+            switch (fault) {
+                case "flagged-delete" -> bytes[218] = 0x10;
+                case "wrong-jid" -> bytes[197] ^= 1;
+                case "wrong-thread" -> ByteBuffer.wrap(bytes).putLong(40, 999);
+                default -> throw new AssertionError(fault);
+            }
+            entries.set(deletion, new Entry(new EntryHeaderDecoder().decode(bytes, 0), bytes, old.position()));
+        }
+        assertRejectedWithoutPublication("thread-enabled", "T_savepoint", entries);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = { "SQ", "SU" })
+    void shouldRejectReferencesToConsumedNativeSavepoints(String type) throws Exception {
+        var entries = entries("lifecycle-discrimination", "savepoint_reuse");
+        int firstUndo = index(entries, "C/SU");
+        Entry first = entries.get(firstUndo);
+        BigInteger target = new io.debezium.ibmi.db2.journal.retrieve.TransactionControlEntryDecoder()
+                .decode(first.header(), first.bytes(), 0).savepointSequence();
+        Entry later = entries.subList(firstUndo + 1, entries.size()).stream().filter(e -> e.type().equals("C/" + type)).findFirst().orElseThrow();
+        byte[] bytes = later.bytes().clone();
+        new AS400Text(20).toBytes(String.format("%020d", target), bytes, later.header().getEntrySpecificDataOffset() + 16);
+        entries.set(entries.indexOf(later), new Entry(new EntryHeaderDecoder().decode(bytes, 0), bytes, later.position()));
+        assertRejectedWithoutPublication("lifecycle-discrimination", "savepoint_reuse", entries);
+    }
+
+    private static void assertRejectedWithoutPublication(String fixture, String scenario, List<Entry> entries) throws Exception {
         List<SourceRecord> records = new ArrayList<>();
-        try (var output = new Output(bindings("thread-enabled")).dispatcher;
-                var coordinator = coordinator(initial(entries).toOffset(), "thread-enabled", entries, records::add, LIMITS)) {
+        try (var output = new Output(bindings(fixture)).dispatcher;
+                var coordinator = coordinator(initial(entries).toOffset(), fixture, entries, records::add, LIMITS)) {
             assertThrows(RecoveryException.class, () -> {
                 for (Entry entry : entries) {
                     feed(coordinator, entry, output);
                 }
-            });
-            assertThat(coordinator.checkpoint().completedThrough()).isEqualTo(initial(entries).completedThrough());
+            }, fixture + "/" + scenario);
+            var safe = coordinator.checkpoint();
+            assertThat(safe.completedThrough()).isEqualTo(initial(entries).completedThrough());
+            assertThat(records).isEmpty();
+            assertThrows(RecoveryException.class, () -> coordinator.publishCheckpoint(heartbeat()));
+            assertThat(coordinator.checkpoint()).isEqualTo(safe);
             assertThat(records).isEmpty();
         }
     }
@@ -683,18 +742,7 @@ class As400IncrementalLifecycleTest {
             }
             entries = resequence(copy);
         }
-        var input = entries;
-        List<SourceRecord> records = new ArrayList<>();
-        try (var output = new Output(bindings("multiple-clears")).dispatcher;
-                var coordinator = coordinator(initial(input).toOffset(), "multiple-clears", input, records::add, LIMITS)) {
-            assertThrows(RecoveryException.class, () -> {
-                for (Entry entry : input) {
-                    feed(coordinator, entry, output);
-                }
-            });
-            assertThat(records).isEmpty();
-            assertThat(coordinator.checkpoint().completedThrough()).isEqualTo(initial(input).completedThrough());
-        }
+        assertRejectedWithoutPublication("multiple-clears", "multiple_clear_commit", entries);
     }
 
     @ParameterizedTest
@@ -724,17 +772,7 @@ class As400IncrementalLifecycleTest {
             }
             entries.set(second, new Entry(new EntryHeaderDecoder().decode(bytes, 0), bytes, old.position()));
         }
-        List<SourceRecord> records = new ArrayList<>();
-        try (var output = new Output(bindings("multiple-clears")).dispatcher;
-                var coordinator = coordinator(initial(entries).toOffset(), "multiple-clears", entries, records::add, LIMITS)) {
-            assertThrows(RecoveryException.class, () -> {
-                for (Entry entry : entries) {
-                    feed(coordinator, entry, output);
-                }
-            });
-            assertThat(records).isEmpty();
-            assertThat(coordinator.checkpoint().completedThrough()).isEqualTo(initial(entries).completedThrough());
-        }
+        assertRejectedWithoutPublication("multiple-clears", "two_table_clear_savepoint", entries);
     }
 
     private static List<Entry> overlapping() throws IOException {
@@ -777,17 +815,7 @@ class As400IncrementalLifecycleTest {
             }
             entries.set(target, new Entry(new EntryHeaderDecoder().decode(bytes, 0), bytes, old.position()));
         }
-        List<SourceRecord> records = new ArrayList<>();
-        try (var output = new Output(bindings(fixture)).dispatcher;
-                var coordinator = coordinator(initial(entries).toOffset(), fixture, entries, records::add, LIMITS)) {
-            assertThrows(RecoveryException.class, () -> {
-                for (Entry entry : entries) {
-                    feed(coordinator, entry, output);
-                }
-            });
-            assertThat(coordinator.checkpoint().completedThrough()).isEqualTo(initial(entries).completedThrough());
-            assertThat(records).isEmpty();
-        }
+        assertRejectedWithoutPublication("clear-only-savepoint", "clear_only_savepoint", entries);
     }
 
     /** Synthetic interleaving only: remap sequence references consistently, preserve values/producers. */
