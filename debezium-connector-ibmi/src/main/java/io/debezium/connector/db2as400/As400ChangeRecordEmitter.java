@@ -19,6 +19,7 @@ public class As400ChangeRecordEmitter extends RelationalChangeRecordEmitter<As40
     private final Operation operation;
     private final Object[] data;
     private final Object[] dataNext;
+    private InterruptedException truncateInterruption;
 
     public As400ChangeRecordEmitter(As400Partition partition, OffsetContext offset, Operation operation, Object[] data, Object[] dataNext, Clock clock,
                                     RelationalDatabaseConnectorConfig connectorConfig) {
@@ -47,7 +48,20 @@ public class As400ChangeRecordEmitter extends RelationalChangeRecordEmitter<As40
     @Override
     protected void emitTruncateRecord(Receiver<As400Partition> receiver, TableSchema tableSchema) throws InterruptedException {
         Struct envelope = tableSchema.getEnvelopeSchema().truncate(getOffset().getSourceInfo(), getClock().currentTimeAsInstant());
-        receiver.changeRecord(getPartition(), tableSchema, Operation.TRUNCATE, null, envelope, getOffset(), null);
+        try {
+            receiver.changeRecord(getPartition(), tableSchema, Operation.TRUNCATE, null, envelope, getOffset(), null);
+        }
+        catch (InterruptedException e) {
+            // EventDispatcher may wrap or consume this exception depending on its failure handling mode.
+            truncateInterruption = e;
+            throw e;
+        }
+    }
+
+    void rethrowTruncateInterruption() throws InterruptedException {
+        if (truncateInterruption != null) {
+            throw truncateInterruption;
+        }
     }
 
 }
