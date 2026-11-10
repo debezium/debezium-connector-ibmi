@@ -53,6 +53,7 @@ public class As400OffsetContext extends CommonOffsetContext<SourceInfo> {
     private final As400ConnectorConfig connectorConfig;
     private final SourceInfo sourceInfo;
     private final JournalProcessedPosition position;
+    private JournalProcessedPosition legacyReplayFloor;
     private boolean hasNewTables = false;
     private final IncrementalSnapshotContext<TableId> incrementalSnapshotContext;
 
@@ -117,6 +118,10 @@ public class As400OffsetContext extends CommonOffsetContext<SourceInfo> {
 
     @Override
     public Map<String, ?> getOffset() {
+        return offsetAt(legacyReplayFloor == null ? position : legacyReplayFloor);
+    }
+
+    private Map<String, ?> offsetAt(JournalProcessedPosition position) {
         if (sourceInfo.isSnapshot()) {
             log.debug("new snapshot offset {}", position);
         }
@@ -139,6 +144,25 @@ public class As400OffsetContext extends CommonOffsetContext<SourceInfo> {
                 As400OffsetContext.SNAPSHOT_COMPLETED_KEY, Boolean.toString(snapshotCompleted)));
         incrementalSnapshotContext.store(offset);
         return offset;
+    }
+
+    /** Protect an unpaired autocommit before-image without changing the RPC scan cursor. */
+    void legacyReplayFloor(JournalProcessedPosition floor) {
+        legacyReplayFloor = floor == null ? null : new JournalProcessedPosition(floor);
+    }
+
+    JournalProcessedPosition entryPosition(EntryHeader entry) {
+        JournalReceiver receiver = entry.hasReceiver() ? new JournalReceiver(entry.getReceiver(), entry.getReceiverLibrary()) : position.getReceiver();
+        return new JournalProcessedPosition(entry.getSequenceNumber(), receiver, entry.getTime(), true);
+    }
+
+    /** A record owns its coordinates; later reads cannot mutate an enqueued SourceRecord's offset. */
+    As400OffsetContext recordContext(EntryHeader entry, JournalProcessedPosition checkpoint) {
+        var result = new As400OffsetContext(connectorConfig, new JournalProcessedPosition(checkpoint), snapshotCompleted, incrementalSnapshotContext);
+        var source = entryPosition(entry);
+        result.updateSourceInfo(source.getOffset(), source.getReceiver().name(), source.getReceiver().library(), entry.getTime());
+        result.setTransaction(transactionContext);
+        return result;
     }
 
     @Override

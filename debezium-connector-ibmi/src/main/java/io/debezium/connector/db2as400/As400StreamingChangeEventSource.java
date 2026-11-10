@@ -29,6 +29,7 @@ import io.debezium.ibmi.db2.journal.retrieve.FileChangeEntryDecoder;
 import io.debezium.ibmi.db2.journal.retrieve.FileChangeEntryDecoder.FileChange;
 import io.debezium.ibmi.db2.journal.retrieve.JournalEntryDeocder;
 import io.debezium.ibmi.db2.journal.retrieve.JournalEntryType;
+import io.debezium.ibmi.db2.journal.retrieve.JournalProcessedPosition;
 import io.debezium.ibmi.db2.journal.retrieve.RawJournalPage;
 import io.debezium.ibmi.db2.journal.retrieve.exception.FatalException;
 import io.debezium.ibmi.db2.journal.retrieve.exception.InvalidPositionException;
@@ -59,6 +60,8 @@ public class As400StreamingChangeEventSource implements StreamingChangeEventSour
 
     private final HashMap<String, Object[]> beforeMap = new HashMap<>();
     private final Map<TableId, EntryHeader> migrationBeforeHeaders = new HashMap<>();
+    private final Set<TableId> legacyBeforeTables = new HashSet<>();
+    private JournalProcessedPosition legacyBeforeFloor;
     private final FileChangeEntryDecoder fileChangeDecoder = new FileChangeEntryDecoder();
     private static Set<Character> alwaysProcess = Stream.of('J', 'C').collect(Collectors.toCollection(HashSet::new));
 
@@ -304,6 +307,7 @@ public class As400StreamingChangeEventSource implements StreamingChangeEventSour
                                      EntryValues r, EntryHeader eheader, boolean migration)
             throws IOException, SQLNonTransientConnectionException {
         final JournalEntryType journalEntryType = eheader.getJournalEntryType();
+        TableId resolvedTable = null;
         try {
 
             if (journalEntryType == null || ignore(journalEntryType)) {
@@ -341,6 +345,7 @@ public class As400StreamingChangeEventSource implements StreamingChangeEventSour
                 log.error("failed to look up long name", e);
             }
             final TableId tableId = new TableId(database, library, longName);
+            resolvedTable = tableId;
 
             final boolean includeTable = connectorConfig.getTableFilters().dataCollectionFilter()
                     .isIncluded(tableId);
@@ -410,12 +415,20 @@ public class As400StreamingChangeEventSource implements StreamingChangeEventSour
                         throw new IllegalArgumentException("Overlapping migration before-images require explicit recovery");
                     }
                     cacheBefore(tableId, dataBefore);
+                    if (!migration && eheader.getCommitCycle().signum() == 0) {
+                        if (legacyBeforeTables.isEmpty()) {
+                            legacyBeforeFloor = offsetContext.entryPosition(eheader).setProcessed(false);
+                        }
+                        legacyBeforeTables.add(tableId);
+                        offsetContext.legacyReplayFloor(legacyFloor(null));
+                    }
                 }
                     break;
                 case AFTER_IMAGE: {
                     // after image
                     // before image is meant to have been immediately before
-                    final Object[] dataBefore = getBefore(tableId);
+                    final Object[] dataBefore = migration ? getBefore(tableId)
+                            : beforeMap.get(String.format("%s-%s", tableId.schema(), tableId.table()));
                     if (migration && dataBefore == null) {
                         throw new IllegalArgumentException("Migration update lacks its before-image at journal entry " + eheader.getSequenceNumber());
                     }
@@ -431,8 +444,11 @@ public class As400StreamingChangeEventSource implements StreamingChangeEventSour
 
                     log.debug("update event id {} tx {} table {}", nextOffset, txId, tableId);
 
-                    dispatchRow(partition, tableId, eheader, new As400ChangeRecordEmitter(partition,
-                            offsetContext, Operation.UPDATE, dataBefore, dataNext, clock, connectorConfig));
+                    dispatchRow(partition, tableId, eheader, rowEmitter(partition, offsetContext, tableId, eheader,
+                            Operation.UPDATE, dataBefore, dataNext, migration));
+                    if (!migration) {
+                        releaseLegacyBefore(offsetContext, tableId);
+                    }
                 }
                     break;
                 case ADD_ROW1, ADD_ROW2: {
@@ -445,8 +461,8 @@ public class As400StreamingChangeEventSource implements StreamingChangeEventSour
 
                     log.debug("insert event id {} tx {} table {}", offsetContext.getPosition(), txId,
                             tableId);
-                    dispatchRow(partition, tableId, eheader, new As400ChangeRecordEmitter(partition,
-                            offsetContext, Operation.CREATE, null, dataNext, clock, connectorConfig));
+                    dispatchRow(partition, tableId, eheader, rowEmitter(partition, offsetContext, tableId, eheader,
+                            Operation.CREATE, null, dataNext, migration));
                 }
                     break;
                 case DELETE_ROW, ROLLBACK_DELETE_ROW: {
@@ -460,8 +476,8 @@ public class As400StreamingChangeEventSource implements StreamingChangeEventSour
 
                     log.debug("delete event id {} tx {} table {}", offsetContext.getPosition(), txId,
                             tableId);
-                    dispatchRow(partition, tableId, eheader, new As400ChangeRecordEmitter(partition,
-                            offsetContext, Operation.DELETE, dataBefore, null, clock, connectorConfig));
+                    dispatchRow(partition, tableId, eheader, rowEmitter(partition, offsetContext, tableId, eheader,
+                            Operation.DELETE, dataBefore, null, migration));
                 }
                     break;
                 default:
@@ -499,6 +515,9 @@ public class As400StreamingChangeEventSource implements StreamingChangeEventSour
                         log.debug("Failed to process {} at journal entry {}", kind, eheader.getSequenceNumber(), e);
                         break;
                 }
+                if (!migration && journalEntryType == JournalEntryType.AFTER_IMAGE && resolvedTable != null) {
+                    releaseLegacyBefore(offsetContext, resolvedTable);
+                }
             }
             else {
                 if (migration) {
@@ -527,6 +546,36 @@ public class As400StreamingChangeEventSource implements StreamingChangeEventSour
             throw new IllegalStateException("Missing transaction start for commit cycle " + entry.getCommitCycle());
         }
         offset.setTransaction(transaction);
+    }
+
+    private JournalProcessedPosition legacyFloor(TableId completed) {
+        // A/UB, B/UB, A/UP must retain A/UB until B finishes: restarting at
+        // B/UB would replay A/UP without its before-image or old primary key.
+        return legacyBeforeTables.isEmpty() || (legacyBeforeTables.size() == 1 && legacyBeforeTables.contains(completed))
+                ? null
+                : legacyBeforeFloor;
+    }
+
+    private void releaseLegacyBefore(As400OffsetContext offset, TableId table) {
+        beforeMap.remove(String.format("%s-%s", table.schema(), table.table()));
+        legacyBeforeTables.remove(table);
+        if (legacyBeforeTables.isEmpty()) {
+            legacyBeforeFloor = null;
+        }
+        offset.legacyReplayFloor(legacyFloor(null));
+    }
+
+    private As400ChangeRecordEmitter rowEmitter(As400Partition partition, As400OffsetContext offset, TableId table,
+                                                EntryHeader entry, Operation operation, Object[] before, Object[] after, boolean migration) {
+        if (migration || entry.getCommitCycle().signum() != 0) {
+            return new As400ChangeRecordEmitter(partition, offset, operation, before, after, clock, connectorConfig);
+        }
+        var position = offset.entryPosition(entry);
+        var replay = legacyFloor(null);
+        var completed = legacyFloor(operation == Operation.UPDATE ? table : null);
+        return new As400LegacyChangeRecordEmitter(partition,
+                offset.recordContext(entry, replay == null ? new JournalProcessedPosition(position).setProcessed(false) : replay),
+                offset.recordContext(entry, completed == null ? position : completed), operation, before, after, clock, connectorConfig);
     }
 
     private void dispatchRow(As400Partition partition, TableId tableId, EntryHeader entry, As400ChangeRecordEmitter emitter)
@@ -573,6 +622,7 @@ public class As400StreamingChangeEventSource implements StreamingChangeEventSour
             if (!dispatched) {
                 throw new TruncateException("Failed to dispatch clear for " + tableId + " at journal entry " + entry.getSequenceNumber());
             }
+            releaseLegacyBefore(offsetContext, tableId);
         }
         catch (TruncateException e) {
             throw e;

@@ -214,6 +214,7 @@ class As400LegacyRowFailureTest {
                 SourceRecord first = queued.get(0).getRecord();
                 assertThat(((Struct) first.value()).getString("op")).isEqualTo("d");
                 assertThat(first.sourceOffset().get("offset.event_sequence")).isEqualTo("40");
+                assertThat(first.sourceOffset().get(As400OffsetContext.PROCESSED)).isEqualTo("false");
                 // Enqueue is not broker acknowledgement; the Kafka barrier tests
                 // prove this prefix stays uncommitted when the producer fails.
             }
@@ -224,18 +225,24 @@ class As400LegacyRowFailureTest {
     }
 
     @ParameterizedTest
-    @CsvSource({ "warn,decode", "skip,decode", "warn,dispatch", "skip,dispatch", "warn,false", "skip,false" })
-    void explicitLossyModesRetainTheirContinueAndAdvanceBehavior(String mode, String failure) throws Exception {
+    @CsvSource({ "warn,decode,PT", "skip,decode,PT", "warn,dispatch,PT", "skip,dispatch,PT", "warn,false,PT", "skip,false,PT",
+            "warn,decode,UP", "skip,decode,UP", "warn,dispatch,UP", "skip,dispatch,UP", "warn,false,UP", "skip,false,UP" })
+    void explicitLossyModesRetainTheirContinueAndAdvanceBehavior(String mode, String failure, String type) throws Exception {
         try (var f = new Fixture(Map.of("event.processing.failure.handling.mode", mode), false)) {
+            if (type.equals("UP")) {
+                f.beforeImage(1, 2);
+            }
             switch (failure) {
                 case "decode" -> when(f.journal.decode(f.decoder)).thenThrow(new IllegalArgumentException("malformed row"));
                 case "dispatch" -> when(f.journal.decode(f.decoder)).thenReturn(new Object[]{ "wrong integer type" });
                 case "false" -> doReturn(false).when(f.dispatcher).dispatchDataChangeEvent(any(), any(), any());
                 default -> throw new AssertionError(failure);
             }
-            f.run("PT");
+            f.run(type);
             verifyNoInteractions(f.errors);
             assertThat(f.offset.getPosition().getOffset()).isEqualTo(BigInteger.valueOf(42));
+            assertThat(f.offset.getOffset().get(As400OffsetContext.EVENT_SEQUENCE)).isEqualTo("42");
+            assertThat(f.source.hasPendingBeforeImage()).isFalse();
             assertThat(f.queue.poll()).isEmpty();
         }
     }
@@ -306,17 +313,137 @@ class As400LegacyRowFailureTest {
         verify(context, never()).offsetStorageReader();
     }
 
-    @Test
-    void successfulRowStillAdvancesAndEmitsItsSourceSequence() throws Exception {
-        try (var f = new Fixture(Map.of(), false)) {
-            f.run("PT");
+    @ParameterizedTest
+    @ValueSource(strings = { "PT", "PX", "UP", "key-change", "rollover" })
+    void shouldCheckpointTheCompletedRowWithoutChangingPreviouslyQueuedOffsets(String kind) throws Exception {
+        try (var f = new Fixture(Map.of("heartbeat.interval.ms", "1"), false)) {
+            if (kind.equals("UP") || kind.equals("key-change")) {
+                f.beforeImage(1, kind.equals("UP") ? 1 : 2);
+            }
+            var event = As400ConnectProbeConnector.event(42, "R/" + (kind.equals("key-change") ? "UP" : kind.equals("rollover") ? "PT" : kind), 0, 1);
+            if (kind.equals("rollover")) {
+                var h = event.header();
+                var header = new io.debezium.ibmi.db2.journal.retrieve.rjne0200.EntryHeader(-1, -1, -1L, h.getSequenceNumber(), BigInteger.ZERO,
+                        h.getTime(), 'R', "PT", "TEST      LIB       TEST      ", BigInteger.ZERO, -1, -1, "NEXT", "NEWLIB");
+                event = new As400ConnectProbeConnector.Event(header, event.data(), new io.debezium.ibmi.db2.journal.retrieve.JournalPosition(BigInteger.valueOf(42),
+                        new JournalReceiver("NEXT", "NEWLIB")));
+            }
+            f.run(event);
             verifyNoInteractions(f.errors);
             var records = f.queue.poll();
-            assertThat(records).hasSize(1);
-            var record = records.get(0).getRecord();
+            var rows = records.stream().map(DataChangeEvent::getRecord).filter(r -> r.topic().equals("events")).toList();
+            assertThat(rows).hasSize(kind.equals("key-change") ? 3 : 1);
+            var record = rows.get(rows.size() - 1);
             assertThat(((Struct) record.value()).getStruct("source").getString("sequence")).isEqualTo("42");
-            assertThat(record.sourceOffset().get("offset.event_sequence")).isEqualTo("40");
+            assertThat(record.sourceOffset().get("offset.event_sequence")).isEqualTo("42");
+            assertThat(record.sourceOffset().get(As400OffsetContext.PROCESSED)).isEqualTo("true");
+            if (kind.equals("key-change")) {
+                assertThat(rows.subList(0, 2)).allSatisfy(r -> {
+                    assertThat(r.sourceOffset().get(As400OffsetContext.EVENT_SEQUENCE)).isEqualTo("40");
+                    assertThat(r.sourceOffset().get(As400OffsetContext.PROCESSED)).isEqualTo("false");
+                });
+            }
+            for (var queued : records) {
+                if (queued.getRecord().topic().equals("heartbeat")) {
+                    assertThat(queued.getRecord().sourceOffset().get(As400OffsetContext.EVENT_SEQUENCE)).isEqualTo("42");
+                }
+            }
+            var restored = new As400OffsetContext.Loader(f.config).load(record.sourceOffset());
+            assertThat(restored.getPosition().processed()).isTrue();
+            assertThat(restored.getPosition().getOffset()).isEqualTo(BigInteger.valueOf(42));
+            if (kind.equals("rollover")) {
+                assertThat(restored.getPosition().getReceiver()).isEqualTo(new JournalReceiver("NEXT", "NEWLIB"));
+            }
             assertThat(f.offset.getPosition().getOffset()).isEqualTo(BigInteger.valueOf(42));
+            f.run(As400ConnectProbeConnector.event(43, "R/PT", 0, 3));
+            assertThat(record.sourceOffset().get(As400OffsetContext.EVENT_SEQUENCE)).isEqualTo("42");
+        }
+    }
+
+    @Test
+    void shouldKeepAnUnpairedBeforeImageReplayableAcrossAnotherRowAndFreshRestart() throws Exception {
+        Map<String, ?> saved;
+        try (var original = new Fixture(Map.of(), false)) {
+            original.beforeImage(1, 1);
+            original.run("PT");
+            saved = original.queue.poll().get(0).getRecord().sourceOffset();
+            assertThat(saved.get(As400OffsetContext.EVENT_SEQUENCE)).isEqualTo("40");
+            assertThat(saved.get(As400OffsetContext.PROCESSED)).isEqualTo("false");
+            assertThat(original.offset.getPosition().getOffset()).isEqualTo(BigInteger.valueOf(42));
+            assertThat(original.offset.getOffset().get(As400OffsetContext.EVENT_SEQUENCE)).isEqualTo("40");
+        }
+        try (var replacement = new Fixture(Map.of(), false, saved)) {
+            assertThat(replacement.offset.getPosition().processed()).isFalse();
+            replacement.beforeImage(1, 1);
+            replacement.run("UP");
+            var row = replacement.queue.poll().get(0).getRecord();
+            assertThat(((Struct) row.value()).getStruct("before").getInt32("ID")).isEqualTo(1);
+            assertThat(row.sourceOffset().get(As400OffsetContext.EVENT_SEQUENCE)).isEqualTo("42");
+            assertThat(replacement.offset.getOffset().get(As400OffsetContext.EVENT_SEQUENCE)).isEqualTo("42");
+        }
+    }
+
+    @Test
+    void shouldKeepDeleteReplayableIfTombstoneCreationFails() throws Exception {
+        try (var f = new Fixture(Map.of(), true)) {
+            f.run("DL");
+            f.assertStopped();
+            var prefix = f.queue.poll().get(0).getRecord();
+            assertThat(((Struct) prefix.value()).getString("op")).isEqualTo("d");
+            assertThat(prefix.sourceOffset().get(As400OffsetContext.EVENT_SEQUENCE)).isEqualTo("42");
+            assertThat(prefix.sourceOffset().get(As400OffsetContext.PROCESSED)).isEqualTo("false");
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = { false, true })
+    void shouldReconstructCompletedUpdatesWhenAnotherTableStillHasAnOpenPair(boolean keyChange) throws Exception {
+        Map<String, ?> saved;
+        try (var original = new Fixture(Map.of(), false)) {
+            original.row(40, "TEST", "UB", 1);
+            original.row(41, "OTHER", "UB", 7);
+            original.row(42, "TEST", "UP", keyChange ? 2 : 1);
+            var rows = original.queue.poll();
+            saved = rows.get(rows.size() - 1).getRecord().sourceOffset();
+            assertThat(saved.get(As400OffsetContext.EVENT_SEQUENCE)).isEqualTo("40");
+            assertThat(saved.get(As400OffsetContext.PROCESSED)).isEqualTo("false");
+            // Completing A cannot discard A's reconstruction history while B
+            // keeps a restart before A's already-published after-image possible.
+            original.row(43, "TEST", "PT", 3);
+            assertThat(original.queue.poll().get(0).getRecord().sourceOffset()).isEqualTo(saved);
+            assertThat(original.offset.getOffset()).isEqualTo(saved);
+            assertThat(original.offset.getPosition().getOffset()).isEqualTo(BigInteger.valueOf(43));
+        }
+        try (var replacement = new Fixture(Map.of(), false, saved)) {
+            assertThat(replacement.offset.getPosition().getOffset()).isEqualTo(BigInteger.valueOf(40));
+            assertThat(replacement.offset.getPosition().processed()).isFalse();
+            replacement.row(40, "TEST", "UB", 1);
+            replacement.row(41, "OTHER", "UB", 7);
+            replacement.row(42, "TEST", "UP", keyChange ? 2 : 1);
+            var rows = replacement.queue.poll().stream().map(DataChangeEvent::getRecord).toList();
+            assertThat(rows).hasSize(keyChange ? 3 : 1);
+            assertThat(((Struct) rows.get(0).value()).getStruct("before").getInt32("ID")).isEqualTo(1);
+            if (keyChange) {
+                assertThat(((Struct) rows.get(0).value()).getString("op")).isEqualTo("d");
+                assertThat(((Struct) rows.get(0).key()).getInt32("ID")).isEqualTo(1);
+                assertThat(rows.get(1).value()).isNull();
+                assertThat(((Struct) rows.get(2).value()).getString("op")).isEqualTo("c");
+                assertThat(((Struct) rows.get(2).key()).getInt32("ID")).isEqualTo(2);
+            }
+            else {
+                assertThat(((Struct) rows.get(0).value()).getString("op")).isEqualTo("u");
+            }
+            assertThat(rows).allSatisfy(row -> assertThat(row.sourceOffset()).isEqualTo(saved));
+            replacement.row(43, "TEST", "PT", 3);
+            replacement.queue.poll();
+            replacement.row(44, "OTHER", "UP", 7);
+            var completed = replacement.queue.poll().get(0).getRecord();
+            assertThat(((Struct) completed.value()).getStruct("before").getInt32("ID")).isEqualTo(7);
+            assertThat(completed.sourceOffset().get(As400OffsetContext.EVENT_SEQUENCE)).isEqualTo("44");
+            assertThat(completed.sourceOffset().get(As400OffsetContext.PROCESSED)).isEqualTo("true");
+            assertThat(replacement.source.hasPendingBeforeImage()).isFalse();
+            assertThat(replacement.offset.getOffset()).isEqualTo(completed.sourceOffset());
+            verifyNoInteractions(replacement.errors);
         }
     }
 
@@ -365,7 +492,8 @@ class As400LegacyRowFailureTest {
                 }
             };
             var count = new AtomicInteger();
-            dispatcher = spy(new EventDispatcher<As400Partition, TableId>(config, topics, new As400TaskStopProbeConnector.FixtureSchema(offset), queue,
+            dispatcher = spy(new EventDispatcher<As400Partition, TableId>(config, topics,
+                    new As400TaskStopProbeConnector.FixtureSchema(offset, new TableId("DB", "LIB", "TEST"), new TableId("DB", "LIB", "OTHER")), queue,
                     config.getTableFilters().dataCollectionFilter(), record -> {
                         if (failAfterFirstRecord && count.incrementAndGet() == 2) {
                             throw new IllegalStateException("controlled dispatch failure after first subrecord");
@@ -398,6 +526,15 @@ class As400LegacyRowFailureTest {
 
         void run(String type) throws Exception {
             run(As400ConnectProbeConnector.event(42, "R/" + type, 0, 1));
+        }
+
+        void row(long sequence, String table, String type, int value) throws Exception {
+            var event = As400ConnectProbeConnector.event(sequence, "R/" + type, 0, value);
+            var h = event.header();
+            var header = new io.debezium.ibmi.db2.journal.retrieve.rjne0200.EntryHeader(-1, -1, -1L, h.getSequenceNumber(), BigInteger.ZERO,
+                    h.getTime(), 'R', type, String.format("%-10s%-10s%-10s", table, "LIB", table), BigInteger.ZERO, -1, -1, h.getReceiver(), h.getReceiverLibrary());
+            when(journal.decode(decoder)).thenReturn(new Object[]{ value });
+            run(new As400ConnectProbeConnector.Event(header, event.data(), event.position()));
         }
 
         void run(As400ConnectProbeConnector.Event event) throws Exception {
