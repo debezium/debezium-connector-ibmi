@@ -113,10 +113,10 @@ snapshot, durable handoff, open clear and receiver rotation, task crash/reassign
 rollback suppression, committed truncate-before-reload, optimized DELETE subtypes,
 mixed values and completed drain. Raw journal and independent read-committed Kafka
 evidence are retained. The stricter deterministic crash-boundary tests remain in
-[task-owned boundary verification](dcg-task-owned-boundary-validation.md).
+[task-owned boundary verification](https://github.com/gardnmi/debezium-connector-ibmi/blob/fc4ffaa2aa7bf8acc5d9630d493450391814f8c0/docs/dcg-task-owned-boundary-validation.md).
 
 This is a bounded qualification profile, not validation of every IBM i release,
 CCSID, schema, Kafka topology or operational failure. See the
-[dated validation report](dcg-public-online-validation.md) for what actually ran
+[validation scope and recorded native results](dcg-validation.md) for what actually ran
 and what remains untested. The ordinary-plugin native qualification passed in
 the documented profile; the public option remains off by default.

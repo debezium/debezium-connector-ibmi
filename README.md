@@ -58,27 +58,23 @@ null `before` and `after`) for `F/CR` member clears. This follow-up also classif
 the object-level entry-specific data. The legacy reader refreshes the schema for
 other D/CG subtypes; the configured path rejects unqualified structural changes.
 
-[D/CG validation findings](docs/dcg-validation.md) describe the observed commit and
-rollback behavior and the work remaining in debezium/dbz#3027.
+The transactional path uses bounded transaction buffering, immutable binding
+history and durable replay checkpoints. See the [architecture](docs/dcg-architecture.md)
+and [validation scope](docs/dcg-validation.md) for its recovery contract and limits.
 
-The local follow-up now also has an explicitly configured native D/CG candidate.
-It supports declared primary keys or explicit `dcg.key.mode=rrn` for native files
-without declared keys; see the [key contract](docs/dcg-configured-native.md#keys-for-native-physical-files).
-See the [configured profile and operator runbook](docs/dcg-configured-native.md)
-and [validation report](docs/dcg-configured-validation.md), with the current
-[source release checklist](docs/dcg-source-release-checklist.md). It uses normal task
-startup, immutable binding history, transaction buffering and durable F/W recovery.
-It defaults to disabled and has stricter source/runtime requirements than the
-legacy reader. The separate, default-off `truncate.transactional.enabled` option
-now connects the online handoff to normal startup for an existing completed
-streaming offset. It uses brief automatic native locks and standard table filters,
-without another snapshot or an administrator-managed write pause; see the
-[online configuration and restrictions](docs/dcg-online-configuration.md).
+For an already-streaming connector, the default-off
+`truncate.transactional.enabled` option enables online handoff without another
+snapshot or an administrator-managed write pause. It uses brief automatic native
+locks and standard table filters; read the
+[online configuration and restrictions](docs/dcg-online-configuration.md) before enabling it.
+The separate [configured first-start profile](docs/dcg-configured-native.md)
+provides an operator-controlled initial snapshot, including explicit RRN key
+support for native files without declared primary keys.
 
-The [code review and cleanup report](docs/dcg-code-review.md) records runtime
-dependency checks and performance comparisons. Historical protected-startup and
-custom-receipt experiments are excluded from the plugin and normal test suite;
-run `./mvnw test -Pdcg-prototype-tests -DskipITs` to include their retained tests.
+See [contributor testing](docs/dcg-contributor-testing.md) for offline, local Kafka
+and optional isolated IBM i tests. Historical design experiments and progress
+reports are retained in the [development archive](docs/dcg-validation.md#historical-evidence),
+not required by the build or plugin.
 
 The behavior below describes the **legacy reader with `dcg.mode=disabled` and
 `truncate.transactional.enabled=false`**.

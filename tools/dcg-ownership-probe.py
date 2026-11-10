@@ -7,27 +7,21 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import sys
 import time
 import zipfile
 
 ROOT = Path(__file__).resolve().parent.parent
-spec = importlib.util.spec_from_file_location("task_probe", ROOT / "tools/dcg-task-probe.py")
-task_probe = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(task_probe)
-base = task_probe.base
+spec = importlib.util.spec_from_file_location("connect_probe", ROOT / "tools/dcg-connect-probe.py")
+base = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(base)
 CLASS = "io.debezium.connector.db2as400.As400ConnectOwnershipProbeConnector"
 EXPECTED = {"data": ["t", "c:1", "c:2", "c:3"], "tx": ["BEGIN", "END", "BEGIN", "END"], "hb": ["HB", "HB"]}
 SUFFIX = {"data": "", "tx": "-tx", "hb": "-hb"}
 
 
-class OwnershipExperiment(task_probe.TaskExperiment):
-    test_classes = base.Experiment.test_classes
-
-    # Reuse container/offset utilities directly; the stricter fixture's worker
-    # authorization and one-topic validation must not run in this candidate.
-    snapshot = base.Experiment.snapshot
-
+class OwnershipExperiment(base.Experiment):
     def start_worker(self, scenario, role):
         worker = base.Experiment.start_worker(self, scenario, role)
         if scenario == "partition":
@@ -38,20 +32,28 @@ class OwnershipExperiment(task_probe.TaskExperiment):
         return worker
 
     def stage(self):
-        # Reuse packaging only, never the receipt fixture's startup/create methods.
-        task_probe.TaskExperiment.stage(self, include_receipts=False)
+        super().stage()
+        # Package the real task and dispatcher alongside the local source transport.
+        # The removed custom-receipt experiment is not a staging dependency.
         jar_path = self.plugin / "synthetic-probe.jar"
-        temporary = jar_path.with_suffix(".tmp")
-        with zipfile.ZipFile(jar_path) as source, zipfile.ZipFile(temporary, "w") as target:
-            for item in source.infolist():
-                if any(name in item.filename for name in ["As400TaskProbeConnector", "As400ProbeReceiptStore", "As400CheckpointReceipts"]):
-                    continue
-                target.writestr(item, source.read(item.filename))
-            classes = ROOT / "debezium-connector-ibmi/target/test-classes"
-            for pattern in ["As400ConnectOwnershipProbeConnector*.class", "As400ConnectBrokerEvidence*.class"]:
-                for path in classes.rglob(pattern):
-                    target.write(path, str(path.relative_to(classes)))
-        temporary.replace(jar_path)
+        with zipfile.ZipFile(jar_path, "w") as jar:
+            seen = set()
+            for module in ["debezium-connector-ibmi", "journal-parsing", "jt400-override-ccsid"]:
+                directory = ROOT / module / "target/classes"
+                for path in directory.rglob("*"):
+                    if path.is_file() and str(path.relative_to(directory)) not in seen:
+                        name = str(path.relative_to(directory))
+                        jar.write(path, name)
+                        seen.add(name)
+            for pattern in ["As400ConnectProbeConnector*.class", "As400ConnectOwnershipProbeConnector*.class", "As400ConnectBrokerEvidence*.class"]:
+                for path in self.test_classes.rglob(pattern):
+                    jar.write(path, str(path.relative_to(self.test_classes)))
+        dependencies = (ROOT / "debezium-connector-ibmi/target/connect-probe-classpath.txt").read_text().strip().split(":")
+        for item in dependencies:
+            path = Path(item)
+            if (("/io/debezium/" in item and not path.name.endswith("-tests.jar")
+                 and not any(x in path.name for x in ["ibmi", "jt400-override"])) or "/io/openlineage/" in item):
+                shutil.copy2(path, self.plugin / path.name)
         with zipfile.ZipFile(jar_path) as jar:
             self.check("candidate artifact excludes custom receipt and owner authority classes",
                        any("As400ConnectOwnershipProbeConnector$RuntimeTask.class" in n for n in jar.namelist()) and
@@ -60,6 +62,7 @@ class OwnershipExperiment(task_probe.TaskExperiment):
         self.report["plugin_sha256"] = {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in self.plugin.iterdir()}
         self.report["harness_sha256"].update({name: hashlib.sha256((ROOT / name).read_bytes()).hexdigest() for name in [
             "tools/dcg-ownership-probe", "tools/dcg-ownership-probe.py",
+            "debezium-connector-ibmi/src/main/java/io/debezium/connector/db2as400/As400BatchDispatcher.java",
             "debezium-connector-ibmi/src/test/java/io/debezium/connector/db2as400/As400ConnectOwnershipProbeConnector.java",
             "debezium-connector-ibmi/src/test/java/io/debezium/connector/db2as400/As400ConnectBrokerEvidence.java"]})
         self.report["scope"] = "Real task/dispatcher; Connect-only publication and offsets; synthetic resume-only source, no native startup proof"

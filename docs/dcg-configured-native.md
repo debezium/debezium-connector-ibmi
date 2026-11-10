@@ -39,7 +39,7 @@ control completion. A LAST row carries a pending offset, never early F/W.
   DATE/TIMESTAMP values have no timezone conversion. Timestamp precision above 9,
   timestamp hour 24, non-ISO layouts, LOB/XML and other layouts remain rejected.
   TIMESTAMP(7–9) also requires a value representable by Debezium's epoch-nanosecond
-  converter; see [temporal validation](dcg-temporal-validation.md). Mixed-column native
+  converter; see [temporal validation](https://github.com/gardnmi/debezium-connector-ibmi/blob/fc4ffaa2aa7bf8acc5d9630d493450391814f8c0/docs/dcg-temporal-validation.md). Mixed-column native
   qualification covers the columns in the validation report, not every possible
   CCSID/type/precision combination. Unsupported metadata fails before output.
 - Both before/after journal images, no minimized images, no removed internal or
@@ -53,7 +53,7 @@ control completion. A LAST row carries a pending offset, never early F/W.
   At most 128 required receivers may be spanned at once. Retired receivers before
   F do not impose a lifetime rotation limit. This does not authorize their deletion.
 - Distributed Kafka Connect **4.2.x or 4.3.x** (primary Debezium 3.8 baseline: 4.3.1;
-  exact local coverage is recorded in [runtime qualification](dcg-upstream-preflight.md)), one task, source transactions enabled on the
+  exact local coverage is recorded in [runtime qualification](https://github.com/gardnmi/debezium-connector-ibmi/blob/fc4ffaa2aa7bf8acc5d9630d493450391814f8c0/docs/dcg-upstream-preflight.md)), one task, source transactions enabled on the
   worker, `exactly.once.support=requested`, `transaction.boundary=connector`.
   The task requires the public `SourceTaskContext.transactionContext()` capability
   and requests a Kafka transaction commit for each nonempty returned poll.
@@ -90,8 +90,8 @@ values were exercised with the complete worker settings retained in the reports,
 including `exactly.once.source.support=enabled` and a policy allowing the declared
 client overrides. The task can verify the public transactional context, but cannot
 inspect every worker setting through `SourceTaskContext`; operators must verify
-the worker configuration. See the [timeout matrix](dcg-timeout-profile-validation.md)
-and the [current validation report](dcg-configured-validation.md). A new timeout,
+the worker configuration. See the [timeout matrix](https://github.com/gardnmi/debezium-connector-ibmi/blob/fc4ffaa2aa7bf8acc5d9630d493450391814f8c0/docs/dcg-timeout-profile-validation.md)
+and the [current validation report](https://github.com/gardnmi/debezium-connector-ibmi/blob/fc4ffaa2aa7bf8acc5d9630d493450391814f8c0/docs/dcg-configured-validation.md). A new timeout,
 broker topology, transport or worker version requires deployment qualification;
 these local values are not a universal recovery SLA.
 
@@ -103,7 +103,7 @@ validation observed this wait beyond 100 seconds and automatic recovery within
 the experiment's 240-second membership budget. A healthy REST endpoint alone
 does not mean the worker has joined or the task has resumed. Account for the
 configured transaction timeout in startup monitoring; do not reset offsets or
-relax committed reads to bypass it. See the [source release checklist](dcg-source-release-checklist.md)
+relax committed reads to bypass it. See the [source release checklist](https://github.com/gardnmi/debezium-connector-ibmi/blob/fc4ffaa2aa7bf8acc5d9630d493450391814f8c0/docs/dcg-source-release-checklist.md)
 for the measured intervals and the distinction between the controlled local
 reproduction and the retained earlier native timeout.
 
@@ -303,10 +303,10 @@ helpers run in separate JVMs and are excluded from the worker plugin path.
 
 The retained report must include source/distribution/plugin hashes, raw broker
 records, exact connector/worker settings, native inventory and cleanup evidence.
-See [configured validation](dcg-configured-validation.md) for the recorded results
-and the [source release checklist](dcg-source-release-checklist.md) for current
+See [configured validation](https://github.com/gardnmi/debezium-connector-ibmi/blob/fc4ffaa2aa7bf8acc5d9630d493450391814f8c0/docs/dcg-configured-validation.md) for the recorded results
+and the [source release checklist](https://github.com/gardnmi/debezium-connector-ibmi/blob/fc4ffaa2aa7bf8acc5d9630d493450391814f8c0/docs/dcg-source-release-checklist.md) for current
 qualification status and extended workload commands. The previous
-[bounded snapshot validation](dcg-bounded-snapshot-validation.md) and stricter
+[bounded snapshot validation](https://github.com/gardnmi/debezium-connector-ibmi/blob/fc4ffaa2aa7bf8acc5d9630d493450391814f8c0/docs/dcg-bounded-snapshot-validation.md) and stricter
 ownership/recovery tests remain applicable to their stated test-entry scopes.
 
 
@@ -337,8 +337,8 @@ payload plus staged raw lifecycle data) and `OldestTransactionAgeInMilliseconds`
 make open transactions visible without conflating them with durable progress.
 Age uses source timestamps and therefore depends on source/worker clock agreement.
 
-See [upstream submission and design decisions](dcg-upstream-submission.md) and
+See [upstream submission and design decisions](https://github.com/gardnmi/debezium-connector-ibmi/blob/fc4ffaa2aa7bf8acc5d9630d493450391814f8c0/docs/dcg-upstream-submission.md) and
 [portable validation](dcg-contributor-testing.md). Historical qualification reports
 remain evidence for their recorded revisions, not blanket qualification of later
-changes. The [temporal validation](dcg-temporal-validation.md) records the separately
+changes. The [temporal validation](https://github.com/gardnmi/debezium-connector-ibmi/blob/fc4ffaa2aa7bf8acc5d9630d493450391814f8c0/docs/dcg-temporal-validation.md) records the separately
 captured layouts, strict rejection cases and snapshot/replay equality coverage.
