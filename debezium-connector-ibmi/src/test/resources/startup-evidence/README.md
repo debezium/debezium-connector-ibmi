@@ -13,4 +13,4 @@ It mutates each tuple component independently between observations and simulates
 reuse of a borrowed raw buffer. Mismatch or failed re-observation yields no read
 result. This does not execute SQL, prove the service returns the starting *FILE
 directory itself, or supply an actual RPC source binding or protection session.
-See the [native identity validation status](https://github.com/gardnmi/debezium-connector-ibmi/blob/fc4ffaa2aa7bf8acc5d9630d493450391814f8c0/docs/dcg-validation.md#native-object-identity-candidate-collection).
+See the [validation scope](../../../../../docs/dcg-validation.md).

@@ -59,9 +59,9 @@ final class As400NativeBoundaryCollector {
     As400NativeBoundaryCollector(JournalReceiver journal, As400JdbcConnectionFactory connections,
                                  As400NativeBindingAcquisition acquisition, RetrieveJournal reader, Runnable checkRunning) {
         this(journal, connections, new As400JournalFileScope(journal, 5), acquisition,
-                new As400OperatorJournalEvidence(connections, journal, new As400OperatorJournalEvidence.Limits(16, 5)),
-                new As400JdbcNativeIdentityEvidence(connections, new As400JdbcNativeIdentityEvidence.Limits(17, 5, 1024)),
-                new As400PendingReceiverEvidence(connections, journal, 16, 5), reader, checkRunning);
+                new As400OperatorJournalEvidence(connections, journal, new As400OperatorJournalEvidence.Limits(1023, 5)),
+                new As400JdbcNativeIdentityEvidence(connections, new As400JdbcNativeIdentityEvidence.Limits(1024, 5, 1024)),
+                new As400PendingReceiverEvidence(connections, journal, 1023, 5), reader, checkRunning);
     }
 
     As400NativeBoundaryCollector(JournalReceiver journal, As400JdbcConnectionFactory connections, As400JournalFileScope scopes,

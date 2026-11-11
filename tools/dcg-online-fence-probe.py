@@ -61,7 +61,7 @@ class Collector:
         for table in tables:
             self.add_table(table, 'before')
         for table in tables:
-            for name in ['columns', 'keys']:
+            for name in ['controls', 'columns', 'keys']:
                 self.add(name, [library, table], 'layout')
         for table in tables:
             self.add_table(table, 'after')
@@ -180,7 +180,7 @@ class Collector:
             for item in self.items:
                 query = {k: item[k] for k in ['name', 'phase', 'parameters', 'sql']}
                 query['rows'] = captured_rows[item['id']]
-                if item['name'] in ['columns', 'keys']:
+                if item['name'] in ['controls', 'columns', 'keys']:
                     query['rows'].sort(key=lambda row: row['ORDINAL_POSITION'])
                 result['queries'].append(query)
             self.complete_capture(result)

@@ -18,7 +18,7 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 class As400ProspectiveReplayTest {
     private ObjectNode fixture() throws Exception {
         try (var input = getClass().getResourceAsStream("/native-transactions/prospective-native.json")) {
-            return (ObjectNode) new ObjectMapper().readTree(input);
+            return As400OnlineFenceEvidenceTest.withUnverifiedAccessControlsForReplay((ObjectNode) new ObjectMapper().readTree(input));
         }
     }
 

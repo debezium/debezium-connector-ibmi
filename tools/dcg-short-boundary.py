@@ -92,16 +92,12 @@ class Pulse:
                 'FILE(*NONE) FORCE(*NO) OVRSTATE(*NONE) OVRRMTFTR(*NONE)')
 
     def statement(self):
-        """One server statement; the only native calls are allocate/marker/release.
+        """One server statement with at most three same-job release attempts.
 
-        Inner EXIT handlers record failure and leave the acquisition/marker block
-        for the common release path. Release has its own handlers so warnings
-        cannot be cleared by later bookkeeping. No release retry is attempted.
-
-        HELD is set only on a clean ALCOBJ return. IBM prohibits blind DLCOBJ after
-        failed allocation. An ambiguous allocation return therefore fails without
-        a marker/result and still requires independent exact-job drain. This SQL
-        alone is not a complete cancellation or ambiguous-acquisition solution.
+        The caller must independently exclude pre-existing matching allocations.
+        Mark attempted allocation before ALCOBJ so an uncertain partial return
+        still reaches cleanup. Any warning/error permanently rejects the attempt,
+        even if a later release succeeds. No metadata runs while locks are held.
         """
         handlers = lambda flag: [f'DECLARE EXIT HANDLER FOR {condition} SET {flag}=1;'
                                  for condition in ('SQLEXCEPTION', 'SQLWARNING', 'NOT FOUND')]
@@ -109,17 +105,21 @@ class Pulse:
                  'DECLARE FAILED SMALLINT DEFAULT 0;', 'DECLARE RELEASE_FAILED SMALLINT DEFAULT 0;',
                  'DECLARE ACQUIRED TIMESTAMP(6);', 'DECLARE RELEASED TIMESTAMP(6);', 'BEGIN']
         lines += handlers('FAILED')
-        lines += [f'CALL QSYS2.QCMDEXC({sql_literal(self.allocate)});', 'SET HELD=1;',
-                  'SET ACQUIRED=CURRENT_TIMESTAMP;', f'CALL QSYS2.QCMDEXC({sql_literal(self.marker)});', 'END;',
-                  'IF HELD=1 THEN', 'BEGIN']
-        lines += handlers('RELEASE_FAILED')
-        lines += [f'CALL QSYS2.QCMDEXC({sql_literal(self.release)});', 'SET HELD=0;',
-                  'SET RELEASED=CURRENT_TIMESTAMP;', 'END;', 'END IF;',
-                  'IF FAILED=0 AND RELEASE_FAILED=0 THEN', 'BEGIN']
+        lines += ['SET HELD=1;', f'CALL QSYS2.QCMDEXC({sql_literal(self.allocate)});',
+                  'SET ACQUIRED=CURRENT_TIMESTAMP;', f'CALL QSYS2.QCMDEXC({sql_literal(self.marker)});', 'END;']
+        for _ in range(3):
+            lines += ['IF HELD=1 THEN', 'SET RELEASE_FAILED=0;', 'BEGIN']
+            lines += handlers('RELEASE_FAILED')
+            lines += [f'CALL QSYS2.QCMDEXC({sql_literal(self.release)});', 'SET HELD=0;',
+                      'SET RELEASED=CURRENT_TIMESTAMP;', 'END;', 'IF RELEASE_FAILED=1 THEN',
+                      'SET FAILED=1;', 'END IF;', 'END IF;']
+        lines += ['IF FAILED=0 AND HELD=0 THEN', 'BEGIN']
         lines += handlers('FAILED')
         lines += [f'INSERT INTO {RESULT_TABLE} VALUES({sql_literal(self.nonce)}, '
                   f'{sql_literal(self.scope_digest)}, ACQUIRED, RELEASED);', 'END;', 'END IF;',
-                  'IF FAILED=1 OR RELEASE_FAILED=1 THEN',
+                  'IF HELD=1 THEN',
+                  "SIGNAL SQLSTATE '75002' SET MESSAGE_TEXT='Pulse release failed; independent drain required';", 'END IF;',
+                  'IF FAILED=1 THEN',
                   "SIGNAL SQLSTATE '75001' SET MESSAGE_TEXT='Pulse failed; independent drain required';", 'END IF;', 'END']
         return '\n'.join(lines)
 

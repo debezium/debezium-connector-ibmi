@@ -1,12 +1,30 @@
 # Native D/CG transaction characterization
 
 Historical `docs/dcg-*.md` references below identify reports in the
-[development archive](https://github.com/gardnmi/debezium-connector-ibmi/tree/fc4ffaa2aa7bf8acc5d9630d493450391814f8c0/docs).
+[validation scope](../../../../../docs/dcg-validation.md).
 Current behavior and test commands are in the [contributor guide](../../../../../docs/dcg-contributor-testing.md).
 
-Captured on isolated edgeqa IBM i 7.5 on 2026-11-07; database group SF99950
+Captured on an isolated IBM i 7.5 test system on 2026-11-07; database group SF99950
 level 11 was installed. These are bounded native observations, not startup proof
 or approval to enable transactional streaming.
+
+`noncommit-after-clear.json` preserves two later isolated native sequences:
+TRUNCATE followed in the same job by `INSERT ... WITH NC`, then COMMIT or
+ROLLBACK. IBM i accepted both inserts with commit cycle zero. COMMIT retained
+the inserted row; ROLLBACK restored the original rows and removed the new row.
+Replaying these bytes must reject the mixed-mode change before any output or
+durable checkpoint advancement. The regression repeats from a fresh coordinator.
+
+`administrative-entries.json` contains native F/OP, F/CL, F/MS, D/DH and D/GT
+records from SELECT, SAVOBJ and GRANT on a file using `OMTJRNE(*NONE)`. They are
+accepted only as validated administrative no-ops in the ordinary profile. In
+particular, the actual F/MS has thread ID zero; no synthetic thread is supplied.
+Identity/payload damage, transaction metadata and the stricter profile still
+reject. The acquired bindings and artificial starting checkpoints in these two
+files support decoder/replay tests, not startup proof. System, user and job
+identifiers are replaced consistently, including embedded payload fields;
+native thread IDs and record layouts are retained. Both source fixtures were
+removed and their absence verified after capture.
 
 `dcg.json` contains seven scenarios with actual subtype 8 TRUNCATE and subtype 3
 optimized DELETE, including commit, full rollback, repeated rollback to a SQL
@@ -30,9 +48,11 @@ additionally records internal F/DE entries omitted by the native retrieval profi
 Sanitization changes fixed-header job, user, program, system and address fields.
 Job numbers and nonempty JIDs are mapped consistently to synthetic values:
 different jobs remain different, and file and member JIDs remain distinct.
-Record numbers, thread IDs, journal/system sequences, timestamps, commit cycles,
-flags, object types, object/member names, entry-specific payloads, savepoint
-targets, null-map offsets/counts and row values are retained. Entry boundaries
+Identifiers embedded in entry-specific payloads are mapped as well as those in
+fixed headers. Record numbers, thread IDs, journal/system sequences, timestamps,
+commit cycles, flags, object types, object/member names, savepoint targets,
+null-map offsets/counts and application row values are retained. All other payload
+bytes are retained; public checksums refer to the sanitized bytes. Entry boundaries
 are made standalone by setting the next-entry displacement to zero. Unused buffer
 tail on a final entry is removed after retaining every declared payload, null map
 and receiver field. Local `fixture-provenance.json` records source page, offset,
@@ -80,7 +100,7 @@ the two policies do not select a production disposition. No fixture, production
 guard or default policy is changed; see `docs/dcg-native-lifecycle-validation.md`.
 
 `statistics-request.json` is a separate 2026-11-08 capture from isolated library
-DCNC7707. It preserves the unmodified owned RJNE0200 bytes of F/CB subtype C at
+DCNC7707. It preserves the owned RJNE0200 layout of F/CB subtype C at
 sequence 183, including actual thread ID, member JID, payload and null-map prefix.
 The ordinary-reader regression accepts it without output or durable F/W movement;
 the strict profile continues to reject it. Its fixed test binding supplies only
@@ -141,7 +161,7 @@ in a connector. `prospective-native.json` is the DCNC0961 prospective-schema
 fixture: native origin 59, actual completed row cut 66, then clear/reload with an
 unrelated row before commit. It includes older C/J history and observed journal,
 receiver, file/member and schema evidence. Both remain `startup_proof=false`.
-See [the validation report](https://github.com/gardnmi/debezium-connector-ibmi/blob/fc4ffaa2aa7bf8acc5d9630d493450391814f8c0/docs/dcg-short-boundary-validation.md#continued-work-late-membership-and-prospective-schema-history)
+See [validation scope](../../../../../docs/dcg-validation.md)
 for capture, cleanup, failed attempts and qualification limits.
 
 `equal-width-alter.json` preserves native DCNC0965 INTEGER -> REAL -> INTEGER
@@ -155,7 +175,7 @@ contains the actual requested scope and SQL program, drained holder evidence,
 before/after metadata, full raw A/N/Z audit, older controls and prospective rows.
 Rows occurred both before and after N while the metadata collector ran. It remains
 `startup_proof=false`; original fixtures are not overwritten or promoted. See
-[the joined-boundary report](https://github.com/gardnmi/debezium-connector-ibmi/blob/fc4ffaa2aa7bf8acc5d9630d493450391814f8c0/docs/dcg-short-boundary-validation.md#joined-boundary-evidence-active-writers-and-schema-replacement)
+[validation scope](../../../../../docs/dcg-validation.md)
 for limits, rejected attempts and native/local testing distinctions.
 
 `pending-receiver-boundary.json` preserves the actual pending-receiver samples,
@@ -169,3 +189,22 @@ proof. Regression mutations exercise observations outside the audit interval,
 receiver replacement, incomplete pages, missing records and unknown pending flags.
 Fixture cleanup was verified. See `docs/dcg-native-startup-collection.md` for the
 exact live-versus-local verification boundary.
+
+
+The review corrections add five focused capture files. Their JSON records include
+sanitized bytes and recomputed SHA-256 values. Like all fixtures here, their table
+bindings are explicit test inputs, not proof that a runtime object has that identity.
+
+| Fixture | Native observations and regression boundary |
+| --- | --- |
+| `noncommit-after-clear.json` | The clearing job inserted with commitment control disabled before COMMIT or ROLLBACK. The buffer rejects a cycle-zero/different-cycle row on a table with an open clear; unrelated-table output remains allowed. |
+| `administrative-entries.json` | File open/close, save and authority-grant entries. Identity, cycle, flags and complete payload are checked before accepting a metadata-only entry. |
+| `record-limit.json` | R/IL from growing a file beyond its initial record limit. The exact eight-byte internal layout is not decoded as a row. |
+| `save-while-active.json` | D/DW and F/SS from an actual save-while-active operation, along with save completion records. Restore and storage-freed saves are outside this acceptance. |
+| `reorganization.json` | Classic RGZPFM after creating a physical hole: F/RG and F/RM subtype E. Declared primary-key capture can continue; RRN keys and concurrent subtype F remain rejected. |
+
+The ordinary runtime tests replay these through the actual lifecycle classifier,
+strict row normalizer and recovery coordinator. Accepted administrative entries do
+not publish records, resolve transactions, remove pending before-images or advance
+completed-output W. Malformed, wrong-identity and unsupported variants remain
+negative tests. The original strict-profile tests still reject these entries.

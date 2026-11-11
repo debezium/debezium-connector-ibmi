@@ -18,6 +18,9 @@ import org.apache.kafka.connect.source.SourceRecord;
 
 /** Ordered commit barrier used by admitted transactional Kafka Connect source tasks. */
 final class As400RecoveryAcknowledgements {
+    static final String DELIVERY_HEADER = "__debezium.ibmi.delivery";
+    private final String deliverySession = java.util.UUID.randomUUID().toString();
+    private long deliveryOrdinal;
     private final Map<SourceRecord, String> pending = new IdentityHashMap<>();
     private final Map<SourceRecord, String> durable = new IdentityHashMap<>();
     private final List<SourceRecord> order = new ArrayList<>();
@@ -43,6 +46,10 @@ final class As400RecoveryAcknowledgements {
         // launcher. These connector settings alone do NOT qualify another runtime.
     }
 
+    synchronized int pendingCount() {
+        return order.size();
+    }
+
     synchronized void register(SourceRecord record) {
         register(record, false);
     }
@@ -52,6 +59,12 @@ final class As400RecoveryAcknowledgements {
         if (order.size() >= 10000 || pending.containsKey(record) || durable.containsKey(record)) {
             throw new IllegalStateException("Duplicate acknowledgement registration");
         }
+        if (record.headers().lastWithName(DELIVERY_HEADER) != null) {
+            throw new IllegalStateException("Recovery delivery header is reserved");
+        }
+        // Connect's EOS worker keys acknowledgements by SourceRecord.equals.
+        // Repeated same-key tombstones with a frozen F/W must remain distinct.
+        record.headers().addString(DELIVERY_HEADER, deliverySession + ":" + ++deliveryOrdinal);
         pending.put(record, null);
         order.add(record);
         if (snapshotChunk) {
@@ -102,7 +115,16 @@ final class As400RecoveryAcknowledgements {
     }
 
     synchronized String await(SourceRecord record, Duration timeout, Runnable check) throws InterruptedException {
-        long end = System.nanoTime() + timeout.toNanos();
+        return awaitInternal(record, timeout, check);
+    }
+
+    /** Paused or backpressured streaming has no elapsed-time durability failure. */
+    synchronized String awaitUntilStopped(SourceRecord record, Runnable check) throws InterruptedException {
+        return awaitInternal(record, null, check);
+    }
+
+    private String awaitInternal(SourceRecord record, Duration timeout, Runnable check) throws InterruptedException {
+        long end = timeout == null ? 0 : System.nanoTime() + timeout.toNanos();
         while (true) {
             check.run();
             requireActive();
@@ -121,7 +143,7 @@ final class As400RecoveryAcknowledgements {
             if (!pending.containsKey(record)) {
                 throw new IllegalStateException("Unregistered acknowledgement barrier");
             }
-            long remaining = end - System.nanoTime();
+            long remaining = timeout == null ? 100_000_000L : end - System.nanoTime();
             if (remaining <= 0) {
                 throw new IllegalStateException("Uncertain durable acknowledgement");
             }

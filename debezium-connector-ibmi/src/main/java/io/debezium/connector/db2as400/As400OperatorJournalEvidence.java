@@ -27,6 +27,7 @@ final class As400OperatorJournalEvidence {
                    REMOVE_INTERNAL_ENTRIES, REMOVE_FIXED_LENGTH_DETAIL, MINIMIZE_ESD_FOR_FILES, JOURNAL_CACHE
             FROM QSYS2.JOURNAL_INFO WHERE JOURNAL_LIBRARY = ? AND JOURNAL_NAME = ?
             """;
+    static final String RETAINED_JOURNAL_SQL = JOURNAL_SQL.replace("JOURNAL_CACHE", "JOURNAL_CACHE, DELETE_RECEIVER_OPTION");
     static final String RECEIVERS_SQL = """
             SELECT JOURNAL_LIBRARY, JOURNAL_NAME, JOURNAL_RECEIVER_LIBRARY, JOURNAL_RECEIVER_NAME,
                    JOURNAL_RECEIVER_ASP_NUMBER, STATUS, FIRST_SEQUENCE_NUMBER, LAST_SEQUENCE_NUMBER,
@@ -73,12 +74,24 @@ final class As400OperatorJournalEvidence {
     private final JournalReceiver journal;
     private final Limits limits;
     private final boolean currentOnly;
+    private final boolean requireRetention;
 
     As400OperatorJournalEvidence(As400JdbcConnectionFactory connections, JournalReceiver journal, Limits limits) {
         this(connections, journal, limits, false);
     }
 
     As400OperatorJournalEvidence(As400JdbcConnectionFactory connections, JournalReceiver journal, Limits limits, boolean currentOnly) {
+        this(connections, journal, limits, currentOnly, false);
+    }
+
+    /** Task-owned observations additionally qualify retention on the same native query. */
+    static As400OperatorJournalEvidence retained(As400JdbcConnectionFactory connections, JournalReceiver journal, Limits limits) {
+        return new As400OperatorJournalEvidence(connections, journal, limits, true, true);
+    }
+
+    private As400OperatorJournalEvidence(As400JdbcConnectionFactory connections, JournalReceiver journal, Limits limits,
+                                         boolean currentOnly, boolean requireRetention) {
+        this.requireRetention = requireRetention;
         this.currentOnly = currentOnly;
         this.connections = Objects.requireNonNull(connections);
         this.journal = names(journal.library(), journal.name());
@@ -174,7 +187,7 @@ final class As400OperatorJournalEvidence {
     }
 
     private List<JournalReceiver> attachment(Connection connection) throws SQLException {
-        return query(connection, JOURNAL_SQL, 1, row -> {
+        return query(connection, requireRetention ? RETAINED_JOURNAL_SQL : JOURNAL_SQL, 1, row -> {
             exactJournal(row);
             exact(row, "JOURNAL_TYPE", "*LOCAL");
             exact(row, "JOURNAL_STATE", "*ACTIVE");
@@ -185,6 +198,11 @@ final class As400OperatorJournalEvidence {
             exact(row, "MINIMIZE_ESD_FOR_FILES", "NO");
             // The first ordinary profile rejects caching; a delay alone is not a durable-tail proof.
             exact(row, "JOURNAL_CACHE", "NO");
+            // Observe retention on this same exact journal row. A second query
+            // adds a native round trip without strengthening this observation.
+            if (requireRetention) {
+                exact(row, "DELETE_RECEIVER_OPTION", "NO");
+            }
             return names(text(row, "ATTACHED_JOURNAL_RECEIVER_LIBRARY"), text(row, "ATTACHED_JOURNAL_RECEIVER_NAME"));
         });
     }

@@ -28,10 +28,10 @@ class As400ShortBoundaryEvidenceTest {
     @Test
     void actualNativeScopePulseAuditAndHandoffJoinWithoutCallerSuppliedOriginAuthority() throws Exception {
         var fixture = fixture();
-        var observed = As400ShortBoundaryEvidence.validate(fixture.get("boundary"));
+        var observed = As400ShortBoundaryEvidence.validate(fixture.get("boundary"), As400OnlineFenceEvidenceTest::replayMetadata);
         assertThat(observed.origin().offset().intValueExact()).isEqualTo(72);
         assertThat(observed.auditedThrough().offset().intValueExact()).isEqualTo(84);
-        var result = As400ProspectiveReplay.verify(fixture);
+        var result = As400ProspectiveReplay.verify(fixture, As400OnlineFenceEvidenceTest::replayMetadata);
         assertThat(result).containsEntry("status", "verified-offline").containsEntry("startup_proof", false);
         var recovery = new ObjectMapper().valueToTree(result.get("recovery"));
         assertThat(recovery.path("cases")).hasSize(23).allSatisfy(c -> assertThat(c.path("status").asText()).isEqualTo("passed"));
@@ -70,6 +70,6 @@ class As400ShortBoundaryEvidenceTest {
             }
             default -> throw new AssertionError(fault);
         }
-        assertThatThrownBy(() -> As400ProspectiveReplay.verify(fixture)).isInstanceOf(Exception.class);
+        assertThatThrownBy(() -> As400ProspectiveReplay.verify(fixture, As400OnlineFenceEvidenceTest::replayMetadata)).isInstanceOf(Exception.class);
     }
 }

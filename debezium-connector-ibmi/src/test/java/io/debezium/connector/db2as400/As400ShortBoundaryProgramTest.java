@@ -20,7 +20,7 @@ import io.debezium.ibmi.db2.journal.retrieve.JournalReceiver;
 
 class As400ShortBoundaryProgramTest {
     @Test
-    void rendersTheExactProgramThatWasExecutedOnTheNativeServer() throws Exception {
+    void shouldRetainCapturedMarkerContractAndAddBoundedReleaseForPartialAllocation() throws Exception {
         try (var stream = getClass().getResourceAsStream("/native-transactions/prospective-boundary.json")) {
             var captured = new ObjectMapper().readTree(stream).path("boundary");
             String library = captured.path("request").path("library").asText();
@@ -28,8 +28,13 @@ class As400ShortBoundaryProgramTest {
                     .map(t -> new As400ShortBoundaryProgram.Target(library, t.get(0).asText(), t.get(1).asText())).toList();
             var program = new As400ShortBoundaryProgram(new JournalReceiver("QSQJRN", library), targets,
                     captured.path("request").path("nonce").asText(), captured.path("pulse").path("result_rows").get(0).path("SCOPE_DIGEST").asText());
-            assertThat(program.statement()).isEqualTo(captured.path("statement").asText());
-            assertThat(program.programDigest()).isEqualTo(captured.path("pulse").path("program_sha256").asText());
+            // Preserve original native evidence. It predates the release fix and
+            // cannot attest to the new program's native execution.
+            assertThat(program.statement()).isNotEqualTo(captured.path("statement").asText());
+            assertThat(program.programDigest()).isNotEqualTo(captured.path("pulse").path("program_sha256").asText());
+            assertThat(program.statement().indexOf("SET HELD=1;")).isLessThan(program.statement().indexOf("CALL QSYS2.QCMDEXC('ALCOBJ"));
+            assertThat(program.statement().split("CALL QSYS2.QCMDEXC\\('DLCOBJ", -1)).hasSize(4);
+            assertThat(program.statement()).contains("IF HELD=1 THEN\nSIGNAL SQLSTATE '75002'", "IF FAILED=0 AND HELD=0 THEN");
             assertThat(program.opening()).contains("FORCE(*NO)");
             assertThat(program.closing()).contains("FORCE(*YES)");
             assertThat(program.statement()).doesNotContain("SELECT", "FORCE(*YES)", "COMMIT", "ROLLBACK");

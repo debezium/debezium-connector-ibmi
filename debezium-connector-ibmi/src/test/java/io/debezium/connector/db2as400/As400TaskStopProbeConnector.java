@@ -127,8 +127,7 @@ public class As400TaskStopProbeConnector extends As400ConnectOwnershipProbeConne
                     .pollInterval(Duration.ofMillis(10)).loggingContextSupplier(() -> taskContext.configureLoggingContext("probe")).build();
             errors = new ErrorHandler(As400RpcConnector.class, config, output, null);
             // A test fixture injection, not a runtime option or an alternate implementation of doPoll().
-            inject("queue", output);
-            inject("errorHandler", errors);
+            initializeOutput(output, errors);
             As400OffsetContext source = new As400OffsetContext(config, new JournalProcessedPosition(BigInteger.ONE, RECEIVER, Instant.EPOCH, true));
             FixtureSchema schema = new FixtureSchema(source);
             CompleteRowEntryDecoder decoder = new CompleteRowEntryDecoder(new AS400DataType[]{ new AS400Bin4() }, new boolean[]{ false }, 64);
@@ -303,17 +302,6 @@ public class As400TaskStopProbeConnector extends As400ConnectOwnershipProbeConne
             }
             if (Files.readString(CONTROL.resolve("terminal-mode")).trim().endsWith("error")) {
                 throw new java.io.IOException("controlled late transport error");
-            }
-        }
-
-        private void inject(String name, Object value) {
-            try {
-                java.lang.reflect.Field field = As400ConnectorTask.class.getDeclaredField(name);
-                field.setAccessible(true);
-                field.set(this, value);
-            }
-            catch (ReflectiveOperationException e) {
-                throw new IllegalStateException(e);
             }
         }
 

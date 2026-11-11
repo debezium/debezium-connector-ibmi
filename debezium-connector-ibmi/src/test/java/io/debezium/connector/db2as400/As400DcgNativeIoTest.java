@@ -28,6 +28,46 @@ import io.debezium.config.Configuration;
 import io.debezium.ibmi.db2.journal.retrieve.JournalReadLifecycle;
 
 class As400DcgNativeIoTest {
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(booleans = { false, true })
+    void shouldBoundNativeCloseWithoutCertifyingHeldWorkOrReopeningAdmission(boolean heldCancellation) throws Exception {
+        var held = new CountDownLatch(1);
+        var release = new CountDownLatch(1);
+        try (var readers = org.mockito.Mockito.mockConstruction(io.debezium.ibmi.db2.journal.retrieve.RetrieveJournal.class,
+                (reader, context) -> org.mockito.Mockito.doAnswer(call -> {
+                    if (heldCancellation) {
+                        held.countDown();
+                        assertThat(release.await(10, TimeUnit.SECONDS)).isTrue();
+                    }
+                    return null;
+                }).when(reader).cancelJob())) {
+            var io = new As400DcgNativeIo(new As400DcgConfig(Configuration.from(As400DcgConfigTest.properties())));
+            var lease = heldCancellation ? null : io.lifecycle.enter();
+            try {
+                io.requestStop();
+                if (heldCancellation) {
+                    assertThat(held.await(5, TimeUnit.SECONDS)).isTrue();
+                }
+                assertThat(assertThrows(IllegalStateException.class, () -> io.closeWithin(java.time.Duration.ofMillis(20))))
+                        .hasMessageContaining("deadline exceeded").hasMessageContaining("drain unverified");
+                assertThat(io.lifecycle.isStopped()).isTrue();
+                assertThrows(SQLException.class, () -> io.connection(false));
+                var replacement = new JournalReadLifecycle();
+                try (var admitted = replacement.enter()) {
+                    replacement.checkOpen();
+                }
+            }
+            finally {
+                release.countDown();
+                if (lease != null) {
+                    lease.close();
+                }
+                io.closeWithin(java.time.Duration.ofSeconds(5));
+            }
+            verify(readers.constructed().get(0)).cancelJob();
+        }
+    }
+
     @Test
     void legacyJdbcConstructionFailureClosesItsAdmittedNativeConnection() throws Exception {
         var lifecycle = new JournalReadLifecycle();
@@ -60,7 +100,7 @@ class As400DcgNativeIoTest {
             assertThat(setup.getSuppressed()).hasSize(1);
             var drain = assertThrows(IllegalStateException.class, io::close);
             assertThat(drain.getMessage()).contains("drain unverified");
-            assertThat(drain.getCause().getMessage()).isEqualTo("close failed");
+            assertThat(drain).hasRootCauseMessage("close failed");
             assertThat(io.lifecycle.isStopped()).isTrue();
             assertThrows(SQLException.class, () -> io.connection(false));
             verify(raw).close();
@@ -194,28 +234,15 @@ class As400DcgNativeIoTest {
     }
 
     @Test
-    void failedNativeCloseDoesNotClaimDrain() throws Exception {
+    void failedNativeCloseReportsUnverifiedCleanupInsteadOfLeakingTheDrainLease() throws Exception {
         var lifecycle = new JournalReadLifecycle();
         var raw = mock(Connection.class);
-        doThrow(new SQLException("still open")).doNothing().when(raw).close();
+        doThrow(new SQLException("still open")).when(raw).close();
         var guarded = (Connection) As400DcgNativeIo.guard(raw, lifecycle, lifecycle.enter());
-        lifecycle.requestStop();
         assertThrows(SQLException.class, guarded::close);
-        var pool = Executors.newSingleThreadExecutor();
-        var started = new CountDownLatch(1);
-        try {
-            var drain = pool.submit(() -> {
-                started.countDown();
-                lifecycle.awaitDrained();
-            });
-            assertThat(started.await(5, TimeUnit.SECONDS)).isTrue();
-            assertThat(drain.isDone()).isFalse();
-            guarded.close();
-            drain.get(5, TimeUnit.SECONDS);
-        }
-        finally {
-            guarded.close();
-            pool.shutdownNow();
-        }
+        var failure = assertThrows(IllegalStateException.class, lifecycle::awaitDrained);
+        assertThat(failure).hasMessageContaining("drain unverified").hasRootCauseMessage("still open");
+        assertThat(lifecycle.isStopped()).isTrue();
+        assertThrows(java.io.IOException.class, lifecycle::enter);
     }
 }

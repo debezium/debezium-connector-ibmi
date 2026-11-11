@@ -23,8 +23,21 @@ allocate/marker/release program briefly requests write-excluding locks on the
 **whole discovered journal scope**, including files filtered out of output.
 Metadata queries, Kafka writes and acknowledgements run outside that interval.
 A busy allocation is released and deferred while ordinary CDC continues. An
-unqualified audit can be retried; uncertain release, changed identity, missing
-history and unsupported records fail rather than authorize a boundary.
+unqualified audit, unsupported table layout or stale unpublished candidate is
+deferred with logged exponential backoff while legacy CDC continues. It never
+authorizes a boundary. After a handoff barrier is offered, uncertain acknowledgement
+or invalid recovery history fails; that candidate can no longer be replaced.
+
+Online binding proposals have a bounded eligible history prefix: at most 1,024
+records and 16 MiB in total, with a 4 MiB limit per record. The writer checks
+capacity before appending and reads its exact proposal back before offering a
+handoff. If an old worker races the capacity check, an append beyond this prefix
+cannot become a selected boundary or invalidate an earlier acknowledged one.
+Invalid or missing records within the eligible prefix still fail recovery.
+On capacity exhaustion, the task logs the refusal, stops requesting new boundaries
+and continues legacy CDC. Restarting does not free capacity. Preserve the history
+and offsets; no automatic compaction, history reset or retention release is allowed.
+These proposal rules do not relax the stricter operator-window history checks.
 
 After the completed legacy output barrier is durable in Kafka Connect, the task
 can publish the new recovery checkpoint. The immutable binding history alone
@@ -51,13 +64,24 @@ feature on a busy journal may defer admission for an unbounded time. Application
 must not rely on transactional clears being captured until handoff completes.
 This change cannot repair clears missed before its accepted boundary.
 
+A failed `DLCOBJ` must not be treated as a released lock. The server program makes
+three bounded release attempts; after an explicit terminal release failure, the
+client attempts one exact release on the same job. An uncertain network response
+is never retried. Independent lock observation is required before accepting a
+candidate. Job-scoped locks can survive closing a pooled SQL connection. If release
+cannot be verified, the task reports the owning job and fails; an operator must
+verify that job's locks and release only the connector-owned allocation. Repeatedly
+restarting the connector does not prove those locks are gone. `CONFLICT(*RQSRLS)`
+can close conflicting pseudo-closed cursors, causing applications to reopen them.
+
 ## Admission requirements
 
 Use the common [runtime, output and retention contract](dcg-configured-native.md),
 with these online-specific differences:
 
-- A complete processed legacy offset and completed snapshot, or the matching
+- A complete legacy offset and completed snapshot, or the matching
   version-5 online history and durable F/W checkpoint, must already exist.
+  An unprocessed anchor is replayed before it can acknowledge a boundary.
   Missing, partial, foreign or incompatible offsets reject. `snapshot.mode=initial`
   remains required but does not request another snapshot when the existing offset
   is admitted. Do not clear offsets or discard history to work around rejection.
@@ -67,13 +91,22 @@ with these online-specific differences:
 - Set `dcg.journal=LIBRARY/JOURNAL` and `dcg.retention=operator-managed`. Retain the
   legacy starting receiver, the discovered transaction history and every receiver
   subsequently required by F/W. No automated retention release is granted.
+  Task-owned native journal observations require
+  `JOURNAL_INFO.DELETE_RECEIVER_OPTION=NO`; automatic deletion can remove a
+  receiver still needed for replay. The setting cannot prevent manual history
+  deletion. Older captured journal observations alone are not retention evidence.
 - The current online scope is one active local journal in system ASP 1 with at
   most 50 single-member physical files. Every discovered file must have a supported
   fixed schema and declared primary key, even when filtered from output. The
   online mode rejects RRN key conversion, LOB/XML and unsupported physical layouts.
   Changes to schemas, journaling, capture selection or output identity require a
   separately validated transition; this is not dynamic schema evolution.
-- Use distributed Kafka Connect 4.2.x or 4.3.x, one task, worker source transactions
+  Both `OMTJRNE(*NONE)` and `OMTJRNE(*OPNCLO)` are supported. Complete before/after
+  images remain mandatory; the clear's matched journaling companions cannot enable
+  remote filtering or inheritance. Ordinary open/close records are identity-checked
+  metadata, not table changes or transaction completion.
+- Use distributed Kafka Connect compatible with the connector's Debezium version
+  (locally tested: 4.2.0 and 4.3.1), one task, worker source transactions
   enabled, `exactly.once.support=requested`, `transaction.boundary=connector`,
   `provide.transaction.metadata=false`, `skipped.operations=none`, positive
   heartbeats, and FAIL/no-tolerance processing and conversion. Exactly-once source
@@ -82,6 +115,21 @@ with these online-specific differences:
 - Keep the qualified standard converters, naming, keys, tombstones and type
   handling consistent across workers. The online fingerprint also pins the
   native database catalog used by the existing topic names.
+  Keep the existing topic naming strategy, character trim mode and time precision;
+  enabling this option does not require changing those ordinary defaults.
+  Native output now shares the ordinary character cleanup and trimming converter.
+  Online temporal output also preserves the actual legacy JT400 decoder's time-zone
+  behavior, including its existing quirks. All workers must retain the same JVM
+  time zone and time-zone rules; both are fingerprinted. This transition does not
+  silently correct already-published DATE/TIME/TIMESTAMP values. Online migration
+  rejects timestamp precision other than six because the old timestamp byte decoder
+  has a fixed width. The operator-window profile retains its timezone-free decoder.
+  Earlier experimental native output fingerprints (`native-configured-v1` and
+  `native-online-candidate-v2`, and online histories without the
+  `legacy-jt400-v1` temporal policy) are incompatible with this correction. Preserve
+  their history and offsets; do not reset or edit them to bypass rejection.
+  They require an explicit data migration or a new isolated generation, not a
+  silent restart. Ordinary legacy offsets do not use those native fingerprints.
 - Precreate distinct single-partition data topics, the configured schema-history
   topic, heartbeat topic, and `__debezium-truncate.<topic.prefix>`. Internal clients
   cannot create them on observation. Retain all binding history without compaction
@@ -113,10 +161,16 @@ snapshot, durable handoff, open clear and receiver rotation, task crash/reassign
 rollback suppression, committed truncate-before-reload, optimized DELETE subtypes,
 mixed values and completed drain. Raw journal and independent read-committed Kafka
 evidence are retained. The stricter deterministic crash-boundary tests remain in
-[task-owned boundary verification](https://github.com/gardnmi/debezium-connector-ibmi/blob/fc4ffaa2aa7bf8acc5d9630d493450391814f8c0/docs/dcg-task-owned-boundary-validation.md).
+[validation scope](dcg-contributor-testing.md).
 
 This is a bounded qualification profile, not validation of every IBM i release,
 CCSID, schema, Kafka topology or operational failure. See the
 [validation scope and recorded native results](dcg-validation.md) for what actually ran
 and what remains untested. The ordinary-plugin native qualification passed in
 the documented profile; the public option remains off by default.
+
+Native journal metadata also requires an API job with CCSID 37. Its request and
+response codecs are explicit, so a German, Danish or Japanese worker locale does
+not reinterpret object names. This does not change column CCSIDs. Existing
+experimental native fingerprints without this metadata policy reject; ordinary
+legacy offsets can still be considered for a newly qualified handoff.

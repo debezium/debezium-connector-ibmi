@@ -154,9 +154,11 @@ public class As400ConnectOwnershipProbeConnector extends As400ConnectProbeConnec
             String runtime = org.apache.kafka.common.utils.AppInfoParser.getVersion();
             boolean configuredBoundary = "connector".equals(raw.getString("transaction.boundary"));
             if (configuredBoundary) {
-                // Use the real runtime admission check as well as the real task
-                // commit path; only the source/provider is synthetic here.
-                As400DcgConfig.requireRuntimeVersion(runtime);
+                // Keep this experiment pinned to its tested matrix, in addition
+                // to requiring the public transaction capability and real task commit path.
+                if (!runtime.matches("4\\.[23]\\.[0-9]+")) {
+                    throw new IllegalStateException("Local probe requires its qualified Kafka 4.2/4.3 matrix: " + runtime);
+                }
                 java.util.Objects.requireNonNull(context.transactionContext());
             }
             topic = raw.getString("probe.topic");
@@ -176,12 +178,11 @@ public class As400ConnectOwnershipProbeConnector extends As400ConnectProbeConnec
                     .pollInterval(Duration.ofMillis(10)).loggingContextSupplier(() -> taskContext.configureLoggingContext("probe")).build();
             errors = new ErrorHandler(As400RpcConnector.class, config, output, null);
             // A test fixture injection, not a runtime option or an alternate implementation of doPoll().
-            inject("queue", output);
-            inject("errorHandler", errors);
+            initializeOutput(output, errors);
             if ("connector".equals(raw.getString("transaction.boundary"))) {
                 // Exercise the actual configured doPoll commit request. Synthetic
                 // source admission only; no native provider or new production seam.
-                inject("configuredTransactions", java.util.Objects.requireNonNull(context.transactionContext()));
+                configureTransactions(java.util.Objects.requireNonNull(context.transactionContext()));
             }
             As400OffsetContext source = new As400OffsetContext(config, new JournalProcessedPosition(BigInteger.ONE, RECEIVER, Instant.EPOCH, true));
             FixtureSchema schema = new FixtureSchema(source);
@@ -245,17 +246,6 @@ public class As400ConnectOwnershipProbeConnector extends As400ConnectProbeConnec
         private List<As400ConnectProbeConnector.Event> mixedEvents() {
             return List.of(event(2, "C/SC", 10, 0), event(3, "D/CG", 10, 8), event(4, "R/PT", 10, 1),
                     event(5, "R/UB", 10, 1), event(6, "R/UP", 10, 2), event(7, "R/DL", 10, 2), event(8, "R/PT", 10, 3), event(9, "C/CM", 10, 0));
-        }
-
-        private void inject(String name, Object value) {
-            try {
-                java.lang.reflect.Field field = As400ConnectorTask.class.getDeclaredField(name);
-                field.setAccessible(true);
-                field.set(this, value);
-            }
-            catch (ReflectiveOperationException e) {
-                throw new IllegalStateException(e);
-            }
         }
 
         private boolean enqueue(SourceRecord record) throws Exception {

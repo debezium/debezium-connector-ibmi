@@ -62,6 +62,26 @@ public class As400ConnectorTask extends BaseSourceTask<As400Partition, As400Offs
     private volatile As400RecoverySource recoverySource;
     private org.apache.kafka.connect.source.TransactionContext configuredTransactions;
 
+    // Typed lifecycle seams also let local transports exercise the real task.
+    final void initializeOutput(ChangeEventQueue<DataChangeEvent> queue, ErrorHandler errorHandler) {
+        this.queue = java.util.Objects.requireNonNull(queue);
+        this.errorHandler = java.util.Objects.requireNonNull(errorHandler);
+    }
+
+    final void initializeConnections(As400RpcConnection rpc, As400JdbcConnection jdbc) {
+        this.rpcConnection = rpc;
+        this.jdbcConnection = jdbc;
+    }
+
+    final void configureTransactions(org.apache.kafka.connect.source.TransactionContext transactions) {
+        this.configuredTransactions = transactions;
+    }
+
+    final int pendingAcknowledgementCount() {
+        var recovery = recoverySource;
+        return recovery == null ? 0 : recovery.pendingAcknowledgementCount();
+    }
+
     /** No configuration flag selects this path. Only an in-package test task supplies admission. */
     As400TaskRecovery recoveryForTesting(Configuration config) {
         return null;
@@ -95,7 +115,7 @@ public class As400ConnectorTask extends BaseSourceTask<As400Partition, As400Offs
                 var admission = As400DcgConfig.transactionalTruncateEnabled(config)
                         ? new As400DcgSession.Admission(As400NativeHandoffSession.open(connectorConfig, context, taskContext), null)
                         : As400DcgSession.open(config, context);
-                configuredTransactions = context.transactionContext();
+                configureTransactions(context.transactionContext());
                 return startRecovery(config, admission.recovery(), admission.initialization());
             }
             catch (Exception error) {
@@ -156,7 +176,7 @@ public class As400ConnectorTask extends BaseSourceTask<As400Partition, As400Offs
                 .pollDispatchInterval(connectorConfig.getPollDispatchInterval())
                 .loggingContextSupplier(() -> taskContext.configureLoggingContext(CONTEXT_NAME)).build();
 
-        errorHandler = new ErrorHandler(As400RpcConnector.class, connectorConfig, queue, null);
+        errorHandler = new As400ErrorHandler(connectorConfig, queue);
 
         final SnapshotterService snapshotterService = connectorConfig.getServiceRegistry().tryGetService(SnapshotterService.class);
 
@@ -195,7 +215,7 @@ public class As400ConnectorTask extends BaseSourceTask<As400Partition, As400Offs
                 DocumentReader.defaultReader(),
                 previousOffsetPartition);
 
-        final EventDispatcher<As400Partition, TableId> dispatcher = new EventDispatcher<>(connectorConfig, // CommonConnectorConfig
+        final EventDispatcher<As400Partition, TableId> dispatcher = new As400EventDispatcher(connectorConfig, // CommonConnectorConfig
                 topicNamingStrategy, // TopicSelector
                 schema, // DatabaseSchema
                 queue, // ChangeEventQueue
@@ -250,7 +270,7 @@ public class As400ConnectorTask extends BaseSourceTask<As400Partition, As400Offs
                             if (configuredTransactions == null) {
                                 throw new IllegalArgumentException("Legacy handoff requires actual connector-managed transactions");
                             }
-                            As400LegacyHandoff.position(As400LegacyHandoff.strings(saved));
+                            As400LegacyHandoff.startingPosition(As400LegacyHandoff.strings(saved));
                             legacyStart.set(Map.copyOf(saved));
                             return new As400OffsetContext.Loader(connectorConfig).load(saved);
                         }
@@ -271,7 +291,7 @@ public class As400ConnectorTask extends BaseSourceTask<As400Partition, As400Offs
                     .queueProvider(connectorConfig.getServiceRegistry().tryGetService(QueueProviderService.class).getQueueProvider())
                     .pollInterval(connectorConfig.getPollInterval()).pollDispatchInterval(connectorConfig.getPollDispatchInterval())
                     .loggingContextSupplier(() -> taskContext.configureLoggingContext(CONTEXT_NAME)).build();
-            errorHandler = new ErrorHandler(As400RpcConnector.class, connectorConfig, queue, null) {
+            errorHandler = new As400ErrorHandler(connectorConfig, queue) {
                 @Override
                 protected boolean hasMoreRetries() {
                     // Recovery/acknowledgement uncertainty needs fresh admission,
@@ -412,6 +432,13 @@ public class As400ConnectorTask extends BaseSourceTask<As400Partition, As400Offs
 
     @Override
     protected void doStop() {
+        // Request terminal admission before closing JDBC. Closing must start
+        // before the RPC lease wait because that lease can cover JDBC metadata.
+        if (rpcConnection != null) {
+            rpcConnection.requestStop();
+        }
+        Thread jdbcCloser = startJdbcClose();
+        long deadline = System.nanoTime() + java.time.Duration.ofSeconds(30).toNanos();
         try {
             if (recoverySource != null) {
                 recoverySource.close();
@@ -421,14 +448,48 @@ public class As400ConnectorTask extends BaseSourceTask<As400Partition, As400Offs
             }
         }
         finally {
-            if (jdbcConnection != null) {
-                try {
-                    jdbcConnection.close();
-                }
-                catch (java.sql.SQLException e) {
-                    LOGGER.warn("Failed to close task JDBC connection", e);
-                }
+            awaitJdbcClose(jdbcCloser, deadline);
+            // An admitted connect may have completed after the first close.
+            // Once the RPC/JDBC retry lease drains, close that handle too.
+            if (jdbcCloser != null && !jdbcCloser.isAlive()) {
+                awaitJdbcClose(startJdbcClose(), deadline);
             }
+        }
+    }
+
+    private Thread startJdbcClose() {
+        if (jdbcConnection == null) {
+            return null;
+        }
+        var closing = jdbcConnection;
+        Thread thread = new Thread(() -> {
+            try {
+                closing.close();
+            }
+            catch (java.sql.SQLException e) {
+                LOGGER.warn("Failed to close task JDBC connection", e);
+            }
+        }, "ibmi-jdbc-stop");
+        thread.setDaemon(true);
+        thread.start();
+        return thread;
+    }
+
+    private void awaitJdbcClose(Thread closing, long deadline) {
+        if (closing == null) {
+            return;
+        }
+        try {
+            long remaining = deadline - System.nanoTime();
+            if (remaining > 0) {
+                closing.join(Math.max(1, remaining / 1_000_000));
+            }
+        }
+        catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+        if (closing.isAlive()) {
+            LOGGER.warn("Task JDBC close is still pending after the stop deadline; cleanup is not verified");
         }
     }
 

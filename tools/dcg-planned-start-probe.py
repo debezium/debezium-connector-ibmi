@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # Copyright Debezium Authors. Licensed under the Apache License, Version 2.0.
-"""Bounded planned first-start window: owned edgeqa library and local Kafka only."""
+"""Bounded planned first-start window: owned IBM i test library and local Kafka only."""
 import hashlib
 import importlib.util
 import json

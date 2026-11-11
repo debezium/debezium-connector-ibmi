@@ -157,7 +157,7 @@ public final class As400PackagedProbeAudit {
         List<Map<String, Object>> result = new ArrayList<>();
         try (var source = new As400NativeConnectSource(credentials, library, Path.of("/control"), "broker:9092", "unused-audit");
                 var connection = source.connection(false)) {
-            // connection() verifies AEQA. This audit never creates history, takes
+            // connection() verifies the configured server. This audit never creates history, takes
             // source locks, starts initialization, or publishes any records.
             connection.setReadOnly(true);
             var receiver = new io.debezium.ibmi.db2.journal.retrieve.JournalReceiver(args[2], library);

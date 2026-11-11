@@ -6,7 +6,6 @@
 package io.debezium.connector.db2as400;
 
 import java.math.BigDecimal;
-import java.time.ZoneOffset;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -21,6 +20,8 @@ import io.debezium.spi.topic.TopicNamingStrategy;
 
 /** Fixed native schemas shared by snapshot and buffered output; no current-catalog lookup or partial projection. */
 final class As400NativeTableSchemas implements DatabaseSchema<TableId> {
+    private static final java.time.format.DateTimeFormatter LEGACY_TIMESTAMP = java.time.format.DateTimeFormatter.ofPattern(
+            "uuuu-MM-dd-HH.mm.ss.SSSSSS", java.util.Locale.ROOT);
     private final Map<TableId, TableSchema> schemas;
 
     As400NativeTableSchemas(List<As400BindingDefinition> definitions, As400ConnectorConfig config, TopicNamingStrategy<TableId> topics) {
@@ -30,7 +31,9 @@ final class As400NativeTableSchemas implements DatabaseSchema<TableId> {
                         && (e.getKey().equals("converters") || e.getKey().equals("message.key.columns") || e.getKey().startsWith("column.")))) {
             throw new IllegalArgumentException("Native output requires precise decimals, owned bytes and complete unmodified native columns/keys");
         }
-        var converters = new JdbcValueConverters(config.getDecimalMode(), config.getTemporalPrecisionMode(), ZoneOffset.UTC, null, null, null) {
+        // Snapshot, legacy streaming and buffered streaming must share string
+        // cleanup and trim semantics, especially for already-published keys.
+        var converters = new As400ValueConverters(config.getDecimalMode(), config) {
             @Override
             protected int getTimePrecision(io.debezium.relational.Column column) {
                 // Native LENGTH is storage/buffer size; DATETIME_PRECISION is
@@ -42,6 +45,10 @@ final class As400NativeTableSchemas implements DatabaseSchema<TableId> {
                 config.getSourceInfoStructMaker().schema(), io.debezium.pipeline.txmetadata.TransactionMonitor.TRANSACTION_BLOCK_SCHEMA,
                 config.getFieldNamer(), false, config.getEventConvertingFailureHandlingMode());
         var result = new HashMap<TableId, TableSchema>();
+        boolean legacyTemporal = As400DcgConfig.transactionalTruncateEnabled(config.getConfig());
+        if (legacyTemporal) {
+            requireLegacyTemporalCompatibility(definitions);
+        }
         for (var definition : definitions) {
             var table = definition.outputTable();
             if (table.primaryKeyColumnNames().isEmpty() || table.primaryKeyColumnNames().stream().anyMatch(k -> table.columnWithName(k).isOptional())) {
@@ -56,8 +63,9 @@ final class As400NativeTableSchemas implements DatabaseSchema<TableId> {
             var temporal = definition.codecs().stream().map(c -> c.temporal()
                     ? (io.debezium.ibmi.db2.journal.data.types.AS400Temporal) c.decoder()
                     : null).toList();
-            TableSchema checked = new TableSchema(table.id(), built.keySchema(), data -> built.keyFromColumnData(owned(definition, data, temporal)),
-                    built.getEnvelopeSchema(), built.valueSchema(), data -> built.valueFromColumnData(owned(definition, data, temporal)));
+            var compatibility = definition.codecs().stream().map(c -> legacyTemporal ? legacyTemporal(c) : null).toList();
+            TableSchema checked = new TableSchema(table.id(), built.keySchema(), data -> built.keyFromColumnData(owned(definition, data, temporal, compatibility)),
+                    built.getEnvelopeSchema(), built.valueSchema(), data -> built.valueFromColumnData(owned(definition, data, temporal, compatibility)));
             if (result.put(table.id(), checked) != null) {
                 throw new IllegalArgumentException("Duplicate acquired table schema");
             }
@@ -68,8 +76,50 @@ final class As400NativeTableSchemas implements DatabaseSchema<TableId> {
         schemas = Map.copyOf(result);
     }
 
+    private static java.util.function.Function<Object, Object> legacyTemporal(As400BindingDefinition.Codec codec) {
+        com.ibm.as400.access.AS400DataType legacy = switch (codec.kind()) {
+            case "DATE_ISO" -> new com.ibm.as400.access.AS400Date();
+            case "TIME_ISO" -> new com.ibm.as400.access.AS400Time();
+            case "TIMESTAMP_ISO" -> new com.ibm.as400.access.AS400Timestamp();
+            default -> null;
+        };
+        if (legacy == null) {
+            return null;
+        }
+        var text = new com.ibm.as400.access.AS400Text(legacy.getByteLength(), codec.ccsid());
+        return value -> {
+            String encoded;
+            if (value instanceof java.time.Duration time) {
+                long seconds = time.getSeconds();
+                encoded = twoDigits(seconds / 3600) + "." + twoDigits(seconds / 60 % 60) + "." + twoDigits(seconds % 60);
+            }
+            else if (value instanceof java.time.LocalDateTime timestamp) {
+                encoded = LEGACY_TIMESTAMP.format(timestamp);
+            }
+            else {
+                encoded = ((java.time.LocalDate) value).toString();
+            }
+            return legacy.toObject(text.toBytes(encoded));
+        };
+    }
+
+    private static String twoDigits(long value) {
+        return value < 10 ? "0" + value : Long.toString(value);
+    }
+
+    static void requireLegacyTemporalCompatibility(List<As400BindingDefinition> definitions) {
+        for (var definition : definitions) {
+            for (var codec : definition.codecs()) {
+                if (codec.kind().equals("TIMESTAMP_ISO") && codec.scale() != 6) {
+                    throw new IllegalArgumentException("Online migration cannot preserve the legacy fixed-width timestamp decoder at precision " + codec.scale());
+                }
+            }
+        }
+    }
+
     private static Object[] owned(As400BindingDefinition definition, Object[] data,
-                                  List<io.debezium.ibmi.db2.journal.data.types.AS400Temporal> temporal) {
+                                  List<io.debezium.ibmi.db2.journal.data.types.AS400Temporal> temporal,
+                                  List<java.util.function.Function<Object, Object>> compatibility) {
         if (data.length != definition.codecs().size() + (definition.usesRrn() ? 1 : 0)) {
             throw new IllegalArgumentException("Incomplete native row projection");
         }
@@ -106,7 +156,15 @@ final class As400NativeTableSchemas implements DatabaseSchema<TableId> {
                 throw new IllegalArgumentException("Unsupported/null native value for " + definition.schema().columns().get(i).name());
             }
         }
-        return As400RowData.copyOf(data, 65536).values();
+        Object[] result = As400RowData.copyOf(data, 65536).values();
+        for (int i = 0; i < result.length && i < compatibility.size(); i++) {
+            if (result[i] != null && compatibility.get(i) != null) {
+                // Only the output boundary uses the legacy representation.
+                // Buffered/replayed values remain owned and timezone-free.
+                result[i] = compatibility.get(i).apply(result[i]);
+            }
+        }
+        return result;
     }
 
     @Override

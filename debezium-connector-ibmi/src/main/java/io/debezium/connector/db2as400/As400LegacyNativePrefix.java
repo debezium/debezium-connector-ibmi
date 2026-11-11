@@ -36,7 +36,7 @@ final class As400LegacyNativePrefix {
     As400LegacyNativePrefix(As400OperatorJournalEvidence journals, As400JdbcNativeIdentityEvidence identities, RetrieveJournal reader,
                             As400StreamingChangeEventSource source, As400Partition partition, As400OffsetContext scan,
                             Runnable checkRunning, As400OperatorCutReader.Limits limits) {
-        As400LegacyHandoff.position(As400LegacyHandoff.strings(scan.getOffset()));
+        As400LegacyHandoff.startingPosition(As400LegacyHandoff.strings(scan.getOffset()));
         this.journals = journals;
         this.identities = identities;
         this.reader = reader;
@@ -121,10 +121,13 @@ final class As400LegacyNativePrefix {
         // A legacy row offset can point at the already-read UB immediately before
         // its emitted UP. Rebuild that cache from the validated anchor so a fresh
         // task preserves a primary-key change's delete/tombstone/create output.
-        if (!initialized && anchor.entries().get(0).header().getJournalEntryType() == io.debezium.ibmi.db2.journal.retrieve.JournalEntryType.BEFORE_IMAGE) {
+        boolean replayAnchor = !initialized && !scan.getPosition().processed();
+        if (!initialized && (replayAnchor
+                || anchor.entries().get(0).header().getJournalEntryType() == io.debezium.ibmi.db2.journal.retrieve.JournalEntryType.BEFORE_IMAGE)) {
             checkRunning.run();
             source.processOwnedEntry(partition, scan, anchor.entries().get(0));
             checkRunning.run();
+            scan.setPosition(new JournalProcessedPosition(from, anchor.entries().get(0).header().getTime(), true));
         }
         initialized = true;
         for (var entry : entries) {
@@ -137,7 +140,7 @@ final class As400LegacyNativePrefix {
         if (!source.hasPendingBeforeImage()) {
             completePosition = Map.copyOf(scan.getOffset());
         }
-        return entries.isEmpty() ? Optional.empty() : Optional.ofNullable(completePosition);
+        return entries.isEmpty() && !replayAnchor ? Optional.empty() : Optional.ofNullable(completePosition);
     }
 
     /**

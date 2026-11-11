@@ -7,7 +7,6 @@ package io.debezium.connector.db2as400;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.Mockito.CALLS_REAL_METHODS;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -329,8 +328,7 @@ public class As400OnlineHandoffProbeConnector extends As400LegacyBarrierProbeCon
                 queue = new ChangeEventQueue.Builder<DataChangeEvent>().maxBatchSize(1).maxQueueSize(64).pollInterval(Duration.ofMillis(10))
                         .loggingContextSupplier(() -> taskContext.configureLoggingContext("online-handoff-probe")).build();
                 errors = new ErrorHandler(As400RpcConnector.class, config, queue, null);
-                inject("queue", queue);
-                inject("errorHandler", errors);
+                initializeOutput(queue, errors);
                 var topics = new AbstractTopicNamingStrategy<TableId>(raw.asProperties()) {
                     @Override
                     public String dataChangeTopic(TableId id) {
@@ -453,13 +451,9 @@ public class As400OnlineHandoffProbeConnector extends As400LegacyBarrierProbeCon
                 return ((io.debezium.ibmi.db2.journal.retrieve.JournalEntryDeocder<?>) i.getArgument(0))
                         .decode(new EntryHeaderDecoder().decode(entry.bytes(), 0), entry.bytes(), 0);
             });
-            var rpc = mock(As400RpcConnection.class, CALLS_REAL_METHODS);
             var lifecycle = new JournalReadLifecycle();
-            As400ReaderFixture.set(rpc, "lifecycle", lifecycle);
-            As400ReaderFixture.set(rpc, "retrieveJournal", journal);
-            var periodic = As400RpcConnection.class.getDeclaredField("periodic");
-            periodic.setAccessible(true);
-            periodic.set(rpc, mock(periodic.getType()));
+            var rpc = org.mockito.Mockito.spy(new As400RpcConnection(legacyConfig, null, null, null, lifecycle, ignored -> journal));
+            org.mockito.Mockito.doNothing().when(rpc).logOffsets(any(), any());
             var jdbc = mock(As400JdbcConnection.class);
             when(jdbc.getRealDatabaseName()).thenReturn(null);
             when(jdbc.getLongName(anyString(), anyString())).thenAnswer(i -> i.getArgument(1));
@@ -507,9 +501,7 @@ public class As400OnlineHandoffProbeConnector extends As400LegacyBarrierProbeCon
                         // A legacy progress marker must not skip cached UB state
                         // on replacement. This fixture supports insert/delete/clear
                         // prefixes; unresolved updates reject rather than disappear.
-                        var before = As400StreamingChangeEventSource.class.getDeclaredField("beforeMap");
-                        before.setAccessible(true);
-                        As400OnlineHandoff.require(((Map<?, ?>) before.get(source)).isEmpty(), "Legacy progress crosses a cached before-image");
+                        As400OnlineHandoff.require(!source.hasPendingBeforeImage(), "Legacy progress crosses a cached before-image");
                         var progress = new HashMap<String, Object>(scan.getOffset());
                         progress.put(BARRIER, "native-capture-progress-v1");
                         progress.put("probe.generation", generation);
@@ -599,6 +591,7 @@ public class As400OnlineHandoffProbeConnector extends As400LegacyBarrierProbeCon
                         .verifyOrder(evidence.order());
                 original.remove(As400LegacyHandoff.VERSION);
                 original.remove(As400LegacyHandoff.CHECKPOINT);
+                original.remove(As400LegacyHandoff.FINGERPRINT);
             }
             As400OnlineHandoff.require(kind.equals(original.remove(BARRIER))
                     && bundleHash.equals(original.remove("probe.bundle")) && evidence.fingerprint().equals(original.remove("probe.fingerprint"))
@@ -904,10 +897,5 @@ public class As400OnlineHandoffProbeConnector extends As400LegacyBarrierProbeCon
             }
         }
 
-        private void inject(String name, Object value) throws Exception {
-            var field = As400ConnectorTask.class.getDeclaredField(name);
-            field.setAccessible(true);
-            field.set(this, value);
-        }
     }
 }

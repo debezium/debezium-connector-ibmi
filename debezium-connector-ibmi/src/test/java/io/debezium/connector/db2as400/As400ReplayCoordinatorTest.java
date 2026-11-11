@@ -62,6 +62,8 @@ class As400ReplayCoordinatorTest {
     private static final String IDENTITY = "LIB/JRN/incarnation1";
     private static final String FINGERPRINT = "v1:" + "a".repeat(64);
     private static final String JID = "0102030405060708090a";
+    private static final String OTHER_FILE_JID = "1112030405060708090a";
+    private static final String OTHER_MEMBER_JID = "1b1c1d1e1f2021222324";
     private static final JournalReceiver OLD = new JournalReceiver("ZOLD", "LIB");
     private static final JournalReceiver NEW = new JournalReceiver("ANEW", "LIB");
     private static final As400JournalOrder ORDER = order(List.of(OLD, NEW), Map.of(OLD, "old-instance", NEW, "new-instance"));
@@ -163,7 +165,7 @@ class As400ReplayCoordinatorTest {
         feed(restarted, event(100, "C/SC", 10, 0));
         feed(restarted, event(110, "D/CG", 10, 8));
         feed(restarted, event(120, "C/SC", 20, 0));
-        feed(restarted, event(125, "R/PT", 20, 2));
+        feed(restarted, event(OLD, 125, "R/PT", 20, 2, '0', "OTHER"));
         assertThat(restarted.checkpoint()).isEqualTo(saved);
         assertThat(feed(restarted, event(130, "C/CM", 20, 0))).isEmpty();
         assertThat(sink.records).isEmpty();
@@ -178,7 +180,7 @@ class As400ReplayCoordinatorTest {
     @Test
     void generatedInterleavedCheckpointSurvivesPartialOutputAndFreshRestart() throws Exception {
         List<Event> prefix = List.of(event(2, "C/SC", 10, 0), event(3, "D/CG", 10, 8), event(4, "C/SC", 20, 0),
-                event(5, "R/PT", 20, 2), event(6, "C/CM", 20, 0));
+                event(OLD, 5, "R/PT", 20, 2, '0', "OTHER"), event(6, "C/CM", 20, 0));
         List<Event> suffix = List.of(event(7, "R/PT", 10, 1), event(8, "C/CM", 10, 0));
         As400ReplayCoordinator first = fresh(INITIAL.toOffset());
         replay(first, prefix);
@@ -441,8 +443,10 @@ class As400ReplayCoordinatorTest {
         // A fresh decoder, normalizer, buffer and coordinator on every restart; only durable JSON survives.
         CompleteRowEntryDecoder decoder = new CompleteRowEntryDecoder(new AS400DataType[]{ new AS400Bin4() }, new boolean[]{ false }, 64);
         TableIdentity table = new TableIdentity(new TableId("DB", "LIB", "TEST"), "TEST", "TEST", JID, As400ConnectProbeConnector.MEMBER_JID, "FORMAT_V1");
+        TableIdentity other = new TableIdentity(new TableId("DB", "LIB", "OTHER"), "OTHER", "OTHER", OTHER_FILE_JID, OTHER_MEMBER_JID, "FORMAT_V1");
         return new As400ReplayCoordinator(offset, IDENTITY, FINGERPRINT, ORDER, limits, 1024, outputLimit,
-                (file, library) -> new As400SourceNormalizer.TableBinding(table, decoder), (source, control) -> SavepointRollback.UNRESOLVED,
+                (file, library) -> new As400SourceNormalizer.TableBinding(file.equals("OTHER") ? other : table, decoder),
+                (source, control) -> SavepointRollback.UNRESOLVED,
                 PARTITION, sink::enqueue);
     }
 
@@ -514,13 +518,17 @@ class As400ReplayCoordinatorTest {
     }
 
     private static Event event(JournalReceiver receiver, long sequence, String operation, long cycle, int value, char flag) {
+        return event(receiver, sequence, operation, cycle, value, flag, "TEST");
+    }
+
+    private static Event event(JournalReceiver receiver, long sequence, String operation, long cycle, int value, char flag, String file) {
         byte[] payload;
         if (operation.startsWith("R/")) {
             payload = ByteBuffer.allocate(4).putInt(value).array();
         }
         else if (operation.equals("D/CG")) {
             payload = new byte[109];
-            new AS400Text(10, 37).toBytes("TEST", payload, 0);
+            new AS400Text(10, 37).toBytes(file, payload, 0);
             new AS400Text(10, 37).toBytes("LIB", payload, 10);
             new AS400Text(10, 37).toBytes("", payload, 20);
             new AS400Text(1, 37).toBytes(Integer.toString(value), payload, 108);
@@ -536,10 +544,12 @@ class As400ReplayCoordinatorTest {
         System.arraycopy(payload, 0, data, 256, payload.length);
         EntryHeader header = new EntryHeader(data.length, 0, payload.length == 0 ? 0 : 240, BigInteger.valueOf(sequence), BigInteger.ONE,
                 Instant.ofEpochSecond(sequence), operation.charAt(0), operation.substring(2),
-                "TEST      LIB       " + (operation.equals("D/CG") ? "          " : "TEST      "), BigInteger.valueOf(cycle),
+                String.format("%-10s%-10s%-10s", file, "LIB", operation.equals("D/CG") ? "" : file), BigInteger.valueOf(cycle),
                 data.length, 0, receiver.name(), receiver.library(), new EntryHeader.ControlInfo(flag, 0, false, false, (byte) 0),
                 new EntryHeader.RecordInfo(BigInteger.ONE, BigInteger.ONE, "JOB", "USER", "123456",
-                        operation.startsWith("R/") ? As400ConnectProbeConnector.MEMBER_JID : JID, '1', operation.startsWith("R/") ? "*QDDS" : "*FILE", "SYS", "PGM",
+                        operation.startsWith("R/") ? (file.equals("OTHER") ? OTHER_MEMBER_JID : As400ConnectProbeConnector.MEMBER_JID)
+                                : (file.equals("OTHER") ? OTHER_FILE_JID : JID),
+                        '1', operation.startsWith("R/") ? "*QDDS" : "*FILE", "SYS", "PGM",
                         "LIB", "USER"));
         return new Event(header, data, new JournalPosition(BigInteger.valueOf(sequence), receiver));
     }

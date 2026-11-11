@@ -52,6 +52,8 @@ class NativeFixtureTest(unittest.TestCase):
         self.assertEqual("TESTSYS", source.server_name)
         self.assertEqual([], list(source.directory.iterdir()))
         self.assertNotIn("sensitive-password", source.redact("error sensitive-password test-user test.invalid"))
+        source.redactions.add("192.0.2.1")
+        self.assertEqual("<redacted>:<redacted> <redacted>", source.redact("test.invalid:192.0.2.1 TESTSYS"))
         self.assertEqual("{a}}b;c}", fixture.odbc_value("a}b;c"))
         with self.assertRaises(ValueError):
             fixture.NativeFixture(self.root / "unsafe", "EXISTING")

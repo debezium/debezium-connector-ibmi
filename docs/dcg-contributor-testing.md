@@ -2,7 +2,7 @@
 
 The default tests use sanitized raw journal fixtures and controlled transports;
 they need JDK 21 and the matching Debezium core, but no IBM i account, AWS,
-Auction Edge tooling, or external Kafka. Run the same core modules listed in
+private tooling, or external Kafka. Run the same core modules listed in
 `.github/workflows/cross-maven.yml`, then:
 
 ```sh
@@ -43,7 +43,8 @@ own container/network cleanup. Failures also collect broker evidence.
 
 The original `partition` reproduction intentionally preserves the problematic
 timeout profile. It is not a passing CI smoke test. The corrected-profile matrix
-uses `dcg-timeout-profile-probe.py`; see the [archived timeout validation report](https://github.com/gardnmi/debezium-connector-ibmi/blob/fc4ffaa2aa7bf8acc5d9630d493450391814f8c0/docs/dcg-timeout-profile-validation.md) for exact timings. Do not weaken assertions or replace that original reproduction.
+uses `dcg-timeout-profile-probe.py`. Retain its timing profile and every original
+safety assertion when rerunning it. Do not replace the original reproduction.
 
 ## Optional native tests
 
@@ -88,4 +89,4 @@ neither an AWS session nor a private credential package is required by the runne
 configuration and cleanup contract. It adds DATE, TIME and TIMESTAMP(0/3/6/9),
 nulls, pre-epoch values, end-of-day TIME, temporal clear/reload commit and rollback,
 and replacement while that clear is open. It preserves the packaged smoke
-assertions. See [temporal evidence and limits](https://github.com/gardnmi/debezium-connector-ibmi/blob/fc4ffaa2aa7bf8acc5d9630d493450391814f8c0/docs/dcg-temporal-validation.md).
+assertions. See [validation scope](dcg-validation.md).

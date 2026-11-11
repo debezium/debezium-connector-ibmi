@@ -90,8 +90,7 @@ class As400BindingHistoryTest {
             case "truncated" -> original.substring(0, original.length() / 2);
             case "file-jid" -> original.replace("00000000000000000001", "00000000000000000009");
             case "member-jid" -> original.replace("00000000000000000002", "00000000000000000009");
-            case "nullable" -> original.replace("\"optional\":false", "\"optional\":true");
-            case "key" -> original.replace("\"primaryKeyColumnNames\":[\"ID\"]", "\"primaryKeyColumnNames\":[]");
+            case "nullable", "key" -> corruptBinding(original, fault);
             case "codec" -> original.replace("BIN4:4:0:0", "FLOAT4:4:0:0");
             case "format" -> original.replace("29087D5938DDA", "29087D5938DDB");
             case "version" -> original.replace("\"version\":\"1\"", "\"version\":\"2\"");
@@ -109,6 +108,53 @@ class As400BindingHistoryTest {
             assertThrows(Exception.class, () -> f.history().pending(legacy, Fixture.POLICY));
         }
         assertThat(saved).containsEntry("completed_through.sequence", "29");
+    }
+
+    private static String corruptBinding(String history, String fault) throws Exception {
+        var json = new com.fasterxml.jackson.databind.ObjectMapper();
+        var record = json.readTree(history);
+        var position = (com.fasterxml.jackson.databind.node.ObjectNode) record.path("position");
+        var bindings = json.readTree(position.path("bindings").asText());
+        var table = (com.fasterxml.jackson.databind.node.ObjectNode) bindings.path("tables").get(0).path("table");
+        if (fault.equals("nullable")) {
+            ((com.fasterxml.jackson.databind.node.ObjectNode) table.path("columns").get(0)).put("optional", true);
+        }
+        else {
+            table.set("primaryKeyColumnNames", json.createArrayNode());
+        }
+        position.put("bindings", json.writeValueAsString(bindings));
+        return json.writeValueAsString(record) + "\n";
+    }
+
+    @Test
+    void shouldRecoverHistoryWrittenByThePreviousPluginWithoutChangingItsCheckpoint() throws Exception {
+        var f = new Fixture(directory);
+        try (var history = getClass().getResourceAsStream("/binding-history/legacy-v1-history.jsonl");
+                var offset = getClass().getResourceAsStream("/binding-history/legacy-v1-offset.json")) {
+            Files.copy(history, f.file);
+            var saved = new com.fasterxml.jackson.databind.ObjectMapper().readValue(offset, Map.class);
+            var recovered = f.history().recover(saved, f.journalIdentity, Fixture.POLICY);
+            assertThat(recovered.definitions()).isEqualTo(f.definitions);
+            var output = new ArrayList<SourceRecord>();
+            var checkpoint = f.replay(saved, 64, output::add);
+            assertThat(data(output)).containsExactly("c:A:8", "t:B", "c:B:100", "c:A:9");
+            assertThat(checkpoint.get("capture_fingerprint")).isEqualTo(saved.get("capture_fingerprint"));
+            assertThat(checkpoint.get("completed_through.sequence")).isEqualTo("59");
+        }
+    }
+
+    @Test
+    void shouldStoreBindingsOutsideCoreTableChangesAndRejectUnknownEncoding() throws Exception {
+        var f = new Fixture(directory);
+        var saved = f.initialize();
+        var json = new com.fasterxml.jackson.databind.ObjectMapper();
+        var record = json.readTree(Files.readString(f.file));
+        assertThat(record.path("tableChanges").isEmpty()).isTrue();
+        assertThat(record.path("position").path("binding.encoding").asText()).isEqualTo("1");
+        assertThat(f.history().recover(saved, f.journalIdentity, Fixture.POLICY).definitions()).isEqualTo(f.definitions);
+        ((com.fasterxml.jackson.databind.node.ObjectNode) record.path("position")).put("binding.encoding", "future");
+        Files.writeString(f.file, json.writeValueAsString(record) + "\n");
+        assertThrows(Exception.class, () -> f.history().recover(saved, f.journalIdentity, Fixture.POLICY));
     }
 
     @Test

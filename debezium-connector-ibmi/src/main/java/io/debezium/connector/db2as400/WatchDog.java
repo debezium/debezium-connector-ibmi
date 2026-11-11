@@ -13,11 +13,11 @@ import org.slf4j.LoggerFactory;
 public class WatchDog implements Runnable {
     private static final Logger log = LoggerFactory.getLogger(As400StreamingChangeEventSource.class);
 
-    private long lastSeen = System.currentTimeMillis();
+    private volatile long lastSeen = System.currentTimeMillis();
     private final Thread notify;
-    private boolean running = true;
+    private volatile boolean running = true;
     private final long wait;
-    private Thread watchDogThread;
+    private volatile Thread watchDogThread;
 
     public WatchDog(Thread notify, long wait) {
         this.notify = notify;

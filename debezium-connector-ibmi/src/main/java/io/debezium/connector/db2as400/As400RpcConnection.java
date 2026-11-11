@@ -8,6 +8,7 @@ package io.debezium.connector.db2as400;
 import java.io.IOException;
 import java.math.BigInteger;
 import java.sql.SQLNonTransientConnectionException;
+import java.time.Duration;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -49,7 +50,7 @@ public class As400RpcConnection implements AutoCloseable, Connect<AS400, IOExcep
     private JournalInfo journalInfo;
     private RetrieveJournal retrieveJournal;
     private AS400 as400;
-    private final JournalReadLifecycle lifecycle = new JournalReadLifecycle();
+    private final JournalReadLifecycle lifecycle;
     private static SocketProperties socketProperties = new SocketProperties();
     private final LogLimmiting periodic = new LogLimmiting(5 * 60 * 1000l);
     private final JournalInfoRetrieval journalInfoRetrieval;
@@ -57,11 +58,13 @@ public class As400RpcConnection implements AutoCloseable, Connect<AS400, IOExcep
     private final boolean isSecure;
 
     public As400RpcConnection(As400ConnectorConfig config, As400StreamingChangeEventSourceMetrics streamingMetrics, List<FileFilter> includes, long cacheWait) {
-        super();
-        this.config = config;
-        this.isSecure = config.getJdbcConfig().getBoolean("secure", config.isSecure());
-        this.streamingMetrics = streamingMetrics;
-        this.journalInfoRetrieval = new JournalInfoRetrieval(cacheWait, config.cacheAdditionalDelay(), config.getPollInterval().toMillis());
+        this(config, streamingMetrics, includes, cacheWait, new JournalReadLifecycle());
+    }
+
+    As400RpcConnection(As400ConnectorConfig config, As400StreamingChangeEventSourceMetrics streamingMetrics,
+                       List<FileFilter> includes, long cacheWait, JournalReadLifecycle lifecycle) {
+        this(config, streamingMetrics, new JournalInfoRetrieval(cacheWait, config.cacheAdditionalDelay(), config.getPollInterval().toMillis()),
+                null, lifecycle, ignored -> null);
         try {
             System.setProperty("com.ibm.as400.access.AS400.guiAvailable", "False");
             journalInfo = journalInfoRetrieval.getJournal(connection(), config.getSchema(), includes);
@@ -80,13 +83,78 @@ public class As400RpcConnection implements AutoCloseable, Connect<AS400, IOExcep
         }
     }
 
+    As400RpcConnection(As400ConnectorConfig config, As400StreamingChangeEventSourceMetrics streamingMetrics,
+                       JournalInfoRetrieval journalInfoRetrieval, RetrieveJournal retrieveJournal) {
+        this(config, streamingMetrics, journalInfoRetrieval, null, new JournalReadLifecycle(), ignored -> retrieveJournal);
+    }
+
+    As400RpcConnection(As400ConnectorConfig config, As400StreamingChangeEventSourceMetrics streamingMetrics,
+                       JournalInfoRetrieval journalInfoRetrieval, JournalInfo journalInfo, JournalReadLifecycle lifecycle,
+                       java.util.function.Function<As400RpcConnection, RetrieveJournal> readerFactory) {
+        this.config = config;
+        this.isSecure = config.getJdbcConfig().getBoolean("secure", config.isSecure());
+        this.streamingMetrics = streamingMetrics;
+        this.journalInfoRetrieval = journalInfoRetrieval;
+        this.journalInfo = journalInfo;
+        this.lifecycle = java.util.Objects.requireNonNull(lifecycle);
+        this.retrieveJournal = readerFactory.apply(this);
+    }
+
+    RetrieveJournal journal() {
+        return retrieveJournal;
+    }
+
     /**
      * Permanently reject new work, cancel the captured read, then drain admitted
      * work. Unlike close(), this instance can never reconnect after stop.
-     * Must be called outside a reader operation. No driver deadline is assumed.
+     * Must be called outside a reader operation. An unresponsive operation is
+     * reported as an incomplete drain; terminal admission remains closed.
      */
     public void stop() {
+        stopWithin(Duration.ofSeconds(30));
+    }
+
+    void requestStop() {
         lifecycle.requestStop();
+    }
+
+    boolean stopWithin(Duration timeout) {
+        requestStop();
+        java.util.concurrent.FutureTask<Void> cleanup;
+        synchronized (lifecycle) {
+            if (stopCleanup == null) {
+                stopCleanup = new java.util.concurrent.FutureTask<>(() -> {
+                    drainStopped();
+                    return null;
+                });
+                Thread thread = new Thread(stopCleanup, "ibmi-rpc-stop");
+                thread.setDaemon(true);
+                thread.start();
+            }
+            cleanup = stopCleanup;
+        }
+        try {
+            cleanup.get(timeout.toNanos(), java.util.concurrent.TimeUnit.NANOSECONDS);
+            return true;
+        }
+        catch (java.util.concurrent.TimeoutException e) {
+            log.warn("Journal reader stop timed out: cleanup continues with admission closed; drain is not verified");
+            return false;
+        }
+        catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return false;
+        }
+        catch (java.util.concurrent.ExecutionException e) {
+            throw new IllegalStateException("Journal reader cleanup failed; drain is not verified", e.getCause());
+        }
+    }
+
+    private java.util.concurrent.FutureTask<Void> stopCleanup;
+
+    // Driver cancellation, synchronization and disconnect can all block. Keep
+    // them on one terminal cleanup thread, outside the task's bounded wait.
+    void drainStopped() {
         final AS400 closing;
         synchronized (this) {
             closing = as400;
@@ -281,7 +349,7 @@ public class As400RpcConnection implements AutoCloseable, Connect<AS400, IOExcep
         return RetrievalState.NotCalled;
     }
 
-    private void logOffsets(JournalProcessedPosition position, RetrievalState state) throws IOException, Exception {
+    void logOffsets(JournalProcessedPosition position, RetrievalState state) throws IOException, Exception {
         if (periodic.shouldLogRateLimted("offsets")) {
             final JournalPosition currentReceiver = getCurrentPosition();
             final BigInteger behind = currentReceiver.getOffset().subtract(position.getOffset());

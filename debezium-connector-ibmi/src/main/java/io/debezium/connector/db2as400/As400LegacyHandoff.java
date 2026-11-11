@@ -21,10 +21,12 @@ record As400LegacyHandoff(As400Checkpoint initial, Map<String, String> barrier, 
 
     static final String VERSION = "handoff.version";
     static final String CHECKPOINT = "handoff.checkpoint";
+    static final String FINGERPRINT = "handoff.capture_fingerprint";
 
     As400LegacyHandoff {
         barrier = strings(barrier);
         require("1".equals(barrier.get(VERSION)) && digest(initial).equals(barrier.get(CHECKPOINT)), "Foreign or incomplete handoff barrier");
+        require(!barrier.containsKey(FINGERPRINT) || initial.captureFingerprint().equals(barrier.get(FINGERPRINT)), "Foreign handoff binding selection");
         JournalPosition cut = position(barrier);
         // The ordinary history profile forbids sequence resets. Native receiver
         // order/incarnations are additionally checked at activation and replay.
@@ -39,6 +41,7 @@ record As400LegacyHandoff(As400Checkpoint initial, Map<String, String> barrier, 
         position(fields);
         fields.put(VERSION, "1");
         fields.put(CHECKPOINT, digest(initial));
+        fields.put(FINGERPRINT, initial.captureFingerprint());
         return Map.copyOf(fields);
     }
 
@@ -101,8 +104,17 @@ record As400LegacyHandoff(As400Checkpoint initial, Map<String, String> barrier, 
     }
 
     static JournalPosition position(Map<String, String> legacy) {
-        require(!legacy.containsKey(As400Checkpoint.VERSION) && "true".equals(legacy.get("offset.processed"))
-                && "true".equals(legacy.get("snapshot_completed")) && !legacy.containsKey("snapshot"), "Completed processed legacy stream required");
+        require("true".equals(legacy.get("offset.processed")), "Completed processed legacy stream required");
+        return startingPosition(legacy);
+    }
+
+    /** An ordinary offset may require replay of its anchor; it cannot authorize a handoff barrier. */
+    static JournalPosition startingPosition(Map<String, String> legacy) {
+        require(!legacy.containsKey(As400Checkpoint.VERSION) && java.util.Set.of("true", "false").contains(legacy.getOrDefault("offset.processed", ""))
+                && "true".equals(legacy.get("snapshot_completed")) && !legacy.containsKey("snapshot"), "Completed legacy stream required");
+        require(!legacy.containsKey(VERSION) || "true".equals(legacy.get("offset.processed")), "Handoff barrier must be fully processed");
+        require(!legacy.containsKey(FINGERPRINT) || legacy.containsKey(VERSION)
+                && legacy.get(FINGERPRINT).matches("v1:[0-9a-f]{64}"), "Incomplete handoff binding selection");
         require(legacy.getOrDefault("offset.event_sequence", "").matches("[1-9][0-9]{0,19}"), "Malformed legacy sequence");
         var position = new JournalPosition(new BigInteger(legacy.get("offset.event_sequence")),
                 new JournalReceiver(legacy.get("offset.receiver"), legacy.get("offset.receiver_library")));

@@ -67,7 +67,7 @@ class InitializationExperiment(ownership.OwnershipExperiment):
             "connector.class": CLASS, "name": scenario, "tasks.max": "1", "probe.topic": "events-" + scenario,
             "exactly.once.support": "requested", "transaction.boundary": "poll", "errors.tolerance": "none",
             "topic.prefix": "test", "database.hostname": "no-live-ibmi.invalid", "database.user": "fixture", "database.password": "fixture",
-            "database.dbname": "AEQA", "database.schema": "DCOC1107", "skipped.operations": "none", "max.batch.size": "1",
+            "database.dbname": "TEST", "database.schema": "DCOC1107", "skipped.operations": "none", "max.batch.size": "1",
             "max.queue.size": "64", "poll.interval.ms": "10", "heartbeat.interval.ms": "3600000",
             "event.converting.failure.handling.mode": "fail", "provide.transaction.metadata": "true",
             "producer.override.interceptor.classes": base.CLASS + "$BlockingInterceptor"}})

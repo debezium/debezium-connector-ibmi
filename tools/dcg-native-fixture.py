@@ -52,11 +52,13 @@ class NativeFixture:
         self.target = SimpleNamespace(host=config["host"])
         self.credentials = SimpleNamespace(username=config["user"], password=config["password"])
         self.server_name = config["server"]
+        self.redactions = set()
         self.driver = config.get("odbc_driver", "IBM i Access ODBC Driver")
         self.counter = 0
 
     def redact(self, text):
-        for secret in sorted({self.target.host, self.credentials.username, self.credentials.password}, key=len, reverse=True):
+        for secret in sorted({self.target.host, self.credentials.username, self.credentials.password, self.server_name}
+                             | self.redactions, key=len, reverse=True):
             text = text.replace(secret, "<redacted>")
         return text
 
@@ -71,6 +73,9 @@ class NativeFixture:
         # Optional public dependency; importing the runner never opens a source.
         # A dedicated connection per call matches the original helper's lifecycle.
         import pyodbc
+        # Do not reuse QTEMP or job settings through client-side pooling. Native
+        # *JOB allocations still require independent release checks after close.
+        pyodbc.pooling = False
         connection_string = ";".join(k + "=" + odbc_value(v) for k, v in {
             "DRIVER": self.driver, "SYSTEM": self.target.host, "UID": self.credentials.username,
             "PWD": self.credentials.password, "NAM": "0", "CMT": "0"}.items())

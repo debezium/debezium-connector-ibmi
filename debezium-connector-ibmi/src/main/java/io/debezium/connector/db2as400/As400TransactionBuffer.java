@@ -7,11 +7,13 @@ package io.debezium.connector.db2as400;
 
 import java.math.BigInteger;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 
 import io.debezium.DebeziumException;
 import io.debezium.data.Envelope.Operation;
@@ -139,6 +141,9 @@ final class As400TransactionBuffer implements AutoCloseable {
                     release(cycle, change.bytes(), 1);
                 }
                 cycle.changes.subList(keep, cycle.changes.size()).clear();
+                cycle.clearedTables.clear();
+                cycle.changes.stream().filter(change -> change.operation() == Operation.TRUNCATE)
+                        .forEach(change -> cycle.clearedTables.add(change.table().tableId()));
                 // SB requires no dangling images, so all pending pairs are after the target.
                 for (Image image : cycle.before.values()) {
                     release(cycle, image.row.payloadBytes(), 1);
@@ -211,6 +216,7 @@ final class As400TransactionBuffer implements AutoCloseable {
         }
         reserve(cycle, 0, 1);
         cycle.changes.add(new Change(Operation.TRUNCATE, table, null, source, null, null));
+        cycle.clearedTables.add(table.tableId());
     }
 
     /** A validated normalizer calls this for undo records, never insert/update/delete. */
@@ -299,6 +305,7 @@ final class As400TransactionBuffer implements AutoCloseable {
         if (table == null) {
             throw fail("Missing normalized table identity");
         }
+        requireNoConflictingClear(commitCycle, table);
         for (Cycle active : cycles.values()) {
             TableIdentity known = active.tables.get(table.tableId());
             if (known != null && !known.equals(table)) {
@@ -310,6 +317,21 @@ final class As400TransactionBuffer implements AutoCloseable {
             cycle.tables.put(table.tableId(), table);
         }
         return cycle;
+    }
+
+    /**
+     * Until native evidence establishes cross-cycle ordering on a cleared table,
+     * never publish a different cycle (including WITH NC) ahead of its open clear.
+     * Unrelated tables remain eligible for output. The set avoids scanning retained
+     * row images on every row; savepoint rollback rebuilds it only when necessary.
+     */
+    void requireNoConflictingClear(BigInteger commitCycle, TableIdentity table) {
+        ensureUsable();
+        for (Cycle active : cycles.values()) {
+            if (!active.id.commitCycle().equals(commitCycle) && active.clearedTables.contains(table.tableId())) {
+                throw fail("Change from another commit cycle overlaps an uncommitted clear of " + table.tableId());
+            }
+        }
     }
 
     private void requireForward(Cycle cycle) {
@@ -524,6 +546,7 @@ final class As400TransactionBuffer implements AutoCloseable {
         private final List<Change> changes = new ArrayList<>();
         private final Map<RecordIdentity, Image> before = new LinkedHashMap<>();
         private final Map<TableId, TableIdentity> tables = new LinkedHashMap<>();
+        private final Set<TableId> clearedTables = new HashSet<>();
         private final Map<BigInteger, Integer> savepoints = new LinkedHashMap<>();
         private long bytes;
         private int entries;

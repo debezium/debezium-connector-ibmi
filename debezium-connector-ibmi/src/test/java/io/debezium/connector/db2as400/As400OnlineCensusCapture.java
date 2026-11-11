@@ -361,7 +361,8 @@ public final class As400OnlineCensusCapture {
         if (remainingEntries <= 0 || remainingEntries > MAX_CAPTURE_ENTRIES) {
             throw new IllegalArgumentException("Capture entry budget exhausted or invalid");
         }
-        // This is a response rejection limit, never a request for this page size.
+        // The decoder returns this prefix and a continuation even when the
+        // native response includes more entries; it still validates the tail.
         return reader.readRawPage(from, through, remainingEntries);
     }
 

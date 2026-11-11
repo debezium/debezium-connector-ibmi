@@ -32,7 +32,7 @@ class As400HandoffBindingHistoryTest {
                 .with("skipped.operations", "none").with("provide.transaction.metadata", false).with("probe.topic", "events-handofftest").build();
         As400ProspectiveReplay.NativeInput input;
         try (var stream = getClass().getResourceAsStream("/native-transactions/prospective-boundary.json")) {
-            input = As400ProspectiveReplay.prepare(json.readTree(stream), new As400ConnectorConfig(raw));
+            input = As400ProspectiveReplay.prepare(json.readTree(stream), new As400ConnectorConfig(raw), As400OnlineFenceEvidenceTest::replayMetadata);
         }
         var file = directory.resolve("bindings.jsonl");
         var legacy = Map.of("offset.processed", "true", "offset.event_sequence", "57", "snapshot_completed", "true",

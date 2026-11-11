@@ -44,7 +44,7 @@ class As400OnlineCensusCaptureTest {
 
     @ParameterizedTest
     @CsvSource({ "4096,8,20000", "1048576,501,20000", "4096,8,7" })
-    void bufferControlsNativeRequestWhileEntryBudgetOnlyRejectsOversizedResponses(int bufferBytes, int count, int budget) throws Exception {
+    void shouldPageAtTheEntryBudgetWithoutChangingNativeBufferSize(int bufferBytes, int count, int budget) throws Exception {
         AS400 transport = mock(AS400.class);
         var reader = As400OnlineCensusCapture.reader(transport, new JournalInfo("QSQJRN", RECEIVER.library(), false),
                 mock(JournalInfoRetrieval.class), bufferBytes);
@@ -53,7 +53,9 @@ class As400OnlineCensusCaptureTest {
         List<ProgramParameter[]> requests = new ArrayList<>();
         try (var connections = mockConstruction(AS400.class);
                 var calls = mockConstruction(ServiceProgramCall.class, (call, context) -> {
-                    when(call.getServerJob()).thenReturn(mock(Job.class));
+                    Job job = mock(Job.class);
+                    when(job.getCodedCharacterSetID()).thenReturn(37);
+                    when(call.getServerJob()).thenReturn(job);
                     when(call.run()).thenReturn(true);
                     when(call.getMessageList()).thenReturn(new AS400Message[0]);
                     doAnswer(invocation -> {
@@ -73,7 +75,9 @@ class As400OnlineCensusCaptureTest {
                     }).when(call).setProgram(anyString(), any(ProgramParameter[].class));
                 })) {
             if (budget < count) {
-                assertThrows(IllegalArgumentException.class, () -> As400OnlineCensusCapture.readPage(reader, pos(100), pos(continuation), budget));
+                var first = As400OnlineCensusCapture.readPage(reader, pos(100), pos(continuation), budget);
+                assertEquals(budget, first.entries().size());
+                assertEquals(pos(100 + budget), first.continuation().orElseThrow());
                 assertEquals(1, requests.size());
             }
             else {
@@ -103,7 +107,9 @@ class As400OnlineCensusCaptureTest {
         var info = mock(JournalInfoRetrieval.class);
         var reader = As400OnlineCensusCapture.reader(transport, journal, info, 4096);
         try (var calls = mockConstruction(ServiceProgramCall.class, (call, context) -> {
-            when(call.getServerJob()).thenReturn(mock(Job.class));
+            Job job = mock(Job.class);
+            when(job.getCodedCharacterSetID()).thenReturn(37);
+            when(call.getServerJob()).thenReturn(job);
             when(call.run()).thenReturn(true);
             when(call.getMessageList()).thenReturn(new AS400Message[0]);
             doAnswer(invocation -> {

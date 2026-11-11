@@ -14,6 +14,33 @@ import io.debezium.ibmi.db2.journal.retrieve.JournalReceiver;
 
 /** Owns one synchronous native attempt; metadata and independent lock checks are outside the held call. */
 final class As400NativeBoundaryPulse implements AutoCloseable {
+    static final class UnverifiedCleanup extends SQLException {
+        UnverifiedCleanup(String job, SQLException cause) {
+            super("Native pulse cleanup unverified for owned job " + job
+                    + "; independently inspect its allocations before retrying; connection close is not lock-release proof", cause);
+        }
+    }
+
+    static boolean hasUnverifiedCleanup(Throwable failure) {
+        var pending = new java.util.ArrayDeque<Throwable>();
+        var seen = new java.util.HashSet<Throwable>();
+        pending.add(failure);
+        while (!pending.isEmpty()) {
+            var item = pending.removeFirst();
+            if (!seen.add(item)) {
+                continue;
+            }
+            if (item instanceof UnverifiedCleanup) {
+                return true;
+            }
+            if (item.getCause() != null) {
+                pending.addLast(item.getCause());
+            }
+            pending.addAll(java.util.Arrays.asList(item.getSuppressed()));
+        }
+        return false;
+    }
+
     static final String HOLDER_SQL = "SELECT QSYS2.JOB_NAME AS JOB, HEX(QSYS2.THREAD_ID) AS THREAD_HEX FROM SYSIBM.SYSDUMMY1";
     static final String LOCKS_SQL = "SELECT JOB_NAME, LOCK_STATE, LOCK_STATUS, SYSTEM_TABLE_MEMBER FROM QSYS2.OBJECT_LOCK_INFO "
             + "WHERE SYSTEM_OBJECT_SCHEMA=? AND SYSTEM_OBJECT_NAME=? AND OBJECT_TYPE='*FILE' "
@@ -27,7 +54,10 @@ final class As400NativeBoundaryPulse implements AutoCloseable {
     private final String job;
     private final BigInteger thread;
     private boolean attempted;
+    private boolean allocationStarted;
+    private boolean releaseVerified;
     private boolean released;
+    private boolean accepted;
     private boolean finished;
     private boolean closed;
 
@@ -80,18 +110,34 @@ final class As400NativeBoundaryPulse implements AutoCloseable {
         try {
             // No client callback, query, force or metadata operation is reachable
             // between allocation and release: both happen inside this one call.
+            allocationStarted = true;
             execute(program.statement());
         }
         catch (SQLException error) {
             // This is the generated program's final signal, after its release
             // block. Network/API/compiler failures never imply completed drain.
-            if (!"75001".equals(error.getSQLState()) || error.getNextException() != null) {
+            if ((!"75001".equals(error.getSQLState()) && !"75002".equals(error.getSQLState())) || error.getNextException() != null) {
                 throw error;
+            }
+            if ("75002".equals(error.getSQLState())) {
+                // The server returned from all release handlers. Retry only on
+                // this dedicated holder, never after a lost/uncertain response.
+                // Pre-existing allocations were excluded before starting it.
+                try {
+                    command(program.release());
+                }
+                catch (SQLException failure) {
+                    // This response may itself be lost. Do not turn an unknown
+                    // transport result into another native command attempt.
+                    failure.addSuppressed(error);
+                    throw failure;
+                }
             }
             success = false;
         }
         check();
         requireNoAllocations(program);
+        releaseVerified = true;
         try (var statement = holder.prepareStatement(RESULT_SQL)) {
             statement.setQueryTimeout(5);
             statement.setMaxRows(2);
@@ -113,6 +159,7 @@ final class As400NativeBoundaryPulse implements AutoCloseable {
                 As400DcgNativeIo.noWarnings(rows, statement);
                 check();
                 released = true;
+                accepted = true;
                 return Optional.of(completion);
             }
         }
@@ -120,7 +167,8 @@ final class As400NativeBoundaryPulse implements AutoCloseable {
 
     void finish(As400ShortBoundaryProgram program) throws SQLException {
         check();
-        require(released && !finished && program.journal().equals(journal) && program.nonce().equals(nonce), "Undrained, reused or foreign pulse cannot close the audit");
+        require(released && accepted && !finished && program.journal().equals(journal) && program.nonce().equals(nonce),
+                "Undrained, reused or foreign pulse cannot close the audit");
         finished = true; // An uncertain forced write must not be repeated on this attempt.
         command(program.closing()); // Forced only after all metadata and release checks.
     }
@@ -184,7 +232,19 @@ final class As400NativeBoundaryPulse implements AutoCloseable {
     @Override
     public void close() throws SQLException {
         closed = true;
-        holder.close(); // Called by the synchronous owner after its native call returns.
+        SQLException failure = null;
+        try {
+            holder.close(); // A pooled server job can retain *JOB locks after disconnect.
+        }
+        catch (SQLException error) {
+            failure = error;
+        }
+        if (allocationStarted && !releaseVerified) {
+            throw new UnverifiedCleanup(job, failure);
+        }
+        if (failure != null) {
+            throw failure;
+        }
     }
 
     private static void require(boolean valid, String reason) {

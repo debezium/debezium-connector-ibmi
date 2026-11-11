@@ -31,7 +31,7 @@ class As400SchemaBoundaryTest {
 
     private JsonNode fixture() throws Exception {
         try (var stream = getClass().getResourceAsStream("/native-transactions/equal-width-alter.json")) {
-            var fixture = JSON.readTree(stream);
+            var fixture = As400OnlineFenceEvidenceTest.withUnverifiedAccessControlsForReplay(JSON.readTree(stream));
             assertThat(fixture.path("startup_proof").asBoolean()).isFalse();
             assertThat(fixture.path("cleanup").path("status").asText()).isEqualTo("passed");
             return fixture;

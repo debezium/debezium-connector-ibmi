@@ -84,7 +84,7 @@ final class As400HandoffReplay {
                 continue;
             }
             byte[] raw = entry.data();
-            var header = new EntryHeaderDecoder().decode(raw, 0);
+            var header = new EntryHeaderDecoder(RawJournalPage.METADATA_CCSID).decode(raw, 0);
             var source = As400SourceMetadata.from(header, entry.position());
             BigInteger cycle = source.commitCycle();
             if (cycle.signum() > 0 && order.compare(entry.position(), evidence.lower()) >= 0) {
@@ -146,7 +146,7 @@ final class As400HandoffReplay {
             for (RawJournalPage.Entry entry : evidence.entries()) {
                 if (order.compare(entry.position(), floor) >= 0 && order.compare(entry.position(), cut) <= 0) {
                     byte[] raw = entry.data();
-                    require(replay.accept(new EntryHeaderDecoder().decode(raw, 0), raw, 0, entry.position()).isEmpty(),
+                    require(replay.accept(new EntryHeaderDecoder(RawJournalPage.METADATA_CCSID).decode(raw, 0), raw, 0, entry.position()).isEmpty(),
                             "Undelivered output within the acknowledged prefix");
                 }
             }
@@ -178,7 +178,7 @@ final class As400HandoffReplay {
                 // F was chosen from a transaction start. Only completely resolved
                 // ordinary rows/controls qualify here; unsupported transitions reject.
                 byte[] raw = entry.data();
-                var batch = normalizer.accept(new EntryHeaderDecoder().decode(raw, 0), raw, 0, entry.position());
+                var batch = normalizer.accept(new EntryHeaderDecoder(RawJournalPage.METADATA_CCSID).decode(raw, 0), raw, 0, entry.position());
                 if (batch.isPresent()) {
                     require(batch.orElseThrow().transactionId().commitCycle().signum() == 0, "Earlier transaction context is incomplete");
                     autocommit.complete(batch.orElseThrow());

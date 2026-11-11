@@ -270,7 +270,7 @@ class As400ReaderStartupStopTest {
         As400ReaderFixture reader = new As400ReaderFixture("never-started", As400ReaderFixture.config(secure), 1, e -> {
         });
         As400ConnectorTask task = new As400ConnectorTask();
-        As400ReaderFixture.set(task, "rpcConnection", reader.rpc);
+        task.initializeConnections(reader.rpc, null);
         reader.nativeScope(() -> {
             task.doStop();
             task.doStop();

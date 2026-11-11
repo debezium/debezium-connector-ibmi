@@ -41,6 +41,48 @@ class As400KafkaBindingHistoryCandidateTest {
     Path directory;
 
     @ParameterizedTest
+    @ValueSource(strings = { "records", "bytes" })
+    void shouldRecoverOnlyTheBoundedEligiblePrefixWhenLateProposalsExceedCapacity(String bound) throws Exception {
+        var f = new Fixture(directory);
+        f.initialize();
+        String encoded = Files.readString(f.file).trim();
+        if (bound.equals("bytes")) {
+            var doc = io.debezium.document.DocumentReader.defaultReader().read(encoded);
+            doc.setString("padding", "x".repeat(3 * 1024 * 1024));
+            encoded = io.debezium.document.DocumentWriter.defaultWriter().write(doc);
+        }
+        byte[] value = encoded.getBytes(StandardCharsets.UTF_8);
+        int eligible = Math.min(As400BindingHistory.MAX_HISTORY_RECORDS, As400BindingHistory.MAX_HISTORY_BYTES / value.length);
+        var partition = new TopicPartition("history", 0);
+        var input = new ArrayList<ConsumerRecord<byte[], byte[]>>();
+        for (int i = 0; i <= eligible; i++) {
+            input.add(new ConsumerRecord<>("history", 0, i, null, value));
+        }
+        var config = Configuration.create().with(KafkaSchemaHistory.BOOTSTRAP_SERVERS, "unused.invalid:9092")
+                .with(KafkaSchemaHistory.TOPIC, "history").build();
+        try (var consumers = mockConstruction(KafkaConsumer.class, (consumer, ignored) -> {
+            when(consumer.partitionsFor(anyString(), any())).thenReturn(List.of(mock(PartitionInfo.class)));
+            when(consumer.beginningOffsets(any(), any())).thenReturn(Map.of(partition, 0L));
+            when(consumer.endOffsets(any(), any())).thenReturn(Map.of(partition, (long) input.size()));
+            when(consumer.poll(any(java.time.Duration.class))).thenReturn(new ConsumerRecords<>(Map.of(partition, input), Map.of()));
+        })) {
+            for (int restart = 0; restart < 2; restart++) {
+                var history = new As400KafkaBindingHistory();
+                history.configure(config, HistoryRecordComparator.INSTANCE, SchemaHistoryListener.NOOP, false);
+                history.allowCandidateAppends();
+                var recovered = new ArrayList<HistoryRecord>();
+                history.recoverRecords(recovered::add);
+                assertThat(recovered).hasSize(eligible);
+                assertThrows(As400BindingHistory.CandidateHistoryFullException.class, () -> history.recoveryBudget().requireAppend(value.length));
+            }
+            var strict = new As400KafkaBindingHistory();
+            strict.configure(config, HistoryRecordComparator.INSTANCE, SchemaHistoryListener.NOOP, false);
+            assertThrows(Exception.class, () -> strict.recoverRecords(record -> {
+            }));
+        }
+    }
+
+    @ParameterizedTest
     @ValueSource(strings = { "candidate-growing", "strict-growing", "candidate-gap", "candidate-null", "candidate-removed", "candidate-truncated", "reconfigured" })
     void immutableCandidateReadAllowsOnlyAppendBeyondItsVerifiedCut(String mode) throws Exception {
         var f = new Fixture(directory);

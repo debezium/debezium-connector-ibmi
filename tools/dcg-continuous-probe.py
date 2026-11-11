@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # Copyright Debezium Authors. Licensed under the Apache License, Version 2.0.
-"""Bounded continuous D/CG experiment, real owned edgeqa fixture and local Connect."""
+"""Bounded continuous D/CG experiment, real owned IBM i test fixture and local Connect."""
 import base64
 import decimal
 import hashlib
@@ -303,7 +303,7 @@ class ContinuousExperiment(native.NativeExperiment):
 
 def main():
     if len(sys.argv) != 3:
-        raise SystemExit("Usage: dcg-continuous-probe.py NEW_EVIDENCE_DIRECTORY DCNCdddd (explicit edgeqa fixture writes; local Kafka)")
+        raise SystemExit("Usage: dcg-continuous-probe.py NEW_EVIDENCE_DIRECTORY DCNCdddd (explicit IBM i test fixture writes; local Kafka)")
     experiment = ContinuousExperiment(Path(sys.argv[1]), sys.argv[2])
     try:
         experiment.stage()

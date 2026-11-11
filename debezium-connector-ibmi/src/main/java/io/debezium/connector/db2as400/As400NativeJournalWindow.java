@@ -29,19 +29,18 @@ final class As400NativeJournalWindow {
 
     record Window(JournalPosition from, JournalPosition through, Sample before, Sample after) {
         Window {
-            require(before.directory().journal().equals(after.directory().journal())
-                    && before.directory().attached().equals(after.directory().attached()), "Journal or attachment changed during capture");
+            require(before.directory().journal().equals(after.directory().journal()), "Journal changed during capture");
+            stable(before.directory().attached().equals(after.directory().attached()), "Journal attachment changed during capture");
             var chain = As400OperatorCutReader.chain(before.directory(), from.receiver());
             var recheck = As400OperatorCutReader.chain(after.directory(), from.receiver());
-            require(chain.size() <= 16 && chain.size() == recheck.size(), "Receiver chain changed or exceeds bound");
-            require(before.directory().receivers().size() == chain.size() && after.directory().receivers().size() == recheck.size(),
-                    "Unexpected receiver outside the observed interval chain");
+            require(chain.size() <= 128, "Required receiver chain exceeds bound");
+            stable(chain.size() == recheck.size(), "Receiver chain changed during capture");
             require(before.identities().objects().keySet().equals(java.util.Set.copyOf(targets(before.directory(), from)))
                     && before.identities().equals(after.identities()), "Missing, extra or changed native object identity");
             for (int i = 0; i < chain.size(); i++) {
                 Receiver a = chain.get(i), b = recheck.get(i);
                 require(a.name().equals(b.name()) && a.first().equals(b.first()) && a.previous().equals(b.previous()) && a.next().equals(b.next())
-                        && a.status().equals(b.status()) && a.minimizeFiles().equals(b.minimizeFiles()) && a.job().equals(b.job())
+                        && sameReadableStatus(a.status(), b.status()) && a.minimizeFiles().equals(b.minimizeFiles()) && a.job().equals(b.job())
                         && a.thread().equals(b.thread()) && a.luw().equals(b.luw()) && a.xid().equals(b.xid())
                         && (a.status().equals("ATTACHED") ? b.last().compareTo(a.last()) >= 0 : a.last().equals(b.last())),
                         "Previously observed receiver content or profile changed");
@@ -58,7 +57,7 @@ final class As400NativeJournalWindow {
 
         Map<JournalReceiver, String> receiverTokens() {
             var tokens = new LinkedHashMap<JournalReceiver, String>();
-            for (Receiver receiver : before.directory().receivers()) {
+            for (Receiver receiver : As400OperatorCutReader.chain(before.directory(), from.receiver())) {
                 Target target = target(receiver.name(), Kind.RECEIVER);
                 tokens.put(receiver.name(), As400OperatorCutReader.token(target, before.identities().objects().get(target)));
             }
@@ -78,7 +77,8 @@ final class As400NativeJournalWindow {
     }
 
     static void requireStableDirectory(Sample before, Sample after) {
-        require(before.directory().journal().equals(after.directory().journal()) && before.directory().attached().equals(after.directory().attached())
+        require(before.directory().journal().equals(after.directory().journal()), "Native journal changed");
+        stable(before.directory().attached().equals(after.directory().attached())
                 && before.directory().receivers().size() == after.directory().receivers().size(), "Native directory attachment or membership changed");
         require(before.identities().objects().keySet().equals(java.util.Set.copyOf(directoryTargets(before.directory())))
                 && after.identities().objects().keySet().equals(java.util.Set.copyOf(directoryTargets(after.directory())))
@@ -88,7 +88,8 @@ final class As400NativeJournalWindow {
         for (Receiver earlier : before.directory().receivers()) {
             Receiver next = later.remove(earlier.name());
             require(next != null, "Directory receiver disappeared");
-            Receiver comparable = new Receiver(next.name(), next.status(), next.first(), earlier.last(), next.previous(), next.next(),
+            require(sameReadableStatus(earlier.status(), next.status()), "Receiver became unavailable");
+            Receiver comparable = new Receiver(next.name(), earlier.status(), next.first(), earlier.last(), next.previous(), next.next(),
                     next.minimizeFiles(), next.job(), next.thread(), next.luw(), next.xid());
             require(earlier.equals(comparable) && (earlier.status().equals("ATTACHED") ? next.last().compareTo(earlier.last()) >= 0
                     : next.last().equals(earlier.last())), "Native receiver range, links or recording profile changed");
@@ -96,7 +97,7 @@ final class As400NativeJournalWindow {
     }
 
     private static List<Target> directoryTargets(Observation directory) {
-        require(!directory.receivers().isEmpty() && directory.receivers().size() <= 16, "Bounded complete directory required");
+        require(!directory.receivers().isEmpty() && directory.receivers().size() <= 1023, "Bounded complete directory required");
         var targets = new ArrayList<Target>();
         targets.add(target(directory.journal(), Kind.JOURNAL));
         directory.receivers().forEach(r -> targets.add(target(r.name(), Kind.RECEIVER)));
@@ -106,7 +107,7 @@ final class As400NativeJournalWindow {
 
     static List<Target> targets(Observation directory, JournalPosition from) {
         var chain = As400OperatorCutReader.chain(directory, from.receiver());
-        require(chain.size() <= 16, "Native receiver observation exceeds bound");
+        require(chain.size() <= 128, "Native receiver observation exceeds bound");
         var result = new ArrayList<Target>();
         result.add(target(directory.journal(), Kind.JOURNAL));
         chain.forEach(r -> result.add(target(r.name(), Kind.RECEIVER)));
@@ -127,6 +128,17 @@ final class As400NativeJournalWindow {
             }
         }
         throw new IllegalArgumentException("Native anchor receiver absent");
+    }
+
+    static boolean sameReadableStatus(String first, String second) {
+        return first.equals(second) || java.util.Set.of("ONLINE", "SAVED").contains(first)
+                && java.util.Set.of("ONLINE", "SAVED").contains(second);
+    }
+
+    private static void stable(boolean condition, String reason) {
+        if (!condition) {
+            throw new As400OperatorCutReader.UnstableCutException(reason);
+        }
     }
 
     private static void require(boolean valid, String reason) {

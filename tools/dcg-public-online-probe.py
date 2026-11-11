@@ -105,12 +105,7 @@ class Experiment(automatic.Experiment):
     def command(self, *args, timeout=45, check=True):
         if args[:2] == ('docker', 'logs') and args[-1] in getattr(self, 'logs', {}):
             return self.logs[args[-1]].read_text()
-        result = subprocess.run(list(args), text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=timeout)
-        with (self.directory / 'commands.log').open('a') as stream:
-            stream.write(self.fixture.redact(json.dumps(list(args)) + '\n' + result.stdout + '\n'))
-        if check and result.returncode:
-            raise RuntimeError(self.fixture.redact(f'Command failed ({result.returncode}): {args!r}\n{result.stdout[-3000:]}'))
-        return result.stdout.strip()
+        return super().command(*args, timeout=timeout, check=check)
 
     def failed(self, worker, name, expected):
         status = self.rest(worker, '/connectors/' + name + '/status')

@@ -18,7 +18,8 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 
 class As400OnlineLockScopeTest {
     static ObjectNode fixture() throws Exception {
-        return (ObjectNode) new ObjectMapper().readTree(As400OnlineLockScopeTest.class.getResourceAsStream("/native-transactions/automatic-fence-native-scope.json"));
+        return As400OnlineFenceEvidenceTest.withUnverifiedAccessControlsForReplay(
+                (ObjectNode) new ObjectMapper().readTree(As400OnlineLockScopeTest.class.getResourceAsStream("/native-transactions/automatic-fence-native-scope.json")));
     }
 
     @Test

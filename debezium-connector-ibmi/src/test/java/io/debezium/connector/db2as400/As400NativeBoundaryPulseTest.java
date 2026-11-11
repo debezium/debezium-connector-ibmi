@@ -71,6 +71,34 @@ class As400NativeBoundaryPulseTest {
         f.closed();
     }
 
+    @Test
+    void shouldRetryReleaseOnlyAfterTheServerReturnsItsExplicitReleaseFailure() throws Exception {
+        var f = new Fixture();
+        f.failure = new SQLException("All server release attempts completed", "75002");
+        f.receipt = false;
+        try (var pulse = f.open()) {
+            assertThat(pulse.attempt(PROGRAM)).isEmpty();
+            assertThrows(IllegalArgumentException.class, () -> pulse.finish(PROGRAM));
+        }
+        assertThat(f.commands).filteredOn(PROGRAM.release()::equals).hasSize(1);
+        assertThat(f.events).containsSubsequence("pulse-returned", "locks", "receipt").doesNotContain("closing");
+        f.closed();
+    }
+
+    @Test
+    void shouldNeverRetryAnUncertainClientReleaseOrClaimDrained() throws Exception {
+        var f = new Fixture();
+        f.failure = new SQLException("All server release attempts completed", "75002");
+        f.clientReleaseFailure = new SQLException("Release response lost", "08006");
+        f.receipt = false;
+        var pulse = f.open();
+        assertThrows(SQLException.class, () -> pulse.attempt(PROGRAM));
+        assertThat(assertThrows(SQLException.class, pulse::close).getMessage()).contains("cleanup unverified");
+        assertThat(f.commands).filteredOn(PROGRAM.release()::equals).hasSize(1);
+        assertThat(f.events).doesNotContain("receipt", "closing");
+        f.closed();
+    }
+
     @ParameterizedTest
     @ValueSource(strings = { "network", "chained-failure", "timeout", "query", "warning", "held-before", "held-after", "authority", "foreign-receipt",
             "missing-receipt", "failure-with-receipt", "receipt-warning", "stopped-after-call" })
@@ -95,9 +123,18 @@ class As400NativeBoundaryPulseTest {
             case "stopped-after-call" -> f.stopOnReturn = true;
             default -> throw new AssertionError(fault);
         }
-        try (var pulse = f.open()) {
+        var pulse = f.open();
+        try {
             assertThrows(Exception.class, () -> pulse.attempt(PROGRAM));
             assertThrows(Exception.class, () -> pulse.finish(PROGRAM));
+        }
+        finally {
+            if (List.of("network", "chained-failure", "timeout", "query", "warning", "stopped-after-call", "held-after").contains(fault)) {
+                assertThat(assertThrows(SQLException.class, pulse::close).getMessage()).contains("cleanup unverified");
+            }
+            else {
+                pulse.close();
+            }
         }
         assertThat(f.events).doesNotContain("closing");
         if (List.of("network", "chained-failure", "timeout", "query", "warning", "stopped-after-call").contains(fault)) {
@@ -152,7 +189,7 @@ class As400NativeBoundaryPulseTest {
         final AtomicInteger lockQueries = new AtomicInteger();
         boolean receipt = true, foreign, statementWarning, receiptWarning, authorityFailure, stopOnReturn;
         int heldAt;
-        SQLException failure;
+        SQLException failure, clientReleaseFailure;
         CountDownLatch entered, release;
 
         As400NativeBoundaryPulse open() throws SQLException {
@@ -198,6 +235,9 @@ class As400NativeBoundaryPulseTest {
                     }
                     else if (parameter.get() != null) {
                         commands.add(parameter.get());
+                        if (parameter.get().equals(PROGRAM.release()) && clientReleaseFailure != null) {
+                            throw clientReleaseFailure;
+                        }
                         if (parameter.get().startsWith("CHKOBJ") && authorityFailure) {
                             throw new SQLException("Authority missing", "38501");
                         }

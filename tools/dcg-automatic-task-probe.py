@@ -105,7 +105,8 @@ class Experiment(live.LiveExperiment):
 
     def inserted(self, table, key, label):
         def committed():
-            rows = [r for r in self.table_records(table, label) if r['key']['ID'] == key and r['value'] and r['value']['op'] == 'c']
+            rows = [r for r in self.table_records(table, label)
+                    if r['value'] and r['value']['op'] == 'c' and r['key']['ID'] == key]
             if len(rows) > 1:
                 raise ValueError('Duplicate fixture insert output')
             return rows[0] if rows else None

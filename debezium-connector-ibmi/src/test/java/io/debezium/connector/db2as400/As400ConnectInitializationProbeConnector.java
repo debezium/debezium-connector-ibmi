@@ -132,8 +132,7 @@ public class As400ConnectInitializationProbeConnector extends As400ConnectProbeC
             output = new ChangeEventQueue.Builder<DataChangeEvent>().maxBatchSize(config.getMaxBatchSize()).maxQueueSize(64)
                     .pollInterval(Duration.ofMillis(10)).loggingContextSupplier(() -> taskContext.configureLoggingContext("initialization-probe")).build();
             errors = new ErrorHandler(As400RpcConnector.class, config, output, null);
-            inject("queue", output);
-            inject("errorHandler", errors);
+            initializeOutput(output, errors);
             initializer = new Thread(() -> {
                 try {
                     initializeAndRead(loaded, config);
@@ -396,17 +395,6 @@ public class As400ConnectInitializationProbeConnector extends As400ConnectProbeC
                 Thread.sleep(25);
             }
             checkAdmission();
-        }
-
-        private void inject(String name, Object value) {
-            try {
-                var field = As400ConnectorTask.class.getDeclaredField(name);
-                field.setAccessible(true);
-                field.set(this, value);
-            }
-            catch (ReflectiveOperationException e) {
-                throw new IllegalStateException(e);
-            }
         }
 
         private boolean enqueue(SourceRecord record) throws Exception {

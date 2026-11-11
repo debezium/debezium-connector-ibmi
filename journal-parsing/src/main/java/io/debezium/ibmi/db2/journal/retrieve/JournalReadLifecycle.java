@@ -15,6 +15,7 @@ import java.io.IOException;
 public final class JournalReadLifecycle {
     private volatile boolean stopped;
     private int admitted;
+    private Throwable cleanupFailure;
 
     public Lease enter() throws IOException {
         synchronized (this) {
@@ -38,12 +39,13 @@ public final class JournalReadLifecycle {
         stopped = true;
     }
 
-    /**
-     * Call from the stopping thread, never from inside a lease. Cancellation must
-     * happen before waiting and without this monitor. There is no native deadline
-     * guarantee: an unresponsive driver leaves stop pending, not falsely complete.
-     * Interruption does not waive the barrier; the interrupt status is restored.
-     */
+    public synchronized void failedCleanup(Throwable failure) {
+        stopped = true;
+        cleanupFailure = failure;
+        notifyAll();
+    }
+
+    /** Wait for admitted work and report any cleanup failure; stop requests alone are not drain proof. */
     public synchronized void awaitDrained() {
         boolean interrupted = false;
         while (admitted != 0) {
@@ -56,6 +58,13 @@ public final class JournalReadLifecycle {
         }
         if (interrupted) {
             Thread.currentThread().interrupt();
+        }
+        checkCleanup();
+    }
+
+    private void checkCleanup() {
+        if (cleanupFailure != null) {
+            throw new IllegalStateException("Native connection cleanup failed; drain unverified", cleanupFailure);
         }
     }
 

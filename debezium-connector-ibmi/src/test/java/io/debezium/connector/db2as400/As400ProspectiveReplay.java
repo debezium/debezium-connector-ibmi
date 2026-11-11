@@ -78,10 +78,14 @@ public final class As400ProspectiveReplay {
     }
 
     static NativeInput prepare(JsonNode bundle, As400ConnectorConfig config) throws Exception {
+        return prepare(bundle, config, As400OnlineFenceEvidence::validateOffLock);
+    }
+
+    static NativeInput prepare(JsonNode bundle, As400ConnectorConfig config, As400OnlineFenceEvidence.MetadataValidator validator) throws Exception {
         boolean withBoundary = bundle.path("profile").asText().equals(BOUNDARY_PROFILE);
         require((withBoundary || bundle.path("profile").asText().equals(PROFILE)) && withBoundary == bundle.has("boundary") && bundle.path("startup_proof").isBoolean()
                 && !bundle.path("startup_proof").asBoolean(), "Explicit unqualified prospective fixture required");
-        var metadata = As400OnlineFenceEvidence.validateOffLock(bundle.path("metadata"));
+        var metadata = validator.validate(bundle.path("metadata"));
         var future = entries(bundle.path("prospective-rows"), "captured");
         var controls = entries(bundle.path("older-controls"), "controls-captured");
         var window = As400OnlineNativeEvidence.restore(bundle.path("prospective-rows").path("native_identity_evidence"));
@@ -105,7 +109,7 @@ public final class As400ProspectiveReplay {
         var cut = As400OnlineHandoff.position(bundle.path("cut"));
         require(window.from().equals(origin), "Raw prospective interval must begin at the candidate origin");
         if (withBoundary) {
-            var boundary = As400ShortBoundaryEvidence.validate(bundle.path("boundary"));
+            var boundary = As400ShortBoundaryEvidence.validate(bundle.path("boundary"), validator);
             require(boundary.origin().equals(origin) && boundary.metadata().equals(metadata)
                     && boundary.window().journalToken().equals(window.journalToken())
                     && boundary.window().receiverTokens().equals(window.receiverTokens())
@@ -144,11 +148,15 @@ public final class As400ProspectiveReplay {
     }
 
     static Map<String, Object> verify(JsonNode bundle) throws Exception {
-        var definitions = As400OnlineFenceEvidence.validateOffLock(bundle.path("metadata")).tables().definitions();
+        return verify(bundle, As400OnlineFenceEvidence::validateOffLock);
+    }
+
+    static Map<String, Object> verify(JsonNode bundle, As400OnlineFenceEvidence.MetadataValidator validator) throws Exception {
+        var definitions = validator.validate(bundle.path("metadata")).tables().definitions();
         var config = new As400ConnectorConfig(Configuration.create().with("topic.prefix", "test").with("database.dbname", "DB")
                 .with("database.schema", definitions.get(0).identity().tableId().schema()).with("skipped.operations", "none")
                 .with("provide.transaction.metadata", false).build());
-        var prepared = prepare(bundle, config);
+        var prepared = prepare(bundle, config, validator);
         var checkpoint = prepared.candidate().checkpoint();
         var future = prepared.evidence().entries();
         var order = prepared.evidence().order();

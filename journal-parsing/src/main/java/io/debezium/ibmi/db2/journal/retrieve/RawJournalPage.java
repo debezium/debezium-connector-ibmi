@@ -26,6 +26,9 @@ import io.debezium.ibmi.db2.journal.retrieve.rjne0200.EntryHeaderDecoder;
  */
 public record RawJournalPage(List<Entry> entries, Optional<JournalPosition> continuation, int bytesReturned) {
 
+    /** Qualified native API metadata profile; row-column CCSIDs are independent. */
+    public static final int METADATA_CCSID = 37;
+
     static final int ERROR_BYTES = 256;
 
     public RawJournalPage {
@@ -79,15 +82,16 @@ public record RawJournalPage(List<Entry> entries, Optional<JournalPosition> cont
         int returned = prefix.getInt(0);
         int offset = prefix.getInt(4);
         int count = prefix.getInt(8);
-        require(returned >= 64 && returned <= response.length && count >= 0 && count <= maximumEntries,
+        require(returned >= 64 && returned <= response.length && count >= 0 && count <= (returned - 64) / 236,
                 "Invalid or excessive RJNE0200 response size");
         String more = text(response, 12, 1);
         require(more.equals("0") || more.equals("1"), "Unknown journal continuation indicator");
         require(count == 0 ? offset == 0 : offset >= 64 && (long) offset + 236 <= returned, "Invalid first entry boundary");
         require(count > 0 || more.equals("0"), "Buffer cannot hold the next complete entry; skipping is forbidden");
         byte[] bounded = Arrays.copyOf(response, returned);
-        var decoder = new EntryHeaderDecoder();
+        var decoder = new EntryHeaderDecoder(METADATA_CCSID);
         List<Entry> entries = new ArrayList<>();
+        JournalPosition firstDeferred = null;
         BigInteger previous = null;
         for (int i = 0; i < count; i++) {
             require(offset >= 64 && (long) offset + 236 <= returned, "Truncated journal entry header");
@@ -101,11 +105,19 @@ public record RawJournalPage(List<Entry> entries, Optional<JournalPosition> cont
             require(i == count - 1 ? next == 0 : next >= 236 && (long) offset + next + 236 <= returned,
                     "Journal entry count and links disagree");
             require(header.getPointerHandle() == 0, "Pointer-backed journal data requires a different retrieval profile");
-            byte[] owned = Arrays.copyOfRange(bounded, offset, offset + header.getEndOffset());
-            // The entry no longer links into the reusable response buffer.
-            ByteBuffer.wrap(owned).putInt(0, 0);
-            EntryHeader copied = decoder.decode(owned, 0);
-            entries.add(new Entry(new JournalPosition(sequence, from.receiver()), copied, owned));
+            if (entries.size() < maximumEntries) {
+                byte[] owned = Arrays.copyOfRange(bounded, offset, offset + header.getEndOffset());
+                // The entry no longer links into the reusable response buffer.
+                ByteBuffer.wrap(owned).putInt(0, 0);
+                EntryHeader copied = decoder.decode(owned, 0);
+                entries.add(new Entry(new JournalPosition(sequence, from.receiver()), copied, owned));
+            }
+            else if (firstDeferred == null) {
+                // NBRENT is not set: a transport page may exceed the caller's
+                // remaining budget. Resume at the first actual unreturned entry,
+                // never an arithmetic guess or the API's later continuation.
+                firstDeferred = new JournalPosition(sequence, from.receiver());
+            }
             previous = sequence;
             offset += next;
         }
@@ -121,7 +133,7 @@ public record RawJournalPage(List<Entry> entries, Optional<JournalPosition> cont
                     "Journal continuation regresses or escapes the bounded cut");
             continuation = Optional.of(new JournalPosition(next, from.receiver()));
         }
-        return new RawJournalPage(entries, continuation, returned);
+        return new RawJournalPage(entries, firstDeferred == null ? continuation : Optional.of(firstDeferred), returned);
     }
 
     static void validateRange(JournalPosition from, JournalPosition through, int maximumEntries) {
@@ -135,7 +147,7 @@ public record RawJournalPage(List<Entry> entries, Optional<JournalPosition> cont
     }
 
     private static String text(byte[] bytes, int offset, int length) {
-        return (String) new AS400Text(length).toObject(bytes, offset);
+        return (String) new AS400Text(length, METADATA_CCSID).toObject(bytes, offset);
     }
 
     private static void require(boolean condition, String message) {

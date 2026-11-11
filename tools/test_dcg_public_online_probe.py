@@ -39,6 +39,14 @@ class PublicEvidenceTest(unittest.TestCase):
         self.exp.rest.return_value = {'tasks': [{'state': 'FAILED', 'trace': 'Missing offsets cannot select automatic migration'}]}
         self.assertTrue(self.exp.failed('worker', 'missing', 'Missing offsets'))
 
+    def test_timeout_does_not_expose_private_arguments_or_output(self):
+        failure = subprocess.TimeoutExpired(['inspect', 'private-target'], 1, output='private-target')
+        with patch.object(probe.subprocess, 'run', side_effect=failure):
+            with self.assertRaises(RuntimeError) as caught:
+                self.exp.command('inspect', 'private-target', timeout=1)
+        self.assertNotIn('private-target', str(caught.exception))
+        self.assertTrue(caught.exception.__suppress_context__)
+
 
 if __name__ == '__main__':
     unittest.main()

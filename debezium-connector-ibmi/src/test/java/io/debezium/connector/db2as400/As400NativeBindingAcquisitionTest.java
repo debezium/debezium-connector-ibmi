@@ -56,13 +56,28 @@ class As400NativeBindingAcquisitionTest {
         verify(f.tables, times(2)).collect(List.of(f.observation.request()));
         verify(f.connection).close();
         for (PreparedStatement st : f.statements) {
-            verify(st).setMaxRows(4097);
+            verify(st).setMaxRows(st == f.statements.get(0) ? 2 : 4097);
             verify(st).setQueryTimeout(5);
             verify(st).setString(1, "LIB");
             verify(st).setString(2, "M");
             verify(st).close();
         }
         verify(f.connection, never()).commit();
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = { "R", "C", "B", "?", "null", "missing", "duplicate", "wrong-table" })
+    void shouldRejectAccessControlWithoutAcquiringOrPublishingARowLayout(String fault) throws Exception {
+        var f = new Fixture();
+        switch (fault) {
+            case "missing" -> f.controls.clear();
+            case "duplicate" -> f.controls.add(f.controls.get(0));
+            case "wrong-table" -> f.controls.get(0).put("SYSTEM_TABLE_NAME", "OTHER");
+            default -> f.controls.get(0).put("CONTROL", fault.equals("null") ? null : fault);
+        }
+        assertThrows(SQLException.class, f::acquire);
+        verify(f.connection, never()).prepareStatement(As400NativeBindingAcquisition.COLUMNS_SQL);
+        verify(f.connection).close();
     }
 
     @Test
@@ -157,6 +172,10 @@ class As400NativeBindingAcquisitionTest {
         final List<PreparedStatement> statements = new ArrayList<>();
         final List<Map<String, Object>> columns;
         final List<Map<String, Object>> keys;
+        // Separate synthetic admission observation: the older column capture
+        // did not query SYSTABLES and is not evidence of source RCAC settings.
+        final List<Map<String, Object>> controls = new ArrayList<>(List.of(new java.util.HashMap<>(Map.of(
+                "TABLE_SCHEMA", "LIB", "SYSTEM_TABLE_SCHEMA", "LIB", "TABLE_NAME", "M", "SYSTEM_TABLE_NAME", "M", "CONTROL", " "))));
         final Observation observation;
 
         Fixture() throws Exception {
@@ -179,10 +198,11 @@ class As400NativeBindingAcquisitionTest {
             when(connection.isReadOnly()).thenReturn(true);
             when(connection.prepareStatement(anyString())).thenAnswer(i -> {
                 String sql = i.getArgument(0);
-                assertThat(sql).isIn(As400NativeBindingAcquisition.COLUMNS_SQL, As400NativeBindingAcquisition.KEYS_SQL);
+                assertThat(sql).isIn(As400NativeBindingAcquisition.COLUMNS_SQL, As400NativeBindingAcquisition.KEYS_SQL, As400NativeBindingAcquisition.CONTROLS_SQL);
                 PreparedStatement st = mock(PreparedStatement.class);
                 statements.add(st);
-                when(st.executeQuery()).thenAnswer(q -> rows(sql.equals(As400NativeBindingAcquisition.COLUMNS_SQL) ? columns : keys));
+                when(st.executeQuery()).thenAnswer(q -> rows(sql.equals(As400NativeBindingAcquisition.COLUMNS_SQL) ? columns
+                        : sql.equals(As400NativeBindingAcquisition.KEYS_SQL) ? keys : controls));
                 return st;
             });
         }

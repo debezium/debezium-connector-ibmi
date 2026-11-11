@@ -66,7 +66,7 @@ class As400OnlineCensusReplayTest {
         var definitions = new ArrayList<As400BindingDefinition>();
         for (JsonNode binding : fixture.get("tables")) {
             String file = binding.get("file").asText();
-            var table = new TableId("AEQA", binding.get("library").asText(), file);
+            var table = new TableId("TEST", binding.get("library").asText(), file);
             definitions.add(new As400BindingDefinition(new TableIdentity(table, file, binding.get("member").asText(), binding.get("file_jid").asText(),
                     binding.get("member_jid").asText(), binding.get("format").asText()),
                     Table.editor().tableId(table).addColumn(Column.editor().name("ID").position(1).jdbcType(Types.INTEGER).type("INTEGER")
@@ -264,7 +264,7 @@ class As400OnlineCensusReplayTest {
         try (var input = As400OnlineCensusReplayTest.class.getResourceAsStream("/native-transactions/multiple-clears-bindings.json")) {
             for (JsonNode binding : JSON.readTree(input).get("tables")) {
                 String file = binding.get("file").asText();
-                var table = new TableId("AEQA", binding.get("library").asText(), file);
+                var table = new TableId("TEST", binding.get("library").asText(), file);
                 var identity = new TableIdentity(table, file, binding.get("member").asText(), binding.get("fileJournalId").asText(),
                         binding.get("memberJournalId").asText(), "TEST:0000000000000:4:1:false");
                 // Controlled fixture layout; it does not assert native format/history provenance.

@@ -8,7 +8,7 @@ if [[ $# -ne 2 ]]; then
     exit 2
 fi
 probe_python=${PYTHON:-python3}
-"$probe_python" -c 'import aesql'
+"$probe_python" -c 'import pyodbc'
 ./mvnw -B -ntp test-compile -DskipTests -DskipITs
 ./mvnw -B -ntp -pl debezium-connector-ibmi dependency:build-classpath -DincludeScope=test -Dmdep.outputFile=target/connect-probe-classpath.txt
 exec "$probe_python" -B tools/dcg-continuous-probe.py "$@"

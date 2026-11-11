@@ -48,6 +48,8 @@ final class As400DcgNativeIo implements AutoCloseable {
     private final AS400 transport;
     private final boolean secure;
     private volatile Exception failedConnectionCleanup;
+    private final As400AsyncCleanup cancellation = new As400AsyncCleanup("ibmi-native-cancel");
+    private final As400AsyncCleanup cleanup = new As400AsyncCleanup("ibmi-native-close");
 
     As400DcgNativeIo(As400DcgConfig config) throws Exception {
         this(config.raw, config.server, config.journal, config.rrnKeys, config.policy, config.historyTopic, config.prefix);
@@ -77,7 +79,7 @@ final class As400DcgNativeIo implements AutoCloseable {
         tables = new As400OperatorTableEvidence(() -> connection(false), tableLimits);
         acquisition = new As400NativeBindingAcquisition(() -> connection(false), tables, tableLimits, rrnKeys);
         census = new As400NativeTransactionCensus(() -> connection(false), 1024, 5);
-        journals = new As400OperatorJournalEvidence(() -> connection(false), journal, new As400OperatorJournalEvidence.Limits(128, 5), true);
+        journals = As400OperatorJournalEvidence.retained(() -> connection(false), journal, new As400OperatorJournalEvidence.Limits(128, 5));
         identities = new As400JdbcNativeIdentityEvidence(() -> connection(false), new As400JdbcNativeIdentityEvidence.Limits(220, 5, 65536));
         var historyConfig = raw.edit().with(SchemaHistory.NAME, historyTopic)
                 .with(SchemaHistory.INTERNAL_CONNECTOR_CLASS, As400RpcConnector.class.getName())
@@ -157,13 +159,11 @@ final class As400DcgNativeIo implements AutoCloseable {
             boolean cleanup = List.of("close", "rollback", "isClosed").contains(method.getName())
                     || (delegate instanceof Statement && method.getName().equals("cancel"));
             JournalReadLifecycle.Lease call = null;
-            boolean completed = false;
             try {
                 if (!cleanup) {
                     call = lifecycle.enter();
                 }
                 Object result = method.invoke(delegate, args);
-                completed = true;
                 if (result instanceof Statement || result instanceof ResultSet || result instanceof DatabaseMetaData
                         || result instanceof ResultSetMetaData || result instanceof ParameterMetaData) {
                     return guard(result, lifecycle, null);
@@ -174,6 +174,9 @@ final class As400DcgNativeIo implements AutoCloseable {
                 return result;
             }
             catch (InvocationTargetException error) {
+                if (connectionLease != null && method.getName().equals("close")) {
+                    lifecycle.failedCleanup(error.getCause());
+                }
                 throw error.getCause();
             }
             catch (java.io.IOException error) {
@@ -183,7 +186,7 @@ final class As400DcgNativeIo implements AutoCloseable {
                 if (call != null) {
                     call.close();
                 }
-                if (connectionLease != null && completed && method.getName().equals("close")) {
+                if (connectionLease != null && method.getName().equals("close")) {
                     connectionLease.close();
                 }
             }
@@ -196,18 +199,40 @@ final class As400DcgNativeIo implements AutoCloseable {
         }
     }
 
+    void requireRetention() throws SQLException {
+        journals.collect();
+    }
+
+    void failedCleanup(Throwable failure) {
+        lifecycle.failedCleanup(failure);
+    }
+
     void requestStop() {
         lifecycle.requestStop();
-        reader.cancelJob();
+        cancellation.start(reader::cancelJob);
     }
 
     @Override
     public void close() {
+        closeWithin(As400AsyncCleanup.STOP_TIMEOUT);
+    }
+
+    void closeWithin(java.time.Duration timeout) {
         requestStop();
-        lifecycle.awaitDrained();
-        transport.disconnectAllServices();
-        if (failedConnectionCleanup != null) {
-            throw new IllegalStateException("Native connection cleanup failed; drain unverified", failedConnectionCleanup);
-        }
+        cleanup.start(() -> {
+            try {
+                cancellation.awaitInCleanupWorker();
+                lifecycle.awaitDrained();
+            }
+            finally {
+                // A failed JDBC close or allocation release must remain a
+                // reported failure, but must not leak the separate RPC handle.
+                transport.disconnectAllServices();
+            }
+            if (failedConnectionCleanup != null) {
+                throw new IllegalStateException("Native connection cleanup failed; drain unverified", failedConnectionCleanup);
+            }
+        });
+        cleanup.await(timeout);
     }
 }

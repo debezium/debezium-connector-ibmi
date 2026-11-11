@@ -30,7 +30,7 @@ def marker(payload, sequence):
 
 
 class DiagnosticTest(unittest.TestCase):
-    def test_actual_edgeqa_marker_bytes_and_padded_names(self):
+    def test_actual_native_marker_bytes_and_padded_names(self):
         path = Path(__file__).resolve().parents[1] / 'debezium-connector-ibmi/src/test/resources/native-transactions/short-boundary-markers.json'
         captured = json.loads(path.read_text())
         request = probe.pulse.Pulse(**captured['request'])

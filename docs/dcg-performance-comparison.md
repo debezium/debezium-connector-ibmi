@@ -16,7 +16,7 @@ Debezium snapshot dependencies and JTOpen 21.0.4; the seven shared third-party
 JARs are byte-identical. Additional history-storage dependencies in the fork are
 part of the artifact being evaluated, not removed to improve the result.
 
-Each run uses its own JVM, local broker and fresh isolated Edgeqa fixture. Runs
+Each run uses its own JVM, local broker and fresh isolated IBM i test fixture. Runs
 are serial. Kafka/Connect uses the pinned `apache/kafka:4.3.1` image recorded by
 digest in each report, Java 21.0.11, a 128–512 MiB worker heap, and
 `-XX:ActiveProcessorCount=2`. That JVM setting is not a CPU quota or dedicated
@@ -170,10 +170,9 @@ update before-images were checked independently against retained captures.
 
 Local verification passed 2,985 Java tests, 146 Python tests, assembly packaging,
 formatter/import validation and whitespace checks. No connector runtime source
-changed. All changes are local; nothing was pushed.
+changed. These results describe that historical artifact.
 
-Evidence root (private native details):
-`/home/gardnmi/.bb/thread-storage/thr_vzfz57gebs/dcg-performance-20261110/`.
+Raw evidence was retained privately; rerun the documented tools in a new local evidence directory.
 The key files are `comparison.json`, `validation.json`, `restart-replay.json`,
 `configuration-equivalence.json`, and each run's `connect/report.json` and
 `native/report.json`. Exact tested plugin ZIPs are retained there:
@@ -215,3 +214,62 @@ results are claimed for them. Separate burst-only repetitions provide the matche
 steady-state comparison. All original strict assertions remain in the runner.
 Fixing legacy replay/checkpoint semantics is a separate correctness change; this
 performance task changes no connector runtime code.
+
+## Review-correction comparison — 2026-11-11
+
+The later review corrections were measured again against the original upstream
+artifact, using serial fresh-library runs, local Kafka Connect 4.3.1 and the same
+250-row burst workload. Each configuration ran twice, with six warm-up bursts
+followed by five measured bursts for each operation in each run. All eight runs
+passed the exact record/key/value assertions and verified fixture/resource cleanup.
+
+| Artifact/profile | A inserts | M inserts | M updates | Worker CPU/record | Peak worker RSS |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Original upstream | 5.29 s | 5.40 s | 5.42 s | 2.52 ms | 422–441 MiB |
+| Corrected fork, truncate disabled | 5.31 s | 5.47 s | 5.46 s | 2.57 ms | 402–475 MiB |
+| Corrected fork, enabled before query consolidation | 6.14 s | 6.24 s | 6.30 s | 2.78 ms | 429–439 MiB |
+| Corrected fork, enabled after query consolidation | 3.31 s | 3.30 s | 3.33 s | 1.90 ms | 452–455 MiB |
+
+Times are medians of ten measured bursts per operation. CPU is the median of two
+whole-worker measurements during the measured burst intervals; RSS is the range
+of those workers' peaks. The disabled path was 0.4–1.3% slower than upstream in
+these measurements. This small sample does not establish statistical equivalence.
+
+The first enabled comparison exposed an unnecessary extra native journal query.
+The correction selects `DELETE_RECEIVER_OPTION` with the existing exact
+`JOURNAL_INFO` observation instead. Every task-owned observation still requires
+operator-managed retention (`NO`); missing, ambiguous or unsafe settings still
+reject. This removes a round trip without caching or weakening the retention check.
+The two repeat runs after that correction measured substantially lower burst
+latency and worker CPU. Their RSS peaks were slightly above the upstream runs;
+the short experiment does not establish memory parity or long-term leak freedom.
+
+Artifact SHA-256 identities:
+
+- Original upstream: `da0cbb3ab5228fbe676520e905b88f36158f4adc0a73a856bd18b4583908339a`.
+- Corrected fork before query consolidation (both disabled/enabled measurements):
+  `173d5a8cecdc8585d818669fccc80659ab94423eaac339012133a8fb60a0fbcf`.
+- Corrected fork after query consolidation (enabled repeat measurements):
+  `ec2646b9ad696430aaa9b96dc85ad1e74cb6629df3eae5e03c674ed499675c9e`.
+
+All used the pinned Debezium core revision
+`5eea03dd2a5dd25ad7e8db16cc8c59109dac2da8`. The final artifact also restores an
+unrelated request-builder condition to its original behavior. The disabled-path
+runs were not relabeled as tests of that final artifact. Retained per-run reports
+identify the exact distribution, container image, raw consumer records, JFR
+recording, resources and cleanup. The earlier slower enabled results remain in
+the evidence rather than being discarded.
+
+These are finite-burst latency/resource measurements. They exclude initial
+handoff and do not measure saturation throughput, many-table scaling, every
+native layout, long transactions or multi-day stability. Historical restart/soak
+results above retain their original artifact identities.
+
+Subsequent native qualification found a clear-companion check that accepted only
+`OMTJRNE(*OPNCLO)` despite admitting files using `*NONE`. The follow-up artifact
+`b02df4334fdc53098e914a7a604b83bbf5fba45330dc38f036df0b564d8230e3`
+also accepts the documented `*NONE` payload, retaining the complete-image and
+remote-filtering checks. Nested artifact comparison found only
+`As400JournalLifecycle.class` changed. The burst matrix was not rerun or relabeled
+after this clear-specific correction; its unit and native verification are
+recorded separately.

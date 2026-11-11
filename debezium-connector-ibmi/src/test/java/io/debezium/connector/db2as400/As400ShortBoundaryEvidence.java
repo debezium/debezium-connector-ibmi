@@ -34,10 +34,14 @@ final class As400ShortBoundaryEvidence {
     }
 
     static Candidate validate(JsonNode input) throws Exception {
+        return validate(input, As400OnlineFenceEvidence::validateOffLock);
+    }
+
+    static Candidate validate(JsonNode input, As400OnlineFenceEvidence.MetadataValidator metadata) throws Exception {
         require(input.path("profile").asText().equals("native-short-boundary-observation-v1")
                 && input.path("startup_proof").isBoolean() && !input.path("startup_proof").asBoolean(), "Explicit test-only boundary observation required");
-        var before = As400OnlineFenceEvidence.validateOffLock(input.path("before"));
-        var after = As400OnlineFenceEvidence.validateOffLock(input.path("after"));
+        var before = metadata.validate(input.path("before"));
+        var after = metadata.validate(input.path("after"));
         require(before.tables().equals(after.tables()) && before.identities().equals(after.identities())
                 && input.path("before").path("native_scope").equals(input.path("after").path("native_scope")),
                 "Native scope, schema or identity changed across boundary");
@@ -53,9 +57,10 @@ final class As400ShortBoundaryEvidence {
         String scopeHash = hash(JSON.valueToTree(Map.of("journal", List.of(library, "QSQJRN"), "targets", targets,
                 "evidence_sha256", evidenceHash))).toUpperCase(java.util.Locale.ROOT);
         var pulse = input.path("pulse");
-        String statement = new As400ShortBoundaryProgram(new io.debezium.ibmi.db2.journal.retrieve.JournalReceiver("QSQJRN", library),
-                targets.stream().map(t -> new As400ShortBoundaryProgram.Target(library, t.get(0), t.get(1))).toList(), nonce, scopeHash).statement();
-        require(input.path("statement").asText().equals(statement)
+        var expectedProgram = new As400ShortBoundaryProgram(new io.debezium.ibmi.db2.journal.retrieve.JournalReceiver("QSQJRN", library),
+                targets.stream().map(t -> new As400ShortBoundaryProgram.Target(library, t.get(0), t.get(1))).toList(), nonce, scopeHash);
+        String statement = input.path("statement").asText();
+        require((statement.equals(expectedProgram.statement()) || statement.equals(historicalStatement(expectedProgram)))
                 && As400OnlineHandoff.hash(statement.getBytes(StandardCharsets.US_ASCII)).equals(pulse.path("program_sha256").asText()),
                 "Pulse differs from minimal allocate/marker/release program");
         require(pulse.path("response").asText().equals("success") && pulse.path("status").asText().equals("returned-and-locks-absent")
@@ -122,6 +127,26 @@ final class As400ShortBoundaryEvidence {
                 new io.debezium.ibmi.db2.journal.retrieve.RetrieveJournal.AuditPage(entries, java.util.Optional.empty(), page.path("bytes_returned").asInt()),
                 before.tables().definitions(), before.boundary(), after.boundary());
         return new Candidate(origin, through, before, window);
+    }
+
+    /** Decode successful historical captures without claiming they executed the corrected release program. */
+    private static String historicalStatement(As400ShortBoundaryProgram program) {
+        String current = program.statement();
+        int allocation = current.indexOf("CALL QSYS2.QCMDEXC('ALCOBJ");
+        int allocationEnd = current.indexOf('\n', allocation);
+        current = current.replace("SET HELD=1;\n" + current.substring(allocation, allocationEnd),
+                current.substring(allocation, allocationEnd) + "\nSET HELD=1;");
+        int release = current.indexOf("IF HELD=1 THEN");
+        int receipt = current.indexOf("IF FAILED=0 AND HELD=0 THEN");
+        String block = "IF HELD=1 THEN\nBEGIN\n"
+                + "DECLARE EXIT HANDLER FOR SQLEXCEPTION SET RELEASE_FAILED=1;\n"
+                + "DECLARE EXIT HANDLER FOR SQLWARNING SET RELEASE_FAILED=1;\n"
+                + "DECLARE EXIT HANDLER FOR NOT FOUND SET RELEASE_FAILED=1;\n"
+                + "CALL QSYS2.QCMDEXC('" + program.release() + "');\nSET HELD=0;\nSET RELEASED=CURRENT_TIMESTAMP;\nEND;\nEND IF;\n";
+        return (current.substring(0, release) + block + current.substring(receipt))
+                .replace("IF FAILED=0 AND HELD=0 THEN", "IF FAILED=0 AND RELEASE_FAILED=0 THEN")
+                .replace("IF HELD=1 THEN\nSIGNAL SQLSTATE '75002' SET MESSAGE_TEXT='Pulse release failed; independent drain required';\nEND IF;\n", "")
+                .replace("IF FAILED=1 THEN\nSIGNAL", "IF FAILED=1 OR RELEASE_FAILED=1 THEN\nSIGNAL");
     }
 
     private static LocalDateTime time(String value) {

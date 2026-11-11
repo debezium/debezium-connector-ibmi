@@ -9,7 +9,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockConstruction;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.verifyNoMoreInteractions;
 import static org.mockito.Mockito.when;
 
 import java.util.Map;
@@ -26,7 +29,7 @@ import io.debezium.connector.db2as400.As400RecoveryTestSupport.Fixture;
 
 class As400NativeHandoffSessionTest {
     @ParameterizedTest
-    @ValueSource(strings = { "rejected-audit", "failed-drain", "native-failure", "stopped" })
+    @ValueSource(strings = { "rejected-audit", "unsupported-schema", "failed-drain", "wrapped-failed-drain", "native-failure", "stopped" })
     void unqualifiedAuditCanRetryButNativeFailureOrUnfinishedDrainCannot(String fault) throws Exception {
         var raw = Configuration.create().with("topic.prefix", "test").with("database.schema", "LIB").with("database.dbname", "DB")
                 .with("skipped.operations", "none").with("provide.transaction.metadata", false).with("heartbeat.interval.ms", 1000)
@@ -45,9 +48,16 @@ class As400NativeHandoffSessionTest {
         if (fault.equals("failed-drain")) {
             rejected.addSuppressed(new java.io.IOException("Native release uncertain"));
         }
-        Exception failure = fault.equals("native-failure") ? new java.io.IOException("Native read failed") : rejected;
+        Exception failure = fault.equals("native-failure") ? new java.io.IOException("Native read failed")
+                : fault.equals("unsupported-schema") ? new As400NativeEvidenceException("Unsupported native column type CLOB") : rejected;
+        if (fault.equals("wrapped-failed-drain")) {
+            var cause = new IllegalArgumentException("Unsupported column type");
+            cause.addSuppressed(new java.sql.SQLException("Connection close failed"));
+            failure = new As400NativeEvidenceException("Unsupported native evidence", cause);
+        }
+        final Exception expected = failure;
         try (var nativeHandles = mockConstruction(As400DcgNativeIo.class);
-                var collectors = mockConstruction(As400NativeBoundaryCollector.class, (collector, ignored) -> when(collector.collect()).thenThrow(failure));
+                var collectors = mockConstruction(As400NativeBoundaryCollector.class, (collector, ignored) -> when(collector.collect()).thenThrow(expected));
                 var session = new As400NativeHandoffSession(new As400ConnectorConfig(raw), context, mock(CdcSourceTaskContext.class), raw,
                         Fixture.JOURNAL, policy, "history", "control", As400ContinuousRuntime.Limits.experimental())) {
             assertThat(session.runtimeLimits()).isEqualTo(As400ContinuousRuntime.Limits.experimental());
@@ -56,21 +66,22 @@ class As400NativeHandoffSessionTest {
                 assertThatThrownBy(() -> session.attemptBoundary(1)).hasMessageContaining("stopped");
                 assertThat(collectors.constructed()).isEmpty();
             }
-            else if (fault.equals("rejected-audit")) {
+            else if ((fault.equals("rejected-audit") || fault.equals("unsupported-schema"))) {
                 assertThat(session.attemptBoundary(1)).isEmpty();
                 assertThat(session.attemptBoundary(2)).isEmpty();
                 assertThat(collectors.constructed()).hasSize(2);
             }
             else {
-                assertThatThrownBy(() -> session.attemptBoundary(1)).isSameAs(failure);
+                assertThatThrownBy(() -> session.attemptBoundary(1)).isSameAs(expected);
             }
             // Candidate rejection never reads offsets again, persists history or
             // enters native row publication. Native handles are still owned until close.
-            nativeHandles.constructed().forEach(handle -> {
-                if (!fault.equals("stopped")) {
-                    verifyNoInteractions(handle);
-                }
-            });
+            if (!fault.equals("stopped")) {
+                verifyNoInteractions(nativeHandles.constructed().get(0));
+                var discovery = nativeHandles.constructed().get(1);
+                verify(discovery, times((fault.equals("rejected-audit") || fault.equals("unsupported-schema")) ? 2 : 1)).requireRetention();
+                verifyNoMoreInteractions(discovery);
+            }
         }
     }
 
@@ -105,7 +116,7 @@ class As400NativeHandoffSessionTest {
         // even native-handle construction, not merely fail a later connection.
         String message = switch (fault) {
             case "missing-offset" -> "Missing offsets cannot select automatic migration";
-            case "partial-offset" -> "Completed processed legacy stream required";
+            case "partial-offset" -> "Completed legacy stream required";
             case "policy" -> "Handoff policy differs";
             case "no-transactions" -> "Qualified no-metadata native handoff";
             default -> "Buffered dispatch requires";

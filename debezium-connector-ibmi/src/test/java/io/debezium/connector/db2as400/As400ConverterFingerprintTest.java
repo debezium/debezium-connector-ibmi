@@ -66,7 +66,7 @@ class As400ConverterFingerprintTest {
     }
 
     @Test
-    void preFixCredentialFreeCheckpointRemainsCompatibleWhenAuthenticationIsAddedOrRotated() throws Exception {
+    void shouldRejectOldNativeOutputContractEvenWhenAuthenticationIsAddedOrRotated() throws Exception {
         var fixture = legacy(false);
         var properties = legacyProperties(false);
         Path file = directory.resolve("history.jsonl");
@@ -79,7 +79,7 @@ class As400ConverterFingerprintTest {
             }
             var config = new As400DcgConfig(Configuration.from(properties));
             var history = history(file, config);
-            assertThat(history.recover(saved, fixture.get("journal").asText(), config.policy).fingerprint()).isEqualTo(saved.get("capture_fingerprint"));
+            assertThrows(Exception.class, () -> history.recover(saved, fixture.get("journal").asText(), config.policy));
         }
         assertThat(Files.readString(file)).isEqualTo(fixture.get("history").asText());
         assertThat(saved).isEqualTo(strings(fixture.get("offset")));

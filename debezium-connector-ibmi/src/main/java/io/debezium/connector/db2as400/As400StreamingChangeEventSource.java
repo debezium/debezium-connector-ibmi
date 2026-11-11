@@ -63,6 +63,7 @@ public class As400StreamingChangeEventSource implements StreamingChangeEventSour
     private final Set<TableId> legacyBeforeTables = new HashSet<>();
     private JournalProcessedPosition legacyBeforeFloor;
     private final FileChangeEntryDecoder fileChangeDecoder = new FileChangeEntryDecoder();
+    private final FileChangeEntryDecoder nativeFileChangeDecoder = new FileChangeEntryDecoder(RawJournalPage.METADATA_CCSID);
     private static Set<Character> alwaysProcess = Stream.of('J', 'C').collect(Collectors.toCollection(HashSet::new));
 
     /**
@@ -81,6 +82,7 @@ public class As400StreamingChangeEventSource implements StreamingChangeEventSour
     private final As400DatabaseSchema schema;
     private final Duration pollInterval;
     private final As400ConnectorConfig connectorConfig;
+    private final boolean captureTruncates;
     private final Map<String, TransactionContext> txMap = new HashMap<>();
     private final String database;
     private As400OffsetContext offsetContext;
@@ -93,6 +95,7 @@ public class As400StreamingChangeEventSource implements StreamingChangeEventSour
                                            As400JdbcConnection jdbcConnection, EventDispatcher<As400Partition, TableId> dispatcher,
                                            ErrorHandler errorHandler, Clock clock, As400DatabaseSchema schema) {
         this.connectorConfig = connectorConfig;
+        this.captureTruncates = !connectorConfig.getSkippedOperations().contains(Operation.TRUNCATE);
         this.dataConnection = dataConnection;
         this.jdbcConnection = jdbcConnection;
         this.dispatcher = dispatcher;
@@ -172,8 +175,7 @@ public class As400StreamingChangeEventSource implements StreamingChangeEventSour
                     }
                     catch (TruncateException | RowProcessingException | TransactionMetadataException e) {
                         // Stop before the RPC loop can acknowledge a failed record.
-                        errorHandler.setProducerThrowable(e);
-                        return;
+                        throw e;
                     }
                     catch (final InterruptedException e) {
                         if (context.isRunning()) {
@@ -272,7 +274,7 @@ public class As400StreamingChangeEventSource implements StreamingChangeEventSour
 
     // TODO tidy up exception handling
     BlockingReceiverConsumer processJournalEntries(As400Partition partition, As400OffsetContext offsetContext)
-            throws IOException, SQLNonTransientConnectionException {
+            throws IOException, SQLNonTransientConnectionException, InterruptedException {
         return (nextOffset, reader, header) -> processJournalEntry(partition, offsetContext, nextOffset, reader::decode, header, false);
     }
 
@@ -283,12 +285,12 @@ public class As400StreamingChangeEventSource implements StreamingChangeEventSour
 
     /** Same legacy dispatcher for bounded owned native pages; no RPC cursor is acknowledged here. */
     void processOwnedEntry(As400Partition partition, As400OffsetContext offset, RawJournalPage.Entry entry)
-            throws IOException, SQLNonTransientConnectionException {
+            throws IOException, SQLNonTransientConnectionException, InterruptedException {
         if (connectorConfig.getEventProcessingFailureHandlingMode() != EventProcessingFailureHandlingMode.FAIL) {
             throw new IllegalArgumentException("A migration prefix requires fail-on-error legacy dispatch");
         }
         byte[] bytes = entry.data();
-        var header = new EntryHeaderDecoder().decode(bytes, 0);
+        var header = new EntryHeaderDecoder(RawJournalPage.METADATA_CCSID).decode(bytes, 0);
         As400SourceMetadata.from(header, entry.position());
         processJournalEntry(partition, offset, header.getSequenceNumber(), new EntryValues() {
             @Override
@@ -305,7 +307,7 @@ public class As400StreamingChangeEventSource implements StreamingChangeEventSour
 
     private void processJournalEntry(As400Partition partition, As400OffsetContext offsetContext, BigInteger nextOffset,
                                      EntryValues r, EntryHeader eheader, boolean migration)
-            throws IOException, SQLNonTransientConnectionException {
+            throws IOException, SQLNonTransientConnectionException, InterruptedException {
         final JournalEntryType journalEntryType = eheader.getJournalEntryType();
         TableId resolvedTable = null;
         try {
@@ -315,14 +317,13 @@ public class As400StreamingChangeEventSource implements StreamingChangeEventSour
                 return;
             }
 
-            final boolean captureTruncates = !connectorConfig.getSkippedOperations().contains(Operation.TRUNCATE);
             if (journalEntryType == JournalEntryType.MEMBER_CLEARED && !captureTruncates) {
                 return;
             }
             FileChange fileChange = null;
             if (journalEntryType == JournalEntryType.FILE_CHANGE && captureTruncates) {
                 try {
-                    fileChange = r.decode(fileChangeDecoder);
+                    fileChange = r.decode(migration ? nativeFileChangeDecoder : fileChangeDecoder);
                 }
                 catch (Exception e) {
                     throw new TruncateException("Cannot classify D/CG journal entry " + eheader.getSequenceNumber(), e);
@@ -330,9 +331,15 @@ public class As400StreamingChangeEventSource implements StreamingChangeEventSour
             }
             final String file = fileChange == null ? eheader.getFile() : fileChange.file();
             final String library = fileChange == null ? eheader.getLibrary() : fileChange.library();
-            if ((journalEntryType == JournalEntryType.MEMBER_CLEARED || (fileChange != null && fileChange.clearsRows()))
-                    && (file.isEmpty() || library.isEmpty())) {
-                throw new TruncateException("Missing table identity for clear at journal entry " + eheader.getSequenceNumber());
+            if (file.isEmpty() || library.isEmpty()) {
+                if (journalEntryType == JournalEntryType.MEMBER_CLEARED) {
+                    // Preserve the reviewed F/CR policy when capture selection is unknowable.
+                    log.warn("Skipping clear with missing file or library at journal entry {}", eheader.getSequenceNumber());
+                    return;
+                }
+                if (fileChange != null && fileChange.clearsRows()) {
+                    throw new TruncateException("Missing table identity for clear at journal entry " + eheader.getSequenceNumber());
+                }
             }
             String longName = file;
             try {
@@ -439,7 +446,7 @@ public class As400StreamingChangeEventSource implements StreamingChangeEventSour
 
                     offsetContext.updateSourceInfo(eheader);
 
-                    selectRowTransaction(offsetContext, eheader);
+                    selectRowTransaction(partition, offsetContext, eheader);
                     final String txId = eheader.getCommitCycle().toString();
 
                     log.debug("update event id {} tx {} table {}", nextOffset, txId, tableId);
@@ -456,7 +463,7 @@ public class As400StreamingChangeEventSource implements StreamingChangeEventSour
                     final Object[] dataNext = r.decode(schema.getFileDecoder());
                     offsetContext.updateSourceInfo(eheader);
 
-                    selectRowTransaction(offsetContext, eheader);
+                    selectRowTransaction(partition, offsetContext, eheader);
                     final String txId = eheader.getCommitCycle().toString();
 
                     log.debug("insert event id {} tx {} table {}", offsetContext.getPosition(), txId,
@@ -471,7 +478,7 @@ public class As400StreamingChangeEventSource implements StreamingChangeEventSour
 
                     offsetContext.updateSourceInfo(eheader);
 
-                    selectRowTransaction(offsetContext, eheader);
+                    selectRowTransaction(partition, offsetContext, eheader);
                     final String txId = eheader.getCommitCycle().toString();
 
                     log.debug("delete event id {} tx {} table {}", offsetContext.getPosition(), txId,
@@ -484,10 +491,15 @@ public class As400StreamingChangeEventSource implements StreamingChangeEventSour
                     break;
             }
         }
-        catch (TruncateException | RowProcessingException | SQLNonTransientConnectionException e) {
+        catch (TruncateException | RowProcessingException | InterruptedException | SQLNonTransientConnectionException e) {
             throw e;
         }
         catch (final Exception e) {
+            for (Throwable cause = e; cause != null; cause = cause.getCause()) {
+                if (cause instanceof InterruptedException interrupted) {
+                    throw interrupted;
+                }
+            }
             boolean row = journalEntryType != null && switch (journalEntryType) {
                 case BEFORE_IMAGE, AFTER_IMAGE, ADD_ROW1, ADD_ROW2, DELETE_ROW, ROLLBACK_DELETE_ROW -> true;
                 default -> false;
@@ -540,10 +552,21 @@ public class As400StreamingChangeEventSource implements StreamingChangeEventSour
         }
     }
 
-    private void selectRowTransaction(As400OffsetContext offset, EntryHeader entry) {
-        TransactionContext transaction = txMap.get(entry.getCommitCycle().toString());
-        if (transaction == null && entry.getCommitCycle().signum() != 0 && connectorConfig.shouldProvideTransactionMetadata()) {
-            throw new IllegalStateException("Missing transaction start for commit cycle " + entry.getCommitCycle());
+    private void selectRowTransaction(As400Partition partition, As400OffsetContext offset, EntryHeader entry) throws InterruptedException {
+        String id = entry.getCommitCycle().toString();
+        TransactionContext transaction = txMap.get(id);
+        if (transaction == null && entry.getCommitCycle().signum() != 0) {
+            transaction = new TransactionContext();
+            txMap.put(id, transaction);
+            offset.setTransaction(transaction);
+            // A snapshot or restart may begin after C/SC. Metadata describes the
+            // observed suffix; it cannot reconstruct counters preceding this offset.
+            if (connectorConfig.shouldProvideTransactionMetadata()) {
+                dispatcher.dispatchTransactionStartedEvent(partition, id, offset, entry.getTime());
+            }
+            else {
+                transaction.beginTransaction(id);
+            }
         }
         offset.setTransaction(transaction);
     }
@@ -583,9 +606,14 @@ public class As400StreamingChangeEventSource implements StreamingChangeEventSour
         // Table filtering already ran above. Skipped operations and unchanged
         // updates return true; a rejected dispatch must not advance FAIL mode.
         // WARN/SKIP deliberately retain Debezium's configured lossy behavior.
-        if (!dispatcher.dispatchDataChangeEvent(partition, tableId, emitter)
-                && connectorConfig.getEventProcessingFailureHandlingMode() == EventProcessingFailureHandlingMode.FAIL) {
-            throw new RowProcessingException("Failed to dispatch row for " + tableId + " at journal entry " + entry.getSequenceNumber(), null);
+        try {
+            if (!dispatcher.dispatchDataChangeEvent(partition, tableId, emitter)
+                    && connectorConfig.getEventProcessingFailureHandlingMode() == EventProcessingFailureHandlingMode.FAIL) {
+                throw new RowProcessingException("Failed to dispatch row for " + tableId + " at journal entry " + entry.getSequenceNumber(), null);
+            }
+        }
+        finally {
+            emitter.rethrowDispatchInterruption();
         }
     }
 
@@ -602,7 +630,8 @@ public class As400StreamingChangeEventSource implements StreamingChangeEventSour
     }
 
     private void dispatchTruncate(As400Partition partition, As400OffsetContext offsetContext, TableId tableId,
-                                  EntryHeader entry, String file, String library, String member) {
+                                  EntryHeader entry, String file, String library, String member)
+            throws InterruptedException {
         // The connector does not buffer transactions. A truncate cannot be undone by
         // replaying row-level rollback images, so do not emit an uncommitted clear.
         if (entry.getCommitCycle().signum() != 0) {
@@ -614,22 +643,35 @@ public class As400StreamingChangeEventSource implements StreamingChangeEventSour
                 throw new TruncateException("Cannot represent a clear as a table truncate for " + tableId
                         + ": expected one matching file member");
             }
+            // Clears have no row image to decode, so ensure the table schema is registered explicitly.
+            if (schema.getRecordFormat(file, library).isEmpty()) {
+                throw new TruncateException("Missing table schema for " + tableId + " at journal entry " + entry.getSequenceNumber());
+            }
             beforeMap.remove(String.format("%s-%s", tableId.schema(), tableId.table()));
             offsetContext.updateSourceInfo(entry);
             offsetContext.setTransaction(null);
-            boolean dispatched = dispatcher.dispatchDataChangeEvent(partition, tableId, new As400ChangeRecordEmitter(partition,
-                    offsetContext, Operation.TRUNCATE, null, null, clock, connectorConfig));
+            As400ChangeRecordEmitter emitter = new As400ChangeRecordEmitter(partition,
+                    offsetContext, Operation.TRUNCATE, null, null, clock, connectorConfig);
+            boolean dispatched;
+            try {
+                dispatched = dispatcher.dispatchDataChangeEvent(partition, tableId, emitter);
+            }
+            finally {
+                // Recover the original interruption even when core logged it and returned false.
+                emitter.rethrowDispatchInterruption();
+            }
             if (!dispatched) {
                 throw new TruncateException("Failed to dispatch clear for " + tableId + " at journal entry " + entry.getSequenceNumber());
             }
             releaseLegacyBefore(offsetContext, tableId);
         }
-        catch (TruncateException e) {
+        catch (TruncateException | InterruptedException e) {
             throw e;
         }
         catch (Exception e) {
-            if (e instanceof InterruptedException) {
-                Thread.currentThread().interrupt();
+            // EventDispatcher can wrap an interrupted queue write in ConnectException.
+            if (e.getCause() instanceof InterruptedException interrupted) {
+                throw interrupted;
             }
             throw new TruncateException("Failed to capture clear for " + tableId + " at journal entry " + entry.getSequenceNumber(), e);
         }

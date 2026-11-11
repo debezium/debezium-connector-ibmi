@@ -68,6 +68,18 @@ class As400OperatorCutReaderTest {
     }
 
     @Test
+    void shouldContinueAcrossReceiverSaveWithoutChangingDurableOffsets() throws Exception {
+        Fixture f = new Fixture();
+        var saved = new Observation(JOURNAL, R2, List.of(receiver(R1, "SAVED", 24, 77, Optional.empty(), Optional.of(R2)),
+                receiver(R2, "ATTACHED", 78, 81, Optional.of(R1), Optional.empty())));
+        when(f.journals.collect()).thenReturn(f.directory, saved);
+        var offset = Map.copyOf(f.offset());
+        var cut = f.reader().read(offset);
+        assertThat(cut.entries()).hasSize(f.entries.size() - 1);
+        assertThat(cut.checkpoint().toOffset()).isEqualTo(offset);
+    }
+
+    @Test
     void missingOrLegacyOffsetsRejectBeforeOpeningAnySourceConnection() throws Exception {
         Fixture f = new Fixture();
         for (Map<String, ?> offset : List.<Map<String, ?>> of(Map.of(), Map.of("position", "24"))) {

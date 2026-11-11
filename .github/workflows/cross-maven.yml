@@ -34,11 +34,6 @@ jobs:
     needs: [ check-signed-commits ]
     runs-on: ubuntu-latest
     timeout-minutes: 40
-    strategy:
-      fail-fast: false
-      matrix:
-        # Oldest admitted minor plus the Debezium 3.8 build/test baseline.
-        kafka: ['4.2.0', '4.3.1']
     steps:
       - name: Checkout ibmi repository
         uses: actions/checkout@v6
@@ -99,20 +94,22 @@ jobs:
       - name: Local Connect publication and missing-offset contracts
         working-directory: ibmi
         env:
-          DCG_KAFKA_VERSION: ${{ matrix.kafka }}
           DCG_PROBE_BOUNDARY: connector
         run: |
-          tools/dcg-ownership-probe "$RUNNER_TEMP/dcg-ack" ack
-          tools/dcg-ownership-probe "$RUNNER_TEMP/dcg-offsets" offsets
+          for version in 4.2.0 4.3.1; do
+            export DCG_KAFKA_VERSION="$version"
+            tools/dcg-ownership-probe "$RUNNER_TEMP/dcg-$version-ack" ack
+            tools/dcg-ownership-probe "$RUNNER_TEMP/dcg-$version-offsets" offsets
+          done
       - name: Preserve local Connect evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: dcg-connect-${{ matrix.kafka }}
+          name: dcg-connect-contracts
           path: |
-            ${{ runner.temp }}/dcg-ack/report.json
-            ${{ runner.temp }}/dcg-ack/*.log
-            ${{ runner.temp }}/dcg-ack/control/
-            ${{ runner.temp }}/dcg-offsets/report.json
-            ${{ runner.temp }}/dcg-offsets/*.log
-            ${{ runner.temp }}/dcg-offsets/control/
+            ${{ runner.temp }}/dcg-*-ack/report.json
+            ${{ runner.temp }}/dcg-*-ack/*.log
+            ${{ runner.temp }}/dcg-*-ack/control/
+            ${{ runner.temp }}/dcg-*-offsets/report.json
+            ${{ runner.temp }}/dcg-*-offsets/*.log
+            ${{ runner.temp }}/dcg-*-offsets/control/

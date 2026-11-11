@@ -223,7 +223,7 @@ final class As400NativeHandoffHistory {
         for (var entry : entries) {
             if (entry.position().offset().compareTo(from) >= 0 && entry.position().offset().compareTo(through) <= 0) {
                 byte[] bytes = entry.data();
-                if (codes.contains(new EntryHeaderDecoder().decode(bytes, 0).getJournalCode())) {
+                if (codes.contains(new EntryHeaderDecoder(RawJournalPage.METADATA_CCSID).decode(bytes, 0).getJournalCode())) {
                     result.add(As400JournalRecordContent.digest(bytes, entry.position()));
                 }
             }

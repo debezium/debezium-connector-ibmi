@@ -25,7 +25,6 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
-import org.mockito.ArgumentCaptor;
 
 import io.debezium.connector.db2as400.As400LegacyRowFailureTest.Fixture;
 import io.debezium.connector.db2as400.As400StreamingChangeEventSource.TransactionMetadataException;
@@ -169,12 +168,13 @@ class As400LegacyTransactionMetadataTest {
     void missingPositiveCycleIsNotMislabeledAsAutocommit() throws Exception {
         try (var f = enabled()) {
             send(f, 41, "R/PT", 99, 1);
-            var error = ArgumentCaptor.forClass(As400StreamingChangeEventSource.RowProcessingException.class);
-            verify(f.errors).setProducerThrowable(error.capture());
-            assertThat(error.getValue()).hasRootCauseMessage("Missing transaction start for commit cycle 99");
-            assertThat(f.offset.getPosition().getOffset()).isEqualTo(BigInteger.valueOf(40));
-            verify(f.journal, never()).getPosition();
-            assertThat(records(f)).isEmpty();
+            send(f, 42, "C/CM", 99, 0);
+            var output = records(f);
+            assertThat(data(output)).hasSize(1);
+            assertThat(data(output).get(0).getStruct("transaction").getString("id")).isEqualTo("99");
+            assertThat(markers(output)).extracting(v -> v.getString("status")).containsExactly("BEGIN", "END");
+            assertThat(f.offset.getPosition().getOffset()).isEqualTo(BigInteger.valueOf(42));
+            verifyNoInteractions(f.errors);
         }
         try (var f = new Fixture(Map.of(), false)) {
             send(f, 41, "R/PT", 99, 1);
@@ -202,10 +202,10 @@ class As400LegacyTransactionMetadataTest {
                 doThrow(failure).when(f.dispatcher).dispatchTransactionCommittedEvent(any(), any(), any());
             }
             clearInvocations(f.journal, f.rpc);
-            send(f, before + 1, "C/" + type, 41, 0);
-            var error = ArgumentCaptor.forClass(TransactionMetadataException.class);
-            verify(f.errors).setProducerThrowable(error.capture());
-            assertThat(error.getValue()).hasCause(failure);
+            long next = before + 1;
+            var error = org.junit.jupiter.api.Assertions.assertThrows(TransactionMetadataException.class, () -> send(f, next, "C/" + type, 41, 0));
+            assertThat(error).hasCause(failure);
+            verifyNoInteractions(f.errors);
             assertThat(f.offset.getPosition().getOffset()).isEqualTo(BigInteger.valueOf(before));
             verify(f.journal, never()).getPosition();
             verify(f.journal).nextEntry();

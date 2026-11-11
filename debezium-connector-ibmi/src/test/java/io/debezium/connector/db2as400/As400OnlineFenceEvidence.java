@@ -45,7 +45,7 @@ public final class As400OnlineFenceEvidence {
     }
 
     static Map<String, Query> queries() {
-        return Map.of("member", new Query(As400OperatorTableEvidence.MEMBER_SQL, 1),
+        var queries = new LinkedHashMap<>(Map.of("member", new Query(As400OperatorTableEvidence.MEMBER_SQL, 1),
                 "format", new Query(As400OperatorTableEvidence.FORMAT_SQL, 1),
                 "object", new Query(As400OperatorTableEvidence.OBJECT_SQL, 1),
                 "columns", new Query(As400NativeBindingAcquisition.COLUMNS_SQL, 4096),
@@ -54,11 +54,18 @@ public final class As400OnlineFenceEvidence {
                 "receivers", new Query(As400OperatorJournalEvidence.RECEIVERS_SQL, 16),
                 "identity", new Query(As400JdbcNativeIdentityEvidence.SQL, 1),
                 "scope", new Query(As400OnlineLockScope.SQL, As400OnlineLockScope.MAX_ROWS),
-                "scope_counts", new Query(As400OnlineLockScope.COUNTS, 1));
+                "scope_counts", new Query(As400OnlineLockScope.COUNTS, 1)));
+        queries.put("controls", new Query(As400NativeBindingAcquisition.CONTROLS_SQL, 1));
+        return Map.copyOf(queries);
     }
 
     record Candidate(As400NativeBindingAcquisition.Acquired tables, As400OperatorJournalEvidence.Observation journal,
             As400JdbcNativeIdentityEvidence.Candidates identities, JournalPosition boundary) {
+    }
+
+    @FunctionalInterface
+    interface MetadataValidator {
+        Candidate validate(JsonNode captured) throws Exception;
     }
 
     static Candidate validate(JsonNode captured) throws Exception {
@@ -135,7 +142,7 @@ public final class As400OnlineFenceEvidence {
     }
 
     private static Map<String, Integer> expectedNames(int tables) {
-        return Map.of("member", 2 * tables, "format", 2 * tables, "object", 4 * tables, "columns", tables, "keys", tables,
+        return Map.of("member", 2 * tables, "format", 2 * tables, "object", 4 * tables, "columns", tables, "keys", tables, "controls", tables,
                 "journal", 2, "receivers", 2, "identity", 4);
     }
 
@@ -152,7 +159,7 @@ public final class As400OnlineFenceEvidence {
         private final Map<List<String>, Integer> consumed = new LinkedHashMap<>();
 
         CapturedRows(JsonNode captured) {
-            require(captured.isArray() && captured.size() <= 508, "Bounded metadata capture required");
+            require(captured.isArray() && captured.size() <= 558, "Bounded metadata capture required");
             for (JsonNode query : captured) {
                 String name = query.path("name").asText();
                 Query definition = queries().get(name);
@@ -165,7 +172,7 @@ public final class As400OnlineFenceEvidence {
                 }
                 require(key.size() == 3 && query.path("rows").isArray() && query.path("rows").size() <= definition.maximumRows(),
                         "Incomplete or excessive captured rows");
-                String phase = List.of("columns", "keys").contains(name) ? "layout" : values.containsKey(key) ? "after" : "before";
+                String phase = List.of("columns", "keys", "controls").contains(name) ? "layout" : values.containsKey(key) ? "after" : "before";
                 require(query.path("phase").asText().equals(phase), "Missing or reordered independent metadata observation");
                 List<Map<String, Object>> rows = JSON.convertValue(query.get("rows"), new TypeReference<>() {
                 });

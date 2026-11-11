@@ -91,16 +91,17 @@ class As400TransactionBufferTest {
     @Test
     void rollbackReleasesOnlyItsOwnCycleAndAllowsNewWork() throws Exception {
         buffer = buffer(new Limits(2, 4, 1, 2));
+        RecordIdentity other = record(OTHER, "JOB/THREAD", 1);
         control("SC", A);
         buffer.truncate(source(next(), A), TABLE);
         JournalPosition startB = control("SC", B);
-        buffer.beforeImage(source(next(), B), RECORD, bytes(1));
+        buffer.beforeImage(source(next(), B), other, bytes(1));
         control("RB", A);
         assertThat(buffer.oldestTransactionPosition()).contains(startB);
         assertThat(buffer.usage()).isEqualTo(new Usage(1, 2, 0, 1));
         control("SC", A);
         buffer.truncate(source(next(), A), TABLE);
-        buffer.update(source(next(), B), RECORD, bytes(2));
+        buffer.update(source(next(), B), other, bytes(2));
         CommittedBatch b = commit(B);
         assertThat(payload(b.changes().get(0).before())).containsExactly(1);
         buffer.completeBatch(b);
@@ -110,12 +111,13 @@ class As400TransactionBufferTest {
 
     @Test
     void interleavedTransactionsPublishInCommitOrderAndRetainOldestStart() throws Exception {
+        RecordIdentity other = record(OTHER, "JOB/THREAD", 1);
         JournalPosition startA = control("SC", A);
         buffer.insert(source(next(), A), RECORD, bytes(1));
         JournalPosition startB = control("SC", B);
-        buffer.truncate(source(next(), B), TABLE);
+        buffer.truncate(source(next(), B), OTHER);
         buffer.insert(source(next(), A), RECORD, bytes(2));
-        buffer.insert(source(next(), B), RECORD, bytes(3));
+        buffer.insert(source(next(), B), other, bytes(3));
         CommittedBatch b = commit(B);
         assertThat(b.transactionId().start()).isEqualTo(startB);
         assertThat(b.changes()).extracting(Change::operation).containsExactly(Operation.TRUNCATE, Operation.CREATE);
@@ -163,11 +165,11 @@ class As400TransactionBufferTest {
         buffer.beforeImage(source(next(), B), RECORD, bytes(3));
         buffer.truncate(source(next(), A), TABLE);
         buffer.update(source(next(), A), other, bytes(4));
-        buffer.update(source(next(), B), RECORD, bytes(5));
         CommittedBatch a = commit(A);
         assertThat(a.changes()).extracting(Change::operation).containsExactly(Operation.TRUNCATE, Operation.UPDATE);
         assertThat(payload(a.changes().get(1).before())).containsExactly(2);
         buffer.completeBatch(a);
+        buffer.update(source(next(), B), RECORD, bytes(5));
         CommittedBatch b = commit(B);
         assertThat(payload(b.changes().get(0).before())).containsExactly(3);
         buffer.completeBatch(b);
