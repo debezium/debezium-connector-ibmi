@@ -29,6 +29,10 @@ import io.debezium.relational.Table;
  * hold the initialization writer/DDL fence; equal observations are not that fence.
  */
 final class As400NativeBindingAcquisition {
+    static final String CONTROLS_SQL = """
+            SELECT TABLE_SCHEMA, TABLE_NAME, SYSTEM_TABLE_SCHEMA, SYSTEM_TABLE_NAME, CONTROL
+            FROM QSYS2.SYSTABLES WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?
+            """;
     static final String COLUMNS_SQL = """
             SELECT TABLE_SCHEMA, TABLE_NAME, SYSTEM_TABLE_SCHEMA, SYSTEM_TABLE_NAME,
                    COLUMN_NAME, SYSTEM_COLUMN_NAME, ORDINAL_POSITION, DATA_TYPE, LENGTH,
@@ -86,13 +90,31 @@ final class As400NativeBindingAcquisition {
             check(connection);
         }
         catch (IllegalArgumentException | ArithmeticException e) {
-            throw new SQLException("Unsupported native physical binding", e);
+            throw new As400NativeEvidenceException("Unsupported native physical binding", e);
         }
         require(before.equals(tables.collect(requests)), "Native object/member/format changed during acquisition");
         return new Acquired(before, definitions);
     }
 
     private As400BindingDefinition read(Connection connection, Observation observation) throws SQLException {
+        // Snapshot SQL obeys RCAC while journal images do not. A masked or
+        // filtered baseline cannot be followed by unfiltered native row images.
+        // SYSTABLES.CONTROL: blank = none, R/C/B = active enforcement.
+        // https://www.ibm.com/docs/en/i/7.6.0?topic=views-systables
+        try (PreparedStatement statement = prepare(connection, CONTROLS_SQL, observation, 2);
+                ResultSet rows = statement.executeQuery()) {
+            check(statement, rows);
+            require(rows.next(), "Missing table access-control evidence");
+            for (String field : List.of("TABLE_SCHEMA", "SYSTEM_TABLE_SCHEMA")) {
+                require(text(rows, field).equals(observation.request().library()), "Ambiguous access-control schema identity");
+            }
+            for (String field : List.of("TABLE_NAME", "SYSTEM_TABLE_NAME")) {
+                require(text(rows, field).equals(observation.request().file()), "Ambiguous access-control table identity");
+            }
+            require(" ".equals(rows.getString("CONTROL")), "Native capture does not support active or unknown row/column access controls");
+            require(!rows.next(), "Ambiguous table access-control evidence");
+            check(statement, rows);
+        }
         var schema = Table.editor().tableId(observation.table());
         List<Codec> codecs = new ArrayList<>();
         var names = new HashSet<String>();
@@ -198,7 +220,7 @@ final class As400NativeBindingAcquisition {
                 require(ccsid == 65535, "Binary field has unexpected CCSID");
                 yield new Codec(type.equals("BINARY") ? "BINARY" : "VARBINARY", length, 0, 0);
             }
-            default -> throw new SQLException("Unsupported native column type " + type);
+            default -> throw new As400NativeEvidenceException("Unsupported native column type " + type);
         };
     }
 
@@ -245,7 +267,7 @@ final class As400NativeBindingAcquisition {
             case "DATE" -> Types.DATE;
             case "TIME" -> Types.TIME;
             case "TIMESTMP" -> Types.TIMESTAMP;
-            default -> throw new SQLException("Unsupported native column type " + type);
+            default -> throw new As400NativeEvidenceException("Unsupported native column type " + type);
         };
     }
 
@@ -295,13 +317,13 @@ final class As400NativeBindingAcquisition {
 
     private static void warning(SQLWarning warning) throws SQLException {
         if (warning != null) {
-            throw new SQLException("Partial native binding evidence rejected", warning);
+            throw new As400NativeEvidenceException("Partial native binding evidence rejected", warning);
         }
     }
 
     private static void require(boolean condition, String message) throws SQLException {
         if (!condition) {
-            throw new SQLException(message);
+            throw new As400NativeEvidenceException(message);
         }
     }
 }

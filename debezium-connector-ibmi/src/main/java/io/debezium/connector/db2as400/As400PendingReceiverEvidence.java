@@ -53,7 +53,7 @@ final class As400PendingReceiverEvidence {
     record Sample(JournalReceiver journal, JournalReceiver attached, List<Receiver> receivers) {
         Sample {
             receivers = List.copyOf(receivers);
-            require(!receivers.isEmpty() && receivers.size() <= 128, "Bounded complete receiver directory required");
+            require(!receivers.isEmpty() && receivers.size() <= 1023, "Bounded complete receiver directory required");
             var names = new HashSet<JournalReceiver>();
             Receiver previous = null;
             for (Receiver receiver : receivers) {
@@ -80,7 +80,7 @@ final class As400PendingReceiverEvidence {
                 var nativeReceiver = ordered.get(i);
                 require(pending.name().equals(nativeReceiver.name()) && pending.first().equals(nativeReceiver.first())
                         && pending.previous().equals(nativeReceiver.previous()) && pending.next().equals(nativeReceiver.next())
-                        && pending.status().equals(nativeReceiver.status())
+                        && As400NativeJournalWindow.sameReadableStatus(pending.status(), nativeReceiver.status())
                         && (pending.name().equals(attached) || pending.last().equals(nativeReceiver.last())), "Native pending receiver identity/range differs");
             }
         }
@@ -102,7 +102,7 @@ final class As400PendingReceiverEvidence {
                     floor = floor.min(receiver.first());
                 }
             }
-            var headers = new EntryHeaderDecoder();
+            var headers = new EntryHeaderDecoder(RawJournalPage.METADATA_CCSID);
             BigInteger previous = null;
             long bytes = 0;
             for (var entry : completeBracket) {
@@ -143,7 +143,7 @@ final class As400PendingReceiverEvidence {
     As400PendingReceiverEvidence(As400JdbcConnectionFactory connections, JournalReceiver journal, int maximumReceivers, int timeout) {
         this.connections = Objects.requireNonNull(connections);
         this.journal = name(journal.library(), journal.name());
-        require(maximumReceivers > 0 && maximumReceivers <= 128 && timeout > 0 && timeout <= 60, "Finite receiver discovery bounds required");
+        require(maximumReceivers > 0 && maximumReceivers <= 1023 && timeout > 0 && timeout <= 60, "Finite receiver discovery bounds required");
         this.maximumReceivers = maximumReceivers;
         this.timeout = timeout;
     }

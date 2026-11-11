@@ -5,16 +5,9 @@
  */
 package io.debezium.connector.db2as400;
 
-import java.lang.reflect.InvocationTargetException;
-import java.lang.reflect.Proxy;
 import java.nio.file.Path;
-import java.sql.CallableStatement;
 import java.sql.Connection;
-import java.sql.PreparedStatement;
-import java.sql.ResultSet;
 import java.sql.SQLException;
-import java.sql.Statement;
-import java.util.List;
 import java.util.Properties;
 
 import io.debezium.ibmi.db2.journal.retrieve.JournalInfo;
@@ -76,44 +69,19 @@ final class As400ContinuousConnectSource extends As400NativeInitializationProbe 
     }
 
     static Object guard(Object delegate, JournalReadLifecycle lifecycle, JournalReadLifecycle.Lease connectionLease) {
-        Class<?> type = delegate instanceof Connection ? Connection.class
-                : delegate instanceof CallableStatement ? CallableStatement.class
-                        : delegate instanceof PreparedStatement ? PreparedStatement.class : delegate instanceof Statement ? Statement.class : ResultSet.class;
-        return Proxy.newProxyInstance(type.getClassLoader(), new Class<?>[]{ type }, (proxy, method, args) -> {
-            if (method.getName().equals("unwrap")) {
-                throw new SQLException("Raw native JDBC handles cannot escape test lifecycle");
-            }
-            boolean cleanup = List.of("close", "rollback", "isClosed").contains(method.getName())
-                    || (delegate instanceof Statement && method.getName().equals("cancel"));
-            JournalReadLifecycle.Lease call = null;
-            try {
-                if (!cleanup) {
-                    call = lifecycle.enter();
-                }
-                Object result = method.invoke(delegate, args);
-                if (result instanceof Statement || result instanceof ResultSet) {
-                    return guard(result, lifecycle, null);
-                }
-                if (result instanceof Connection) {
-                    throw new SQLException("Raw native JDBC connection cannot escape test lifecycle");
-                }
-                return result;
-            }
-            catch (InvocationTargetException error) {
-                throw error.getCause();
-            }
-            catch (java.io.IOException error) {
-                throw new SQLException("Native JDBC source stopped", error);
-            }
-            finally {
-                if (call != null) {
-                    call.close();
-                }
-                if (connectionLease != null && method.getName().equals("close")) {
-                    connectionLease.close();
-                }
-            }
-        });
+        return As400DcgNativeIo.guard(delegate, lifecycle, connectionLease);
+    }
+
+    JournalReadLifecycle lifecycle() {
+        return lifecycle;
+    }
+
+    RetrieveJournal guardedReader() {
+        return guardedReader;
+    }
+
+    As400JdbcNativeIdentityEvidence identities() {
+        return identities;
     }
 
     @Override

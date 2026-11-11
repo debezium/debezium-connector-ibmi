@@ -29,7 +29,6 @@ import io.debezium.ibmi.db2.journal.retrieve.JournalReceiver;
 import io.debezium.ibmi.db2.journal.retrieve.RawJournalPage;
 import io.debezium.pipeline.DataChangeEvent;
 import io.debezium.pipeline.ErrorHandler;
-import io.debezium.pipeline.EventDispatcher;
 import io.debezium.relational.CustomConverterRegistry;
 import io.debezium.relational.TableId;
 import io.debezium.spi.topic.TopicNamingStrategy;
@@ -51,8 +50,13 @@ class As400NativeHandoffSession implements As400TaskHandoff {
     private final As400DcgNativeIo background;
     private final As400CaptureFingerprint.Policy policy;
     private final JournalReceiver journal;
+    private final As400AsyncCleanup cleanup = new As400AsyncCleanup("ibmi-handoff-close");
     private final AtomicBoolean stopped = new AtomicBoolean();
-    private final ExecutorService collector = Executors.newSingleThreadExecutor(r -> new Thread(r, "ibmi-native-boundary"));
+    private final ExecutorService collector = Executors.newSingleThreadExecutor(r -> {
+        var thread = new Thread(r, "ibmi-native-boundary");
+        thread.setDaemon(true);
+        return thread;
+    });
     private final String controlTopic;
     private final As400ContinuousRuntime.Limits limits;
     private final Configuration nativeRaw;
@@ -89,7 +93,7 @@ class As400NativeHandoffSession implements As400TaskHandoff {
             As400Checkpoint.fromOffset(loaded, identity, fingerprint);
         }
         else {
-            As400LegacyHandoff.position(As400LegacyHandoff.strings(loaded));
+            As400LegacyHandoff.startingPosition(As400LegacyHandoff.strings(loaded));
         }
         foreground = new As400DcgNativeIo(nativeRaw, config.getConfig().getString("database.dbname"), journal, false, policy, historyTopic,
                 config.getLogicalName());
@@ -179,14 +183,32 @@ class As400NativeHandoffSession implements As400TaskHandoff {
     private Future<Optional<As400NativeBoundaryCollector.Candidate>> collect() {
         check();
         int attempt = ++attempts;
-        return collector.submit(() -> attemptBoundary(attempt));
+        return collector.submit(() -> {
+            if (attempt > 1) {
+                long delay = Math.min(30_000L, 1000L << Math.min(attempt - 2, 5));
+                LOGGER.info("Transactional truncate boundary attempt {} deferred for {} ms; legacy capture continues", attempt, delay);
+                Thread.sleep(delay);
+                check();
+            }
+            return attemptBoundary(attempt);
+        });
     }
 
     Optional<As400NativeBoundaryCollector.Candidate> attemptBoundary(int attempt) throws Exception {
         check();
         try {
-            var candidate = new As400NativeBoundaryCollector(journal, () -> background.connection(false),
-                    background.acquisition, background.reader, this::check).collect();
+            background.requireRetention(); // Preflight before any marker or allocation.
+            Optional<As400NativeBoundaryCollector.Candidate> candidate;
+            try {
+                candidate = new As400NativeBoundaryCollector(journal, () -> background.connection(false),
+                        background.acquisition, background.reader, this::check).collect();
+            }
+            catch (Exception failure) {
+                if (As400NativeBoundaryPulse.hasUnverifiedCleanup(failure)) {
+                    background.failedCleanup(failure);
+                }
+                throw failure;
+            }
             if (candidate.isEmpty()) {
                 observe("busy-" + attempt, () -> Map.of("refused", true));
             }
@@ -200,11 +222,30 @@ class As400NativeHandoffSession implements As400TaskHandoff {
             // No candidate has escaped and the pulse has completed release.
             // Keep legacy publication independent from an unqualified audit.
             // A suppressed native close/drain failure is never retryable.
-            if (rejected.getSuppressed().length != 0) {
+            if (hasSuppressedCleanup(rejected)) {
                 throw rejected;
             }
+            LOGGER.warn("Transactional truncate boundary rejected; legacy capture continues: {}", rejected.getMessage());
             return Optional.empty();
         }
+        catch (IllegalArgumentException | As400NativeEvidenceException rejected) {
+            check();
+            if (hasSuppressedCleanup(rejected)) {
+                throw rejected;
+            }
+            LOGGER.warn("Transactional truncate admission deferred; legacy capture continues: {}", rejected.getMessage());
+            return Optional.empty();
+        }
+    }
+
+    private static boolean hasSuppressedCleanup(Throwable failure) {
+        var seen = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<Throwable, Boolean>());
+        for (Throwable current = failure; current != null && seen.add(current); current = current.getCause()) {
+            if (current.getSuppressed().length != 0) {
+                return true;
+            }
+        }
+        return false;
     }
 
     @Override
@@ -220,7 +261,9 @@ class As400NativeHandoffSession implements As400TaskHandoff {
             return activate(facts, prepared, loaded, output);
         }
         Future<Optional<As400NativeBoundaryCollector.Candidate>> candidate = pending.isEmpty() ? collect() : null;
-        var legacyConfig = new As400ConnectorConfig(config.getConfig().edit().with("skipped.operations", "t").build());
+        // Preserve clear capture during the legacy prefix. A transactional clear
+        // before a qualified boundary must stop explicitly, never disappear.
+        var legacyConfig = config;
         var scan = new As400OffsetContext.Loader(legacyConfig).load(loaded);
         @SuppressWarnings("unchecked")
         TopicNamingStrategy<TableId> topics = config.getTopicNamingStrategy(As400ConnectorConfig.TOPIC_NAMING_STRATEGY, true);
@@ -233,7 +276,7 @@ class As400NativeHandoffSession implements As400TaskHandoff {
             var delivery = new ChangeEventQueue.Builder<DataChangeEvent>().maxBatchSize(4096).maxQueueSize(4096).pollInterval(Duration.ZERO)
                     .loggingContextSupplier(() -> taskContext.configureLoggingContext("automatic-legacy"))
                     .queueProvider(staging).build();
-            try (var dispatcher = new EventDispatcher<As400Partition, TableId>(legacyConfig, topics, schemas, delivery,
+            try (var dispatcher = new As400EventDispatcher(legacyConfig, topics, schemas, delivery,
                     legacyConfig.getTableFilters().dataCollectionFilter(), DataChangeEvent::new, new As400EventMetadataProvider(),
                     config.schemaNameAdjuster(), null, new DebeziumHeaderProducer(taskContext))) {
                 var source = new As400StreamingChangeEventSource(legacyConfig, null, jdbc, dispatcher,
@@ -242,7 +285,15 @@ class As400NativeHandoffSession implements As400TaskHandoff {
                         partition(), scan, this::check, new As400OperatorCutReader.Limits(32, 500, 16 * 1024 * 1024));
                 while (true) {
                     check();
-                    var progress = prefix.publishNext();
+                    Optional<Map<String, ?>> progress;
+                    try {
+                        progress = prefix.publishNext();
+                    }
+                    catch (As400OperatorCutReader.UnstableCutException race) {
+                        LOGGER.info("Receiver changed during legacy prefix read; discarding the unexposed page and retrying");
+                        Thread.sleep(250);
+                        continue;
+                    }
                     if (progress.isEmpty() && pending.isPresent() && prefix.scan().offset().compareTo(pending.orElseThrow().origin().offset()) < 0) {
                         progress = prefix.advanceThroughMarker(pending.orElseThrow().origin());
                     }
@@ -255,22 +306,49 @@ class As400NativeHandoffSession implements As400TaskHandoff {
                         output.acknowledge(barrier);
                         observe("progress-" + (++steps), () -> Map.of("offset", barrier.sourceOffset()));
                     }
-                    if (pending.isEmpty() && candidate.isDone()) {
+                    if (pending.isEmpty() && candidate != null && candidate.isDone()) {
                         var collected = candidate.get();
                         if (collected.isPresent()) {
                             var c = collected.orElseThrow();
-                            var nativeHistory = historyReader().collect(c, c.window().through());
+                            As400NativeHandoffHistory.Observed nativeHistory;
+                            List<As400BindingDefinition> definitions;
+                            try {
+                                nativeHistory = historyReader().collect(c, c.window().through());
+                                definitions = legacyCatalog(c.bindings().definitions(), config.getConfig().getString("database.dbname"));
+                                As400NativeTableSchemas.requireLegacyTemporalCompatibility(definitions);
+                            }
+                            catch (IllegalArgumentException rejected) {
+                                check();
+                                if (hasSuppressedCleanup(rejected)) {
+                                    throw rejected;
+                                }
+                                LOGGER.warn("Unpublished boundary history changed; acquiring a new boundary while legacy capture continues: {}",
+                                        rejected.getMessage());
+                                candidate = collect();
+                                continue;
+                            }
                             observe("native-boundary", () -> Map.of("origin", c.origin().toString(), "floor", c.historyFloor().toString(),
                                     "acquired", c.completion().acquired().toString(), "released", c.completion().released().toString(),
                                     "job", c.completion().job(), "thread", c.completion().thread().toString(),
                                     "raw", raw(c.audit().entries()), "controls", raw(nativeHistory.entries()),
                                     "native_before", nativeSample(c.window().before()), "native_after", nativeSample(c.window().after())));
-                            var definitions = legacyCatalog(c.bindings().definitions(), config.getConfig().getString("database.dbname"));
                             requireTopics(definitions);
-                            var selected = foreground.history.recordOnlineCandidate(c.window().journalToken(), c.origin(),
-                                    c.window().receiverTokens().get(c.origin().receiver()), definitions,
-                                    policy,
-                                    new As400BindingHistory.Discovery(c.historyFloor(), nativeHistory.order().incarnation(c.historyFloor())), durable());
+                            As400BindingHistory.Pending selected;
+                            try {
+                                selected = foreground.history.recordOnlineCandidate(c.window().journalToken(), c.origin(),
+                                        c.window().receiverTokens().get(c.origin().receiver()), definitions,
+                                        policy,
+                                        new As400BindingHistory.Discovery(c.historyFloor(), nativeHistory.order().incarnation(c.historyFloor())), durable());
+                            }
+                            catch (As400BindingHistory.CandidateHistoryFullException exhausted) {
+                                check();
+                                if (hasSuppressedCleanup(exhausted)) {
+                                    throw exhausted;
+                                }
+                                LOGGER.warn("Transactional truncate activation deferred: {}. No further boundary attempts in this task", exhausted.getMessage());
+                                candidate = null;
+                                continue;
+                            }
                             pending = Optional.of(selected);
                             observe("pending", () -> Map.of("origin", selected.origin().offset().toString(),
                                     "floor", selected.discovery().orElseThrow().floor().offset().toString()));
@@ -285,21 +363,40 @@ class As400NativeHandoffSession implements As400TaskHandoff {
                     var complete = prefix.completePosition();
                     if (pending.isPresent() && complete.isPresent() && !activationDeferred()
                             && prefix.scan().offset().compareTo(pending.orElseThrow().origin().offset()) >= 0) {
+                        As400NativeHandoffHistory.Prepared prepared = null;
                         try {
-                            var prepared = historyReader().resume(pending.orElseThrow(), prefix.scan(), config, policy);
-                            observe("prepared", () -> Map.of("raw", raw(prepared.replay().projection().entries()), "controls", raw(prepared.controls().entries()),
-                                    "candidate", prepared.replay().candidate().checkpoint().toOffset(), "publication_acknowledged", false));
+                            prepared = historyReader().resume(pending.orElseThrow(), prefix.scan(), config, policy);
+                        }
+                        catch (As400ProspectiveHandoffReplay.PriorEpochPending | As400HandoffReplay.SelectedPrefixPending deferred) {
+                            observe("deferred-" + steps, () -> Map.of("reason", deferred.getMessage()));
+                        }
+                        catch (IllegalArgumentException rejected) {
+                            check();
+                            require(!durable().containsKey(As400LegacyHandoff.VERSION), "Cannot replace an acknowledged handoff");
+                            if (hasSuppressedCleanup(rejected)) {
+                                throw rejected;
+                            }
+                            LOGGER.warn("Unpublished truncate boundary is no longer usable; acquiring a new boundary while legacy capture continues: {}",
+                                    rejected.getMessage());
+                            pending = Optional.empty();
+                            candidate = collect();
+                        }
+                        if (prepared != null) {
+                            var ready = prepared;
+                            observe("prepared", () -> Map.of("raw", raw(ready.replay().projection().entries()), "controls", raw(ready.controls().entries()),
+                                    "candidate", ready.replay().candidate().checkpoint().toOffset(), "publication_acknowledged", false));
                             var barrier = marker(As400LegacyHandoff.bind(complete.orElseThrow(), prepared.replay().candidate().checkpoint()), "HANDOFF");
+                            // Once this record is offered, even an uncertain
+                            // acknowledgement must fail, never supersede it.
                             output.barrier(barrier);
                             output.acknowledge(barrier);
                             observe("handoff-acknowledged", () -> Map.of("legacy", barrier.sourceOffset()));
                             return activate(pending.orElseThrow(), prepared, barrier.sourceOffset(), output);
                         }
-                        catch (As400ProspectiveHandoffReplay.PriorEpochPending | As400HandoffReplay.SelectedPrefixPending deferred) {
-                            observe("deferred-" + steps, () -> Map.of("reason", deferred.getMessage()));
-                        }
                     }
-                    Thread.sleep(250);
+                    if (progress.isEmpty()) {
+                        Thread.sleep(250);
+                    }
                 }
             }
             finally {
@@ -369,8 +466,10 @@ class As400NativeHandoffSession implements As400TaskHandoff {
     @Override
     public As400OperatorCutReader.Cut read(Map<String, ?> durable, Optional<RawJournalPage.Entry> scan) throws Exception {
         check();
-        Thread.sleep(250);
         var cut = continuation.readPrefix(durable, scan.orElse(null));
+        if (cut.entries().isEmpty()) {
+            Thread.sleep(250);
+        }
         check();
         return cut;
     }
@@ -386,15 +485,9 @@ class As400NativeHandoffSession implements As400TaskHandoff {
     @Override
     public void close() throws Exception {
         requestStop();
-        boolean interrupted = false;
-        try {
-            while (!collector.isTerminated()) {
-                try {
-                    collector.awaitTermination(100, TimeUnit.MILLISECONDS);
-                }
-                catch (InterruptedException ignored) {
-                    interrupted = true;
-                }
+        cleanup.start(() -> {
+            while (!collector.awaitTermination(100, TimeUnit.MILLISECONDS)) {
+                // The bounded caller can return while a late admitted call drains.
             }
             try {
                 foreground.close();
@@ -403,12 +496,8 @@ class As400NativeHandoffSession implements As400TaskHandoff {
                 background.close();
             }
             observe("drained", () -> Map.of("completed", true));
-        }
-        finally {
-            if (interrupted) {
-                Thread.currentThread().interrupt();
-            }
-        }
+        });
+        cleanup.await(As400AsyncCleanup.STOP_TIMEOUT);
     }
 
     private static Object raw(List<RawJournalPage.Entry> entries) {

@@ -42,6 +42,7 @@ class NativeExperiment(local.InitializationExperiment):
         addresses = {r[4][0] for r in socket.getaddrinfo(self.fixture.target.host, None, socket.AF_INET, socket.SOCK_STREAM)}
         if len(addresses) != 1:
             raise RuntimeError("A single verified IBM i IPv4 address is required for container-local private DNS")
+        self.fixture.redactions.update(addresses)
         self.native_host = self.fixture.target.host + ":" + addresses.pop()
         self.report.update(scope="Real IBM i metadata/snapshot/raw journal and actual Kafka Connect task, dispatcher, broker output/history/offsets; owned fixture only",
                            library=library, source_connected=False, production_streaming_enabled=False)

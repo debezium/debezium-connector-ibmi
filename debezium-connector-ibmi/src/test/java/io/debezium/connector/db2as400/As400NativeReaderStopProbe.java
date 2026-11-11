@@ -10,7 +10,6 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.spy;
 
 import java.io.IOException;
-import java.lang.reflect.Field;
 import java.math.BigInteger;
 import java.nio.file.Path;
 import java.sql.Connection;
@@ -62,7 +61,6 @@ import io.debezium.ibmi.db2.journal.retrieve.FileFilter;
 import io.debezium.ibmi.db2.journal.retrieve.JournalPosition;
 import io.debezium.ibmi.db2.journal.retrieve.JournalProcessedPosition;
 import io.debezium.ibmi.db2.journal.retrieve.JournalReadLifecycle;
-import io.debezium.ibmi.db2.journal.retrieve.RetrieveJournal;
 import io.debezium.pipeline.source.spi.ChangeEventSource.ChangeEventSourceContext;
 
 /**
@@ -155,15 +153,16 @@ public final class As400NativeReaderStopProbe {
             sql.setTransactionIsolation(Connection.TRANSACTION_NONE);
             report.put("row_decoder", "CompleteRowEntryDecoder in publication path; no legacy fallback; transactional D/CG disabled");
             try (var stmt = sql.createStatement(); var rows = stmt.executeQuery("SELECT CURRENT_SERVER FROM SYSIBM.SYSDUMMY1")) {
-                require(rows.next() && "AEQA".equals(rows.getString(1).trim()), "target is AEQA");
+                require(rows.next() && config.getConfig().getString("database.dbname").equals(rows.getString(1).trim()), "target is the configured test server");
             }
             try (var stmt = sql.createStatement(); var rows = stmt.executeQuery("SELECT COUNT(*) FROM DCTASKQA.NATREAD")) {
                 require(rows.next() && rows.getInt(1) == 0, "owned fixture starts empty");
             }
             admin.createTopics(List.of(new NewTopic(events, 1, (short) 1), new NewTopic(offsets, 1, (short) 1))).all().get(20, TimeUnit.SECONDS);
             oldProducer.initTransactions();
-            old = reader(config);
-            replacement = reader(config);
+            var lifecycle = spy(new JournalReadLifecycle());
+            old = reader(config, lifecycle);
+            replacement = reader(config, new JournalReadLifecycle());
             boundary = old.getCurrentPosition();
             require(LIBRARY.equals(boundary.receiver().library()) && boundary.offset().signum() > 0, "initial receiver belongs to isolated library");
             publish(oldProducer, null, checkpoint(boundary.offset()));
@@ -186,22 +185,16 @@ public final class As400NativeReaderStopProbe {
             report.put("replacement_job", newIdentity);
             heldJob = copyJob(observer, oldServer);
             Job target = heldJob;
-            var journal = (RetrieveJournal) field(old, "retrieveJournal");
-            var lifecycle = spy((JournalReadLifecycle) field(old, "lifecycle"));
-            set(old, "lifecycle", lifecycle);
-            set(journal, "lifecycle", lifecycle);
-            set(field(journal, "journalReceivers"), "lifecycle", lifecycle);
+            var journal = old.journal();
             CountDownLatch nativeHeld = new CountDownLatch(1);
             AtomicBoolean once = new AtomicBoolean();
             AtomicReference<Thread> readerThread = new AtomicReference<>();
             doAnswer(invocation -> {
                 JournalReadLifecycle.Lease lease = (JournalReadLifecycle.Lease) invocation.callRealMethod();
                 try {
-                    Object active = field(journal, "activeRead");
-                    if (Thread.currentThread() == readerThread.get() && active != null && once.compareAndSet(false, true)) {
-                        Job captured = (Job) field(active, "job");
-                        require(field(active, "connection") == oldTransport && captured.getQualifiedJobName().equals(oldServer.getQualifiedJobName()),
-                                "registered call captures only the bound old job");
+                    var active = journal.readState();
+                    if (Thread.currentThread() == readerThread.get() && active.registered() && once.compareAndSet(false, true)) {
+                        require(active.job().equals(oldServer.getQualifiedJobName()), "registered call captures only the bound old job");
                         require(sameJob(oldIdentity, jobState(observer, oldServer)), "old native job lifetime matches immediately before hold");
                         // Native fault only: hold this exact owned job before the real run().
                         report.put("hold_attempted", true);
@@ -286,7 +279,7 @@ public final class As400NativeReaderStopProbe {
                 String result = reading.get(10, TimeUnit.SECONDS);
                 report.put("old_read_result", result);
                 require(!result.equals("returned normally") && oldCallbacks.get() == 0, "cancelled old call emits no record");
-                require(!oldTransport.isConnected(AS400.COMMAND) && field(old, "as400") == null && field(journal, "activeRead") == null,
+                require(!oldTransport.isConnected(AS400.COMMAND) && !journal.readState().registered(),
                         "completed stop disconnects old transport and clears active handle");
                 Map<String, Object> ended = jobState(observer, oldServer);
                 report.put("old_job_immediately_after_stop", ended);
@@ -359,8 +352,8 @@ public final class As400NativeReaderStopProbe {
         }
     }
 
-    private As400RpcConnection reader(As400ConnectorConfig config) {
-        return new As400RpcConnection(config, mock(As400StreamingChangeEventSourceMetrics.class), List.of(new FileFilter(LIBRARY, TABLE)), 0);
+    private As400RpcConnection reader(As400ConnectorConfig config, JournalReadLifecycle lifecycle) {
+        return new As400RpcConnection(config, mock(As400StreamingChangeEventSourceMetrics.class), List.of(new FileFilter(LIBRARY, TABLE)), 0, lifecycle);
     }
 
     private As400OffsetContext scan(As400ConnectorConfig config, Map<String, String> saved) {
@@ -594,18 +587,6 @@ public final class As400NativeReaderStopProbe {
             sql.setQueryTimeout(20);
             sql.execute(statement);
         }
-    }
-
-    private static Object field(Object object, String name) throws Exception {
-        Field field = object.getClass().getDeclaredField(name);
-        field.setAccessible(true);
-        return field.get(object);
-    }
-
-    private static void set(Object object, String name, Object value) throws Exception {
-        Field field = object.getClass().getDeclaredField(name);
-        field.setAccessible(true);
-        field.set(object, value);
     }
 
     private synchronized void require(boolean passed, String name) throws IOException {

@@ -68,9 +68,8 @@ final class As400RecoverySource implements StreamingChangeEventSource<As400Parti
     private final Supplier<Map<String, ?>> durable;
     private final JournalReadLifecycle admission = new JournalReadLifecycle();
     private final As400RecoveryAcknowledgements acknowledgements = new As400RecoveryAcknowledgements();
-    private final AtomicBoolean closed = new AtomicBoolean();
     private final AtomicBoolean cancelRequested = new AtomicBoolean();
-    private final CompletableFuture<Void> cleanup = new CompletableFuture<>();
+    private final As400AsyncCleanup cleanup = new As400AsyncCleanup("ibmi-source-close");
     private final CompletableFuture<Void> cancellation = new CompletableFuture<>();
     private volatile Throwable cancellationFailure;
     private volatile As400ContinuousRuntime runtime;
@@ -500,8 +499,9 @@ final class As400RecoverySource implements StreamingChangeEventSource<As400Parti
     }
 
     private String awaitDurable(SourceRecord barrier) throws Exception {
-        long timeout = initialization != null && !handedOff ? Math.min(120_000, initialization.remainingMillis()) : 120_000;
-        String receipt = acknowledgements.await(barrier, Duration.ofMillis(timeout), this::checkForPoll);
+        String receipt = initialization != null && !handedOff
+                ? acknowledgements.await(barrier, Duration.ofMillis(Math.min(120_000, initialization.remainingMillis())), this::checkForPoll)
+                : acknowledgements.awaitUntilStopped(barrier, this::checkForPoll);
         check();
         if (!barrier.sourceOffset().equals(durable.get())) {
             throw new IllegalStateException("Commit callback has no matching durable source offset");
@@ -615,6 +615,10 @@ final class As400RecoverySource implements StreamingChangeEventSource<As400Parti
         }
     }
 
+    int pendingAcknowledgementCount() {
+        return acknowledgements.pendingCount();
+    }
+
     boolean stopped() {
         return admission.isStopped();
     }
@@ -647,29 +651,31 @@ final class As400RecoverySource implements StreamingChangeEventSource<As400Parti
     }
 
     boolean drained() {
-        return cleanup.isDone() && !cleanup.isCompletedExceptionally();
+        return cleanup.completed();
     }
 
     @Override
     public void close() {
+        closeWithin(As400AsyncCleanup.STOP_TIMEOUT);
+    }
+
+    void closeWithin(Duration timeout) {
         requestStop();
-        admission.awaitDrained();
-        cancellation.join();
-        if (closed.compareAndSet(false, true)) {
+        cleanup.start(() -> {
             try {
+                admission.awaitDrained();
+                cancellation.join();
                 input.close();
                 if (cancellationFailure != null) {
                     throw new IllegalStateException("Source cancellation failed", cancellationFailure);
                 }
-                cleanup.complete(null);
             }
-            catch (Throwable e) {
-                errors.setProducerThrowable(e);
-                cleanup.completeExceptionally(e);
-                throw new IllegalStateException("Recovery source cleanup failed", e);
+            catch (Throwable failure) {
+                errors.setProducerThrowable(failure);
+                throw failure;
             }
-        }
-        cleanup.join();
+        });
+        cleanup.await(timeout);
     }
 
     @Override

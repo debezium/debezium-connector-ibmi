@@ -105,8 +105,10 @@ class As400OnlineHistoryRaceTest {
         };
         var selected = f.history().recordOnlineCandidate(f.journalIdentity, Fixture.position(29), f.receiverIdentity, f.definitions,
                 Fixture.POLICY, new As400BindingHistory.Discovery(Fixture.position(29), f.receiverIdentity), legacy());
-        assertThat(selected.origin()).isEqualTo(Fixture.position(30));
-        assertThat(selected.fingerprint()).isEqualTo(accepted.get().get("capture_fingerprint"));
+        // This old task can append only a proposal; the replacement's fenced
+        // durable offset remains the sole authority for publication/recovery.
+        assertThat(selected.origin()).isEqualTo(Fixture.position(29));
+        assertThat(selected.fingerprint()).isNotEqualTo(accepted.get().get("capture_fingerprint"));
         var lines = new java.util.ArrayList<>(Files.readAllLines(f.file));
         assertThat(lines).hasSize(2);
         assertThat(replacement.pendingOnlineCandidate(legacy(), Fixture.POLICY).orElseThrow().fingerprint()).isEqualTo(selected.fingerprint());
@@ -130,7 +132,7 @@ class As400OnlineHistoryRaceTest {
         }
         else {
             var recovered = replacement.recoverOnlineCandidate(accepted.get(), f.journalIdentity, Fixture.POLICY);
-            assertThat(recovered.fingerprint()).isEqualTo(selected.fingerprint());
+            assertThat(recovered.fingerprint()).isEqualTo(accepted.get().get("capture_fingerprint"));
             assertThat(recovered.handoff()).isEmpty();
             if (fault.equals("default-admission")) {
                 assertThrows(Exception.class, () -> recovered.requireStartupOrigin(accepted.get(), false));
@@ -139,6 +141,85 @@ class As400OnlineHistoryRaceTest {
                 recovered.requireStartupOrigin(accepted.get(), true);
             }
         }
+    }
+
+    @Test
+    void shouldSupersedeOnlyUnpublishedCandidatesAndKeepTheDurableBarrierSelectionAcrossRestart() throws Exception {
+        var f = new Fixture(directory);
+        var first = f.history().recordOnlineCandidate(f.journalIdentity, Fixture.position(29), f.receiverIdentity, f.definitions,
+                Fixture.POLICY, new As400BindingHistory.Discovery(Fixture.position(29), f.receiverIdentity), legacy());
+        var firstOffset = As400Checkpoint.afterVerifiedBoundary(f.journalIdentity, first.fingerprint(), Fixture.position(29), f.receiverIdentity);
+        var barrier = As400LegacyHandoff.bind(Map.of("offset.event_sequence", "30", "offset.receiver", Fixture.RECEIVER.name(),
+                "offset.receiver_library", Fixture.RECEIVER.library(), "offset.processed", "true", "snapshot_completed", "true"), firstOffset);
+        var second = f.history().recordOnlineCandidate(f.journalIdentity, Fixture.position(30), f.receiverIdentity, f.definitions,
+                Fixture.POLICY, new As400BindingHistory.Discovery(Fixture.position(29), f.receiverIdentity), legacy());
+        assertThat(second.fingerprint()).isNotEqualTo(first.fingerprint());
+        var fresh = new Fixture(directory).history();
+        assertThat(fresh.pendingOnlineCandidate(legacy(), Fixture.POLICY).orElseThrow().fingerprint()).isEqualTo(second.fingerprint());
+        assertThat(fresh.pendingOnlineCandidate(barrier, Fixture.POLICY).orElseThrow().fingerprint()).isEqualTo(first.fingerprint());
+        var historicalBarrier = new java.util.HashMap<>(barrier);
+        historicalBarrier.remove(As400LegacyHandoff.FINGERPRINT);
+        assertThat(fresh.pendingOnlineCandidate(historicalBarrier, Fixture.POLICY).orElseThrow().fingerprint()).isEqualTo(first.fingerprint());
+        assertThrows(Exception.class, () -> fresh.recordOnlineCandidate(f.journalIdentity, Fixture.position(31), f.receiverIdentity, f.definitions,
+                Fixture.POLICY, new As400BindingHistory.Discovery(Fixture.position(29), f.receiverIdentity), barrier));
+        assertThat(fresh.recoverOnlineCandidate(firstOffset.toOffset(), f.journalIdentity, Fixture.POLICY).fingerprint()).isEqualTo(first.fingerprint());
+        assertThat(Files.readAllLines(f.file)).hasSize(2);
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = { false, true })
+    void shouldPreserveSelectedHistoryOnLimitExhaustionAndALateWriterRace(boolean race) throws Exception {
+        var f = new Fixture(directory);
+        var first = f.history().recordOnlineCandidate(f.journalIdentity, Fixture.position(29), f.receiverIdentity, f.definitions,
+                Fixture.POLICY, new As400BindingHistory.Discovery(Fixture.position(29), f.receiverIdentity), legacy());
+        var initial = As400Checkpoint.afterVerifiedBoundary(f.journalIdentity, first.fingerprint(), Fixture.position(29), f.receiverIdentity).toOffset();
+        // Canonical duplicate proposals model retries/stale writers at the real limit.
+        String firstRecord = Files.readString(f.file);
+        Files.writeString(f.file, firstRecord.repeat(As400BindingHistory.MAX_HISTORY_RECORDS - 1));
+        var fresh = new Fixture(directory).history();
+        var winner = new AtomicReference<As400BindingHistory.Pending>();
+        if (race) {
+            f.factory = () -> new As400RecoveryTestSupport.FileHistory(f.file) {
+                @Override
+                protected void storeRecord(HistoryRecord record) {
+                    try {
+                        // Both tasks passed their capacity check. This replacement
+                        // fills the last eligible slot before the old append arrives.
+                        winner.set(fresh.recordOnlineCandidate(f.journalIdentity, Fixture.position(31), f.receiverIdentity, f.definitions,
+                                Fixture.POLICY, new As400BindingHistory.Discovery(Fixture.position(29), f.receiverIdentity), legacy()));
+                    }
+                    catch (Exception e) {
+                        throw new IllegalStateException(e);
+                    }
+                    super.storeRecord(record);
+                }
+            };
+            assertThrows(As400BindingHistory.CandidateHistoryFullException.class,
+                    () -> f.history().recordOnlineCandidate(f.journalIdentity, Fixture.position(30), f.receiverIdentity, f.definitions,
+                            Fixture.POLICY, new As400BindingHistory.Discovery(Fixture.position(29), f.receiverIdentity), legacy()));
+        }
+        else {
+            winner.set(fresh.recordOnlineCandidate(f.journalIdentity, Fixture.position(30), f.receiverIdentity, f.definitions,
+                    Fixture.POLICY, new As400BindingHistory.Discovery(Fixture.position(29), f.receiverIdentity), legacy()));
+        }
+        String retained = Files.readString(f.file);
+        assertThat(Files.readAllLines(f.file)).hasSize(As400BindingHistory.MAX_HISTORY_RECORDS + (race ? 1 : 0));
+        var restarted = new Fixture(directory).history();
+        assertThrows(As400BindingHistory.CandidateHistoryFullException.class,
+                () -> restarted.recordOnlineCandidate(f.journalIdentity, Fixture.position(32), f.receiverIdentity, f.definitions,
+                        Fixture.POLICY, new As400BindingHistory.Discovery(Fixture.position(29), f.receiverIdentity), legacy()));
+        assertThat(Files.readString(f.file)).isEqualTo(retained);
+        assertThat(restarted.pendingOnlineCandidate(legacy(), Fixture.POLICY).orElseThrow().fingerprint()).isEqualTo(winner.get().fingerprint());
+        assertThat(restarted.recoverOnlineCandidate(initial, f.journalIdentity, Fixture.POLICY).fingerprint()).isEqualTo(first.fingerprint());
+        // The earlier acknowledged epoch still drives actual fresh task replay.
+        try (var task = new As400RecoveryTaskTest.Running(onlineSource(first.fingerprint()), initial)) {
+            task.input.tail = 64;
+            task.start();
+            var records = task.throughCheckpoint("59");
+            assertThat(As400RecoveryTestSupport.data(records)).containsExactly("c:DCOC1107.A:8", "t:DCOC1107.B", "c:DCOC1107.B:100", "c:DCOC1107.A:9");
+            task.ack(records);
+        }
+        assertThat(Files.readString(f.file)).isEqualTo(retained);
     }
 
     @Test
@@ -172,5 +253,35 @@ class As400OnlineHistoryRaceTest {
         assertThat(accepted.get()).isNotNull();
         assertThat(Files.readAllLines(f.file)).hasSize(3);
         assertThrows(Exception.class, () -> replacement.recover(accepted.get(), f.journalIdentity, Fixture.POLICY));
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = { "total-bytes", "oversized-utf8-record" })
+    void shouldRejectCandidateByteExhaustionBeforeWritingHistory(String fault) throws Exception {
+        var f = new Fixture(directory);
+        var definition = f.definitions.get(0);
+        var schema = definition.schema().edit().addAttribute(io.debezium.relational.Attribute.editor().name("padding")
+                .value(fault.equals("total-bytes") ? "x".repeat(3 * 1024 * 1024) : "\u20ac".repeat(1500000)).create()).create();
+        f.definitions.set(0, new As400BindingDefinition(definition.identity(), schema, definition.codecs()));
+        if (fault.equals("oversized-utf8-record")) {
+            assertThrows(As400BindingHistory.CandidateHistoryFullException.class,
+                    () -> f.history().recordOnlineCandidate(f.journalIdentity, Fixture.position(29), f.receiverIdentity, f.definitions,
+                            Fixture.POLICY, new As400BindingHistory.Discovery(Fixture.position(29), f.receiverIdentity), legacy()));
+            assertThat(Files.exists(f.file)).isFalse();
+            return;
+        }
+        var first = f.history().recordOnlineCandidate(f.journalIdentity, Fixture.position(29), f.receiverIdentity, f.definitions,
+                Fixture.POLICY, new As400BindingHistory.Discovery(Fixture.position(29), f.receiverIdentity), legacy());
+        String record = Files.readString(f.file);
+        int eligible = As400BindingHistory.MAX_HISTORY_BYTES / record.stripTrailing().getBytes(java.nio.charset.StandardCharsets.UTF_8).length;
+        Files.writeString(f.file, record.repeat(eligible));
+        String retained = Files.readString(f.file);
+        assertThrows(As400BindingHistory.CandidateHistoryFullException.class,
+                () -> f.history().recordOnlineCandidate(f.journalIdentity, Fixture.position(30), f.receiverIdentity, f.definitions,
+                        Fixture.POLICY, new As400BindingHistory.Discovery(Fixture.position(29), f.receiverIdentity), legacy()));
+        assertThat(Files.readString(f.file)).isEqualTo(retained);
+        var initial = As400Checkpoint.afterVerifiedBoundary(f.journalIdentity, first.fingerprint(), Fixture.position(29), f.receiverIdentity);
+        assertThat(new Fixture(directory).history().recoverOnlineCandidate(initial.toOffset(), f.journalIdentity, Fixture.POLICY).fingerprint())
+                .isEqualTo(first.fingerprint());
     }
 }

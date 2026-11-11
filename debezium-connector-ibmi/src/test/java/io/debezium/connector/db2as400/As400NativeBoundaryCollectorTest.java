@@ -149,7 +149,8 @@ class As400NativeBoundaryCollectorTest {
     }
 
     @ParameterizedTest
-    @ValueSource(strings = { "", "writers-outside-markers", "gap-before-opening", "gap-after-closing" })
+    @ValueSource(strings = { "", "writers-outside-markers", "gap-before-opening", "gap-after-closing", "admin-F/OP", "admin-F/CL", "admin-F/MS", "admin-D/DH",
+            "admin-D/GT", "admin-R/IL", "admin-F/SS", "admin-D/DW" })
     void nativeBytesBindTheObservationWithoutCreatingAPublicationCheckpoint(String mode) throws Exception {
         var f = new Fixture(mode);
         try (var pulses = f.pulses()) {
@@ -184,7 +185,8 @@ class As400NativeBoundaryCollectorTest {
     }
 
     @ParameterizedTest
-    @ValueSource(strings = { "scope-before", "scope-after", "bindings-after", "missing-row", "continuation", "stop-after-pulse", "missing-marker", "foreign-marker" })
+    @ValueSource(strings = { "scope-before", "scope-after", "bindings-after", "missing-row", "continuation", "stop-after-pulse", "missing-marker", "foreign-marker",
+            "admin-identity", "admin-transaction", "admin-restore" })
     void incompleteObservationCannotBecomeACandidate(String fault) throws Exception {
         var f = new Fixture(fault);
         try (var pulses = f.pulses()) {
@@ -211,7 +213,7 @@ class As400NativeBoundaryCollectorTest {
         Fixture(String fault) throws Exception {
             this.fault = fault;
             try (var stream = getClass().getResourceAsStream("/native-transactions/prospective-boundary.json")) {
-                boundary = new ObjectMapper().readTree(stream).path("boundary");
+                boundary = As400OnlineFenceEvidenceTest.withUnverifiedAccessControlsForReplay(new ObjectMapper().readTree(stream).path("boundary"));
             }
             var metadata = As400OnlineFenceEvidence.validateOffLock(boundary.path("before"));
             bindings = metadata.tables();
@@ -266,6 +268,50 @@ class As400NativeBoundaryCollectorTest {
                 }
                 if (fault.equals("missing-row")) {
                     entries.remove(5);
+                }
+                if (fault.startsWith("admin-")) {
+                    // Synthetic placement of captured administrative bytes in
+                    // the A/Z bracket. This is a parser/identity regression,
+                    // not evidence that this altered native interval occurred.
+                    var original = entries.get(2);
+                    var type = fault.substring(6);
+                    boolean corrupt = type.equals("identity") || type.equals("transaction") || type.equals("restore");
+                    try (var stream = getClass().getResourceAsStream("/native-transactions/"
+                            + (type.equals("R/IL") ? "record-limit.json"
+                                    : List.of("F/SS", "D/DW").contains(type) ? "save-while-active.json" : "administrative-entries.json"))) {
+                        var captured = new ObjectMapper().readTree(stream).path("entries");
+                        var selected = java.util.stream.StreamSupport.stream(captured.spliterator(), false)
+                                .filter(e -> e.path("type").asText().equals(corrupt ? "F/OP" : type)).findFirst().orElseThrow();
+                        byte[] bytes = java.util.HexFormat.of().parseHex(selected.path("hex").asText());
+                        var definition = bindings.definitions().get(0).identity();
+                        var text = new com.ibm.as400.access.AS400Text(10, 37);
+                        text.toBytes(definition.physicalFile(), bytes, 157);
+                        text.toBytes(definition.tableId().schema(), bytes, 167);
+                        text.toBytes(type.startsWith("D/") ? "" : definition.member(), bytes, 177);
+                        byte[] jid = java.util.HexFormat.of().parseHex(type.startsWith("D/") ? definition.fileJournalId() : definition.memberJournalId());
+                        System.arraycopy(jid, 0, bytes, 197, jid.length);
+                        int receiverOffset = java.nio.ByteBuffer.wrap(bytes).getInt(20);
+                        if (receiverOffset != 0) {
+                            text.toBytes(original.position().receiver().name(), bytes, receiverOffset);
+                            text.toBytes(original.position().receiver().library(), bytes, receiverOffset + 10);
+                        }
+                        java.nio.ByteBuffer.wrap(bytes).putLong(24, original.position().offset().longValueExact());
+                        if (type.equals("D/GT")) {
+                            int payload = java.nio.ByteBuffer.wrap(bytes).getInt(8) + 16;
+                            text.toBytes(definition.physicalFile(), bytes, payload);
+                            text.toBytes(definition.tableId().schema(), bytes, payload + 10);
+                        }
+                        if (type.equals("identity")) {
+                            bytes[197] ^= 1;
+                        }
+                        if (type.equals("transaction")) {
+                            java.nio.ByteBuffer.wrap(bytes).putLong(64, 1);
+                        }
+                        if (type.equals("restore")) {
+                            new com.ibm.as400.access.AS400Text(2, 37).toBytes("MR", bytes, 99);
+                        }
+                        entries.set(2, new RawJournalPage.Entry(original.position(), new EntryHeaderDecoder().decode(bytes, 0), bytes));
+                    }
                 }
                 if (fault.equals("writers-outside-markers")) {
                     // Deterministic race shaping only: preserve native payloads,

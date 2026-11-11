@@ -56,7 +56,7 @@ import io.debezium.relational.TableId;
 import io.debezium.schema.DatabaseSchema;
 
 /**
- * Explicit test-only real edgeqa initialization/Connect integration. Controller
+ * Explicit test-only real IBM i test initialization/Connect integration. Controller
  * owns every fixture writer and retains receivers. Native file locks do not prove
  * a general production journal-wide fence. Credentials enter through stdin only.
  */
@@ -145,8 +145,7 @@ public class As400NativeConnectProbeConnector extends As400ConnectProbeConnector
             output = new ChangeEventQueue.Builder<DataChangeEvent>().maxBatchSize(config.getMaxBatchSize()).maxQueueSize(64)
                     .pollInterval(Duration.ofMillis(10)).loggingContextSupplier(() -> taskContext.configureLoggingContext("initialization-probe")).build();
             errors = new ErrorHandler(As400RpcConnector.class, config, output, null);
-            inject("queue", output);
-            inject("errorHandler", errors);
+            initializeOutput(output, errors);
             initializer = new Thread(() -> {
                 try {
                     initializeAndRead(loaded, config);
@@ -479,17 +478,6 @@ public class As400NativeConnectProbeConnector extends As400ConnectProbeConnector
                 Thread.sleep(25);
             }
             checkAdmission();
-        }
-
-        private void inject(String name, Object value) {
-            try {
-                var field = As400ConnectorTask.class.getDeclaredField(name);
-                field.setAccessible(true);
-                field.set(this, value);
-            }
-            catch (ReflectiveOperationException e) {
-                throw new IllegalStateException(e);
-            }
         }
 
         private boolean enqueue(SourceRecord record) throws Exception {

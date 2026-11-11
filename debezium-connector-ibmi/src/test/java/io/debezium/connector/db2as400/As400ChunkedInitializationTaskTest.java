@@ -208,16 +208,7 @@ class As400ChunkedInitializationTaskTest {
         }
     }
 
-    static int retained(Running run) throws Exception {
-        var sourceField = As400ConnectorTask.class.getDeclaredField("recoverySource");
-        sourceField.setAccessible(true);
-        var trackerField = As400RecoverySource.class.getDeclaredField("acknowledgements");
-        trackerField.setAccessible(true);
-        var tracker = trackerField.get(sourceField.get(run.task));
-        var orderField = As400RecoveryAcknowledgements.class.getDeclaredField("order");
-        orderField.setAccessible(true);
-        synchronized (tracker) {
-            return ((List<?>) orderField.get(tracker)).size();
-        }
+    static int retained(Running run) {
+        return run.task.pendingAcknowledgementCount();
     }
 }

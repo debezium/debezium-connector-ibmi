@@ -134,7 +134,7 @@ final class As400OperatorTableEvidence {
                     exact(row, "TABLE_NAME", request.file());
                     String value = row.getString("SYSTEM_TABLE_MEMBER");
                     if (value == null || !value.trim().matches("[A-Z0-9_#$@]{1,10}")) {
-                        throw new SQLException("Invalid single-member name");
+                        throw new As400NativeEvidenceException("Invalid single-member name");
                     }
                     return value.trim();
                 });
@@ -145,11 +145,11 @@ final class As400OperatorTableEvidence {
                     exact(row, "FILE_TYPE", "DATA");
                     exact(row, "CONTAINS_LOB", "NO");
                     if (!number(row, "NUMBER_MEMBERS").equals(BigInteger.ONE) || !number(row, "NUMBER_RECORD_FORMATS").equals(BigInteger.ONE)) {
-                        throw new SQLException("Exactly one member and record format required");
+                        throw new As400NativeEvidenceException("Exactly one member and record format required");
                     }
                     String varying = row.getString("CONTAINS_VARYING_LENGTH");
                     if (!"YES".equals(varying) && !"NO".equals(varying)) {
-                        throw new SQLException("Unknown varying-length layout");
+                        throw new As400NativeEvidenceException("Unknown varying-length layout");
                     }
                     return new Format(trim(row, "FORMAT_NAME"), trim(row, "FORMAT_LEVEL_ID"), number(row, "RECORD_LENGTH").intValueExact(),
                             number(row, "NUMBER_FIELDS").intValueExact(), varying.equals("YES"));
@@ -163,7 +163,7 @@ final class As400OperatorTableEvidence {
             return List.copyOf(result);
         }
         catch (IllegalArgumentException | ArithmeticException e) {
-            throw new SQLException("Invalid native table observation", e);
+            throw new As400NativeEvidenceException("Invalid native table observation", e);
         }
     }
 
@@ -177,11 +177,11 @@ final class As400OperatorTableEvidence {
             exact(row, "JOURNAL_NAME", request.journal().name());
             if (!number(row, "PATH_LENGTH").equals(BigInteger.valueOf(target.path().length())) || !number(row, "ASP_NUMBER").equals(BigInteger.ONE)
                     || !number(row, "HAS_SYMBOLIC_LINK").equals(BigInteger.ZERO)) {
-                throw new SQLException("Unexpected path, ASP or symbolic object");
+                throw new As400NativeEvidenceException("Unexpected path, ASP or symbolic object");
             }
             String jid = row.getString("OBJECT_JID");
             if (jid == null || !jid.matches("[0-9A-Fa-f]{20}")) {
-                throw new SQLException("Missing exact native journal identifier");
+                throw new As400NativeEvidenceException("Missing exact native journal identifier");
             }
             return new NativeObject(target, new Identity(number(row, "FILE_SYSTEM_IDENTIFIER"), number(row, "FILE_IDENTIFIER_NUMBER"),
                     number(row, "GENERATION_IDENTIFIER")), jid.toLowerCase(java.util.Locale.ROOT));
@@ -203,14 +203,14 @@ final class As400OperatorTableEvidence {
                 warning(statement.getWarnings());
                 warning(rows.getWarnings());
                 if (!rows.next()) {
-                    throw new SQLException("Required native table observation is absent");
+                    throw new As400NativeEvidenceException("Required native table observation is absent");
                 }
                 warning(rows.getWarnings());
                 checkInterrupted();
                 result = decode.read(rows);
                 warning(rows.getWarnings());
                 if (rows.next()) {
-                    throw new SQLException("Native table observation is ambiguous");
+                    throw new As400NativeEvidenceException("Native table observation is ambiguous");
                 }
                 warning(rows.getWarnings());
             }
@@ -224,14 +224,14 @@ final class As400OperatorTableEvidence {
         // Only trailing fixed-CHAR padding is allowed; exact paths are never trimmed.
         String actual = row.getString(column);
         if (actual == null || !expected.equals(column.equals("PATH_NAME") ? actual : actual.stripTrailing())) {
-            throw new SQLException("Mismatched native table observation: " + column);
+            throw new As400NativeEvidenceException("Mismatched native table observation: " + column);
         }
     }
 
     private static String trim(ResultSet row, String column) throws SQLException {
         String value = row.getString(column);
         if (value == null) {
-            throw new SQLException("Missing native table field " + column);
+            throw new As400NativeEvidenceException("Missing native table field " + column);
         }
         return value.stripTrailing();
     }
@@ -239,7 +239,7 @@ final class As400OperatorTableEvidence {
     private static BigInteger number(ResultSet row, String column) throws SQLException {
         BigDecimal value = row.getBigDecimal(column);
         if (value == null) {
-            throw new SQLException("Missing native numeric field " + column);
+            throw new As400NativeEvidenceException("Missing native numeric field " + column);
         }
         BigInteger integer = value.toBigIntegerExact();
         integer.longValueExact();
@@ -250,13 +250,13 @@ final class As400OperatorTableEvidence {
         checkInterrupted();
         warning(connection.getWarnings());
         if (!connection.isReadOnly()) {
-            throw new SQLException("Native table evidence connection is not read-only");
+            throw new As400NativeEvidenceException("Native table evidence connection is not read-only");
         }
     }
 
     private static void warning(SQLWarning value) throws SQLException {
         if (value != null) {
-            throw new SQLException("Native table query warning; partial evidence rejected", value);
+            throw new As400NativeEvidenceException("Native table query warning; partial evidence rejected", value);
         }
     }
 

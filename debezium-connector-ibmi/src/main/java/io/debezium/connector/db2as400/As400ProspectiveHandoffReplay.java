@@ -56,7 +56,7 @@ final class As400ProspectiveHandoffReplay {
         }
         var order = future.order();
         require(order.compare(schemaOrigin, cut) <= 0, "Cut precedes qualified schema origin");
-        var headers = new EntryHeaderDecoder();
+        var headers = new EntryHeaderDecoder(RawJournalPage.METADATA_CCSID);
         var ownedControls = controls.stream()
                 .filter(e -> order.compare(e.position(), cut) <= 0).toList();
         // A complete native C/J selection can be empty for autocommit-only
@@ -134,7 +134,7 @@ final class As400ProspectiveHandoffReplay {
         future.definitions().forEach(d -> require(bindings.put(d.identity().tableId().schema() + "/" + d.identity().physicalFile(),
                 d.binding(1024 * 1024)) == null, "Duplicate prospective binding"));
         var limits = new As400TransactionBuffer.Limits(128, 40_000, 2048, 64 * 1024 * 1024);
-        var headers = new EntryHeaderDecoder();
+        var headers = new EntryHeaderDecoder(RawJournalPage.METADATA_CCSID);
         try (var transactions = new As400TransactionBuffer(future.journal(), limits);
                 var autocommit = new As400AutocommitBuffer(future.journal(), limits, transactions::usage)) {
             var normalizer = new As400SourceNormalizer(transactions, (file, library) -> bindings.get(library + "/" + file),

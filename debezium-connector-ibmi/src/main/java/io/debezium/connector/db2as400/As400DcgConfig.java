@@ -16,6 +16,7 @@ import org.apache.kafka.connect.source.SourceTaskContext;
 
 import io.debezium.config.Configuration;
 import io.debezium.ibmi.db2.journal.retrieve.JournalReceiver;
+import io.debezium.ibmi.db2.journal.retrieve.RawJournalPage;
 import io.debezium.relational.TableId;
 import io.debezium.schema.SchemaTopicNamingStrategy;
 import io.debezium.spi.topic.TopicNamingStrategy;
@@ -77,6 +78,14 @@ final class As400DcgConfig {
     As400CaptureFingerprint.Policy onlinePolicy() {
         var output = new TreeMap<>(policy.output());
         output.put("control.topic", controlTopic());
+        // Preserve already-published legacy temporal values during migration.
+        // Its JT400 codecs depend on the worker zone; replacements must not
+        // silently reinterpret keys or replayed values in another zone/ruleset.
+        var zone = java.util.TimeZone.getDefault().toZoneId().normalized();
+        output.put("temporal.compatibility", "legacy-jt400-v1");
+        output.put("temporal.worker.zone", zone.getId());
+        output.put("temporal.worker.rules", zone.getRules().isFixedOffset() ? "fixed"
+                : java.time.zone.ZoneRulesProvider.getVersions(zone.getId()).lastKey());
         return new As400CaptureFingerprint.Policy(policy.filters(), policy.skippedOperations(), policy.decoder(), policy.schema(), output,
                 policy.transactionMetadata(), policy.tombstones(), policy.sourcePartition());
     }
@@ -114,7 +123,9 @@ final class As400DcgConfig {
         int savepoints = bounded(config, "dcg.buffer.max.savepoints", 1024, 1, 100000);
         int bytes = bounded(config, "dcg.buffer.max.bytes", 16 * 1024 * 1024, 65536, 256 * 1024 * 1024);
         runtimeLimits = new As400ContinuousRuntime.Limits(new As400TransactionBuffer.Limits(transactions, entries, savepoints, bytes),
-                new As400JournalLifecycle.Limits(entries, bytes, transactions, savepoints, entries, entries), 2 * entries + 2, true);
+                // Each key change can emit delete, tombstone, create and a heartbeat;
+                // BEGIN/END add at most two records to the committed batch.
+                new As400JournalLifecycle.Limits(entries, bytes, transactions, savepoints, entries, entries), 4 * entries + 2, true);
         library = name(required(config, "database.schema"));
         server = name(required(config, "database.dbname"));
         String[] j = required(config, "dcg.journal").split("/", -1);
@@ -152,13 +163,19 @@ final class As400DcgConfig {
         require(config, "skipped.operations", "none");
         require(config, "provide.transaction.metadata", online ? "false" : "true");
         require(config, "tombstones.on.delete", "true");
-        require(config, "topic.naming.strategy", SchemaTopicNamingStrategy.class.getName());
+        String naming = config.getString(As400ConnectorConfig.TOPIC_NAMING_STRATEGY);
+        if (!Set.of(SchemaTopicNamingStrategy.class.getName(), HostnamePrefixNamingScheme.class.getName()).contains(naming)) {
+            throw new IllegalArgumentException("D/CG requires a built-in IBM i or schema topic naming strategy");
+        }
         require(config, "decimal.handling.mode", "precise");
         require(config, "binary.handling.mode", "bytes");
-        require(config, "time.precision.mode", "adaptive_time_microseconds");
+        String temporal = config.getString("time.precision.mode", "adaptive");
+        if (!Set.of("adaptive", "adaptive_time_microseconds").contains(temporal)) {
+            throw new IllegalArgumentException("D/CG requires adaptive or adaptive_time_microseconds time precision");
+        }
         require(config, "schema.name.adjustment.mode", "none");
         require(config, "field.name.adjustment.mode", "none");
-        require(config, "trim.non.xml.charsequence.field.mode", "none");
+        var trim = As400ConnectorConfig.CharSequenceTrimMode.parse(config.getString(As400ConnectorConfig.TRIM_NON_XML_CHARSEQUENCE_FIELD_MODE));
         for (String key : List.of("key.converter", "value.converter")) {
             // Serialization is Connect's Converter contract. No source record or
             // offset is acknowledged after a converter error (errors.tolerance=none).
@@ -196,7 +213,9 @@ final class As400DcgConfig {
             throw new IllegalArgumentException("initialize requires an absolute persistent dcg.initialization.window directory");
         }
         Map<String, String> output = new TreeMap<>();
-        output.put("version", online ? "native-online-candidate-v2" : "native-configured-v1");
+        // Previous native generations bypassed legacy string cleanup. Do not
+        // silently reinterpret their offsets with changed key/value semantics.
+        output.put("version", online ? "native-online-candidate-v3" : "native-configured-v2");
         if (online) {
             output.put("binding.catalog", "verified-native-server");
         }
@@ -209,6 +228,9 @@ final class As400DcgConfig {
                 "key.converter.schemas.enable", "value.converter.schemas.enable")) {
             output.put(key, config.getString(key, key.endsWith(".schemas.enable") ? "true" : ""));
         }
+        output.put("topic.naming.strategy", naming);
+        output.put("time.precision.mode", temporal);
+        output.put("trim.non.xml.charsequence.field.mode", trim.getValue());
         config.asMap().forEach((key, value) -> {
             if ((key.startsWith("key.converter.") || key.startsWith("value.converter.")) && value != null
                     && As400ConverterFingerprint.include(config, key, value)) {
@@ -239,6 +261,7 @@ final class As400DcgConfig {
         // their selection and still acquire/replay every controlled binding.
         Map<String, String> decoderPolicy = new TreeMap<>(selection);
         decoderPolicy.put("version", "strict-row-v1");
+        decoderPolicy.put("journal.metadata.ccsid", Integer.toString(RawJournalPage.METADATA_CCSID));
         policy = new As400CaptureFingerprint.Policy(Map.of("captured", online ? "native-discovered" : String.join(",", captured),
                 "controlled", online ? "native-discovered" : String.join(",", controlled),
                 "journal", config.getString("dcg.journal"), "server", server, "journaled.libraries", libraries.isEmpty() ? "none" : libraries),
@@ -250,16 +273,10 @@ final class As400DcgConfig {
         if (context == null || context.transactionContext() == null) {
             throw new IllegalStateException("D/CG requires distributed Kafka Connect source transactions and connector transaction boundaries");
         }
-        String version = org.apache.kafka.common.utils.AppInfoParser.getVersion();
-        requireRuntimeVersion(version);
-    }
-
-    static void requireRuntimeVersion(String version) {
-        // The 4.2/4.3 matrix exercises the public transaction/callback contract.
-        // A matching version never substitutes for the capability check above.
-        if (!version.matches("4\\.[23]\\.[0-9]+")) {
-            throw new IllegalStateException("D/CG requires Kafka Connect 4.2.x/4.3.x and source transaction capability; found " + version);
-        }
+        // Do not strand a durable generation on a newer compatible worker solely
+        // because its version string is outside the local validation matrix.
+        // The artifact's Debezium/Kafka compatibility and source transaction API
+        // remain requirements; tested worker versions are reported separately.
     }
 
     static void requireSnapshotMode(Configuration config) {

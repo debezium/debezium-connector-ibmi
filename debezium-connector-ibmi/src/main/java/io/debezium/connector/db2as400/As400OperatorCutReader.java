@@ -386,7 +386,8 @@ final class As400OperatorCutReader {
             Receiver a = required.get(i);
             Receiver b = observed.get(i);
             require(a.name().equals(b.name()) && a.first().equals(b.first()) && a.previous().equals(b.previous()) && a.next().equals(b.next())
-                    && a.status().equals(b.status()) && (a.status().equals("ATTACHED") ? b.last().compareTo(a.last()) >= 0 : a.last().equals(b.last())),
+                    && As400NativeJournalWindow.sameReadableStatus(a.status(), b.status())
+                    && (a.status().equals("ATTACHED") ? b.last().compareTo(a.last()) >= 0 : a.last().equals(b.last())),
                     "Previously inspected receiver range changed");
         }
     }

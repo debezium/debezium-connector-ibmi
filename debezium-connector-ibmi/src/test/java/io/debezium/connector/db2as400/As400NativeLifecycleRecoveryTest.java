@@ -258,7 +258,7 @@ class As400NativeLifecycleRecoveryTest {
         var row = new CompleteRowEntryDecoder(new AS400DataType[]{ new AS400Bin4() }, new boolean[]{ false }, 64);
         for (JsonNode table : fixture("thread-enabled-bindings.json").get("tables")) {
             String file = table.get("file").asText();
-            result.put(file, new TableBinding(new TableIdentity(new TableId("AEQA", table.get("library").asText(), file), file,
+            result.put(file, new TableBinding(new TableIdentity(new TableId("TEST", table.get("library").asText(), file), file,
                     table.get("member").asText(), table.get("fileJournalId").asText(), table.get("memberJournalId").asText(), "FIXTURE_INT_NOT_NULL"), row));
         }
         return result;

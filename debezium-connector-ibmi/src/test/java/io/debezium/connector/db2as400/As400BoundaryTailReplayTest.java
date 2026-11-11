@@ -18,7 +18,7 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 class As400BoundaryTailReplayTest {
     private ObjectNode fixture() throws Exception {
         try (var stream = getClass().getResourceAsStream("/native-transactions/late-membership.json")) {
-            return (ObjectNode) new ObjectMapper().readTree(stream);
+            return As400OnlineFenceEvidenceTest.withUnverifiedAccessControlsForReplay((ObjectNode) new ObjectMapper().readTree(stream));
         }
     }
 

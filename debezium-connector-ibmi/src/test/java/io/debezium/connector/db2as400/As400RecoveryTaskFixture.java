@@ -94,11 +94,18 @@ class As400RecoveryTaskFixture implements As400TaskRecovery {
         when(transport.readRawPage(any(), any(), anyInt())).thenAnswer(i -> {
             JournalPosition from = i.getArgument(0);
             JournalPosition through = i.getArgument(1);
-            return new RawJournalPage(fixture.entries.stream().filter(e -> e.position().offset().compareTo(from.offset()) >= 0
-                    && e.position().offset().compareTo(through.offset()) <= 0).toList(), Optional.empty(), 65536);
+            int maximum = i.getArgument(2);
+            var available = fixture.entries.stream().filter(e -> e.position().offset().compareTo(from.offset()) >= 0
+                    && e.position().offset().compareTo(through.offset()) <= 0).toList();
+            return new RawJournalPage(available.stream().limit(maximum).toList(),
+                    available.size() > maximum ? Optional.of(available.get(maximum).position()) : Optional.empty(), 65536);
         });
-        reader = new As400OperatorCutReader(journals, identities, Fixture.JOURNAL, history, transport, new As400OperatorCutReader.Limits(16, 100, 1_000_000));
+        reader = new As400OperatorCutReader(journals, identities, Fixture.JOURNAL, history, transport, readerLimits());
         return history;
+    }
+
+    As400OperatorCutReader.Limits readerLimits() {
+        return new As400OperatorCutReader.Limits(16, 100, 1_000_000);
     }
 
     As400BindingHistory.Recovered recoverHistory(Map<String, ?> durable) throws Exception {

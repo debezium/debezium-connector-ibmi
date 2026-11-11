@@ -399,11 +399,38 @@ class As400BatchDispatcherTest {
     }
 
     private static As400ReplayCoordinator replay(Map<String, ?> loaded, As400ReplayCoordinator.RecordSink sink) {
+        return replay(loaded, sink, ORDER, new Limits(10, 100, 20, 4096), 30);
+    }
+
+    private static As400ReplayCoordinator replay(Map<String, ?> loaded, As400ReplayCoordinator.RecordSink sink,
+                                                 As400JournalOrder order, Limits limits, int outputRecords) {
         var decoder = new CompleteRowEntryDecoder(new AS400DataType[]{ new AS400Bin4() }, new boolean[]{ false }, 64);
         var table = new TableIdentity(TABLE, "TEST", "TEST", JID, As400ConnectProbeConnector.MEMBER_JID, "FORMAT_V1");
-        return new As400ReplayCoordinator(loaded, JOURNAL, FINGERPRINT, ORDER, new Limits(10, 100, 20, 4096), 1024, 30,
+        return new As400ReplayCoordinator(loaded, JOURNAL, FINGERPRINT, order, limits, 1024, outputRecords,
                 (file, library) -> new As400SourceNormalizer.TableBinding(table, decoder), (source, control) -> SavepointRollback.UNRESOLVED,
                 PARTITION.getSourcePartition(), sink);
+    }
+
+    @Test
+    void shouldDeliverLargeKeyChangeBatchWithinConfiguredBufferLimits() throws Exception {
+        var limits = new As400DcgConfig(Configuration.from(As400DcgConfigTest.properties())).runtimeLimits;
+        int changes = 6700;
+        var order = new As400JournalOrder(List.of(RECEIVER), Map.of(RECEIVER, "receiver-instance"),
+                Map.of(RECEIVER, new As400JournalOrder.Range(BigInteger.ONE, BigInteger.valueOf(2L * changes + 3))));
+        var records = new ArrayList<SourceRecord>();
+        try (var output = new Fixture(Map.of(), limits.outputRecords()).output;
+                var replay = replay(INITIAL.toOffset(), records::add, order, limits.transactions(), limits.outputRecords())) {
+            feed(replay, 2, "C/SC", 0);
+            for (int i = 0; i < changes; i++) {
+                feed(replay, 3L + 2L * i, "R/UB", i);
+                feed(replay, 4L + 2L * i, "R/UP", i + 1);
+            }
+            feed(replay, 2L * changes + 3, "C/CM", 0);
+            replay.deliver(output);
+            assertThat(records).hasSize(3 * changes + 2);
+            assertThat(records.stream().filter(r -> r.value() == null)).hasSize(changes);
+            assertThat(replay.checkpoint().completedThrough()).isEqualTo(pos(2L * changes + 3));
+        }
     }
 
     private static void feedBatch(As400ReplayCoordinator replay) {

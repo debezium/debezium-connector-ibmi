@@ -160,8 +160,8 @@ class As400NativeTaskSessionTest {
             attempt.get(10, TimeUnit.SECONDS);
             verify(nativeSource, never()).connection(false);
             verify(nativeSource, never()).connection(true);
-            assertThat(nativeSource.lifecycle.isStopped()).isTrue();
-            verify(nativeSource.guardedReader).cancelJob();
+            assertThat(nativeSource.lifecycle().isStopped()).isTrue();
+            verify(nativeSource.guardedReader()).cancelJob();
         }
         verify(nativeSource).close();
     }
@@ -197,7 +197,7 @@ class As400NativeTaskSessionTest {
         });
         var statement = mock(java.sql.Statement.class);
         org.mockito.Mockito.doThrow(new java.sql.SQLException("cancel failed")).when(statement).cancel();
-        field(session, As400NativeTaskSession.class, "snapshotStatement", statement);
+        session.trackSnapshotStatement(statement);
         session.requestStop();
         verify(statement).cancel();
         assertThrows(IllegalStateException.class, session::close);
@@ -220,19 +220,14 @@ class As400NativeTaskSessionTest {
 
     private As400ContinuousConnectSource nativeSource() throws Exception {
         var result = mock(As400ContinuousConnectSource.class);
-        field(result, As400ContinuousConnectSource.class, "lifecycle", new JournalReadLifecycle());
-        field(result, As400ContinuousConnectSource.class, "guardedReader", mock(RetrieveJournal.class));
+        when(result.lifecycle()).thenReturn(new JournalReadLifecycle());
+        when(result.guardedReader()).thenReturn(mock(RetrieveJournal.class));
         var identities = mock(As400JdbcNativeIdentityEvidence.class);
         var target = new Target("/QSYS.LIB/DCNC7201.LIB/QSQJRN.JRN", Kind.JOURNAL);
         when(identities.collect(any())).thenReturn(new Candidates(Map.of(target, new Identity(BigInteger.ONE, BigInteger.TWO, BigInteger.TEN))));
-        field(result, As400NativeInitializationProbe.class, "identities", identities);
+        when(result.identities()).thenReturn(identities);
         when(result.connection(false)).thenReturn(mock(Connection.class));
         return result;
     }
 
-    private static void field(Object target, Class<?> type, String name, Object value) throws Exception {
-        var field = type.getDeclaredField(name);
-        field.setAccessible(true);
-        field.set(target, value);
-    }
 }

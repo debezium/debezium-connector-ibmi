@@ -82,8 +82,6 @@ class ProgramModel:
                 raise AssertionError('Marker without allocations')
             self.step('marker', lambda: setattr(self, 'marker_present', True))
         elif command == self.program.release:
-            if not self.held:
-                raise AssertionError('Release of an unallocated object')
             self.release_calls += 1
             self.step('release', lambda: setattr(self, 'held', False))
         else:
@@ -103,7 +101,8 @@ class ProgramModel:
                 raise AssertionError('Result bookkeeping while allocations held')
             self.step('result', lambda: self.result_rows.append({'ATTEMPT': match[1], 'SCOPE_DIGEST': match[2],
                                                                'ACQUIRED': self.state['ACQUIRED'], 'RELEASED': self.state['RELEASED']}))
-        elif line == "SIGNAL SQLSTATE '75001' SET MESSAGE_TEXT='Pulse failed; independent drain required';":
+        elif line in ("SIGNAL SQLSTATE '75001' SET MESSAGE_TEXT='Pulse failed; independent drain required';",
+                      "SIGNAL SQLSTATE '75002' SET MESSAGE_TEXT='Pulse release failed; independent drain required';"):
             raise Condition('SQLEXCEPTION', 'pulse rejected')
         else:
             raise AssertionError('Statement outside the minimal pulse grammar: ' + line)
@@ -168,7 +167,7 @@ class ProgramTest(unittest.TestCase):
         self.assertEqual('ALCOBJ OBJ((DCNC9999/A *FILE *EXCLRD A) (DCNC9999/EXTRA *FILE *EXCLRD DATA)) '
                          'WAIT(1) CONFLICT(*RQSRLS) SCOPE(*JOB)', program.allocate)
         self.assertEqual('DLCOBJ OBJ((DCNC9999/A *FILE *EXCLRD A) (DCNC9999/EXTRA *FILE *EXCLRD DATA)) SCOPE(*JOB)', program.release)
-        self.assertEqual(3, program.statement().count('CALL QSYS2.QCMDEXC('))
+        self.assertEqual(5, program.statement().count('CALL QSYS2.QCMDEXC('))
         model = ProgramModel(program).run()
         self.assertEqual([('allocate', False), ('acquired', True), ('marker', True), ('release', True),
                           ('released', False), ('result', False)], model.trace)
@@ -228,22 +227,20 @@ class ProgramTest(unittest.TestCase):
                         self.assertFalse(model.held)
                         self.assertEqual([], model.result_rows)
 
-    def test_failed_or_ambiguous_allocation_never_deallocates_unconfirmed_locks(self):
+    def test_failed_or_partial_allocation_runs_release_without_marker_or_success(self):
         for category in ('SQLEXCEPTION', 'SQLWARNING', 'NOT FOUND'):
             for after in (False, True):
                 with self.subTest(category=category, after=after):
                     model = ProgramModel(pulse(), {'allocate': (category, after)})
                     with self.assertRaises(Condition):
                         model.run()
-                    self.assertEqual([('allocate', False)], model.trace)
-                    self.assertEqual(0, model.release_calls)
+                    self.assertEqual([('allocate', False), ('release', after), ('released', False)], model.trace)
+                    self.assertEqual(1, model.release_calls)
                     self.assertFalse(model.marker_present)
                     self.assertEqual([], model.result_rows)
-                    # Ambiguous side-effect-before-condition is intentionally
-                    # not called drained. A native exact-job cleanup gate remains.
-                    self.assertEqual(after, model.held)
+                    self.assertFalse(model.held)
 
-    def test_release_failure_never_retries_or_returns_a_success_row(self):
+    def test_release_failure_has_a_bounded_retry_without_returning_success(self):
         for category in ('SQLEXCEPTION', 'SQLWARNING', 'NOT FOUND'):
             for after in (False, True):
                 for marker_failure in (False, True):
@@ -254,7 +251,7 @@ class ProgramTest(unittest.TestCase):
                         model = ProgramModel(pulse(), faults)
                         with self.assertRaises(Condition):
                             model.run()
-                        self.assertEqual(1, model.release_calls)
+                        self.assertEqual(3, model.release_calls)
                         self.assertEqual([], model.result_rows)
                         self.assertEqual(not after, model.held)
 

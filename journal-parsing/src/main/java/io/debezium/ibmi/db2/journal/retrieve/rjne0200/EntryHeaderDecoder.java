@@ -34,11 +34,16 @@ public class EntryHeaderDecoder {
     private static final int HEADER_LENGTH = 236;
     private final AS400Structure structure;
     private final XaTransactionDecoder txDecoder = new XaTransactionDecoder();
-    private final ReceiverNameDecoder nameDecoder = new ReceiverNameDecoder();
+    private final ReceiverNameDecoder nameDecoder;
     private static String[] EMPTY = { "", "" };
     private static final Logger log = LoggerFactory.getLogger(EntryHeaderDecoder.class);
 
     public EntryHeaderDecoder() {
+        this(65535); // Retain the legacy locale-derived profile.
+    }
+
+    public EntryHeaderDecoder(int ccsid) {
+        nameDecoder = new ReceiverNameDecoder(ccsid);
         ArrayList<AS400DataType> dataTypes = new ArrayList<AS400DataType>();
         AS400Timestamp timeType = new AS400Timestamp();
 
@@ -71,25 +76,25 @@ public class EntryHeaderDecoder {
                 new BinaryFieldDescription(new AS400UnsignedBin2(), "13 remote port"),
                 new BinaryFieldDescription(new AS400UnsignedBin2(), "14 arm number"),
                 new BinaryFieldDescription(new AS400UnsignedBin2(), "15 program library ASP number"),
-                new CharacterFieldDescription(new AS400Text(16), "16 remote access"),
-                new CharacterFieldDescription(new AS400Text(1), "17 journal code"),
-                new CharacterFieldDescription(new AS400Text(2), "18 entry type"),
-                new CharacterFieldDescription(new AS400Text(10), "19 job name"),
-                new CharacterFieldDescription(new AS400Text(10), "20 user name"),
-                new CharacterFieldDescription(new AS400Text(6), "21 job number"),
-                new CharacterFieldDescription(new AS400Text(10), "22 program name"),
-                new CharacterFieldDescription(new AS400Text(10), "23 program library name"),
-                new CharacterFieldDescription(new AS400Text(10), "24 program ASP device name"),
-                new CharacterFieldDescription(new AS400Text(30), "25 object"),
-                new CharacterFieldDescription(new AS400Text(10), "26 user profile"),
-                new CharacterFieldDescription(new AS400Text(10), "27 Journal identifier"),
-                new CharacterFieldDescription(new AS400Text(1), "28 address family"),
-                new CharacterFieldDescription(new AS400Text(8), "29 System name"),
-                new CharacterFieldDescription(new AS400Text(1), "30 Indicator flag"),
-                new CharacterFieldDescription(new AS400Text(1), "31 Object name identifier"),
+                new CharacterFieldDescription(new AS400Text(16, ccsid), "16 remote access"),
+                new CharacterFieldDescription(new AS400Text(1, ccsid), "17 journal code"),
+                new CharacterFieldDescription(new AS400Text(2, ccsid), "18 entry type"),
+                new CharacterFieldDescription(new AS400Text(10, ccsid), "19 job name"),
+                new CharacterFieldDescription(new AS400Text(10, ccsid), "20 user name"),
+                new CharacterFieldDescription(new AS400Text(6, ccsid), "21 job number"),
+                new CharacterFieldDescription(new AS400Text(10, ccsid), "22 program name"),
+                new CharacterFieldDescription(new AS400Text(10, ccsid), "23 program library name"),
+                new CharacterFieldDescription(new AS400Text(10, ccsid), "24 program ASP device name"),
+                new CharacterFieldDescription(new AS400Text(30, ccsid), "25 object"),
+                new CharacterFieldDescription(new AS400Text(10, ccsid), "26 user profile"),
+                new CharacterFieldDescription(new AS400Text(10, ccsid), "27 Journal identifier"),
+                new CharacterFieldDescription(new AS400Text(1, ccsid), "28 address family"),
+                new CharacterFieldDescription(new AS400Text(8, ccsid), "29 System name"),
+                new CharacterFieldDescription(new AS400Text(1, ccsid), "30 Indicator flag"),
+                new CharacterFieldDescription(new AS400Text(1, ccsid), "31 Object name identifier"),
                 new BinaryFieldDescription(new AS400Bin1(), "32 bit flags"),
-                new CharacterFieldDescription(new AS400Text(10), "33 object type"),
-                new CharacterFieldDescription(new AS400Text(3), "34 reserved"),
+                new CharacterFieldDescription(new AS400Text(10, ccsid), "33 object type"),
+                new CharacterFieldDescription(new AS400Text(3, ccsid), "34 reserved"),
                 new BinaryFieldDescription(new AS400UnsignedBin4(), "35 nested commit level")
         };
         for (int i = 0; i < fds.length; i++) {

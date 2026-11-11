@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # Copyright Debezium Authors. Licensed under the Apache License, Version 2.0.
-"""Real normal task startup/coordinator with owned edgeqa fixture and local Kafka."""
+"""Real normal task startup/coordinator with owned IBM i test fixture and local Kafka."""
 import hashlib
 import importlib.util
 import json
@@ -32,7 +32,7 @@ class NativeNormalTaskExperiment(continuous.ContinuousExperiment):
         for item in (ROOT / "debezium-connector-ibmi/target/connect-probe-classpath.txt").read_text().strip().split(":"):
             if "/com/datadoghq/" in item:
                 shutil.copy2(item, self.plugin / Path(item).name)
-        self.report["scope"] = "Real As400ConnectorTask startup/snapshot/coordinator/queue/callbacks/continuous reader/stop; acquired native mixed schemas; controlled owned edgeqa journal; actual local Kafka"
+        self.report["scope"] = "Real As400ConnectorTask startup/snapshot/coordinator/queue/callbacks/continuous reader/stop; acquired native mixed schemas; controlled owned IBM i test journal; actual local Kafka"
         self.report["coordinator"] = "normal; no replacement coordinator, injected queue, independent initializer thread or seeded F/W"
         self.report["plugin_sha256"] = {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in self.plugin.iterdir()}
         for file in ["tools/dcg-native-normal-task-probe.py", "tools/dcg-native-normal-task-probe",
@@ -66,7 +66,7 @@ class NativeNormalTaskExperiment(continuous.ContinuousExperiment):
 
 def main():
     if len(sys.argv) != 3:
-        raise SystemExit("Usage: dcg-native-normal-task-probe.py NEW_EVIDENCE_DIRECTORY DCNCdddd (owned edgeqa fixture writes; local Kafka)")
+        raise SystemExit("Usage: dcg-native-normal-task-probe.py NEW_EVIDENCE_DIRECTORY DCNCdddd (owned IBM i test fixture writes; local Kafka)")
     experiment = NativeNormalTaskExperiment(Path(sys.argv[1]), sys.argv[2])
     try:
         experiment.stage()

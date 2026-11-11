@@ -54,6 +54,46 @@ class As400SourceNormalizerTest {
     private long sequence;
 
     @ParameterizedTest
+    @ValueSource(longs = { 0, 20 })
+    void shouldRejectAnotherCyclesRowBeforePublicationWhenTheTableHasAnUncommittedClear(long cycle) throws Exception {
+        var autocommit = new As400AutocommitBuffer("LIB/JRN/incarnation", new Limits(10, 100, 20, 4096), buffer::usage);
+        normalizer = new As400SourceNormalizer(buffer, (file, library) -> new TableBinding(table, decoder), 1024,
+                (source, control) -> SavepointRollback.UNRESOLVED, autocommit);
+        accept(entry('C', "SC", 10, new byte[0]));
+        if (cycle != 0) {
+            accept(entry('C', "SC", cycle, new byte[0]));
+        }
+        accept(clear('8'));
+        var error = assertThrows(NormalizationException.class, () -> accept(row("PT", cycle, 7)));
+        assertThat(error).hasRootCauseMessage("Change from another commit cycle overlaps an uncommitted clear of DB.LIB.LONG_TABLE");
+        assertThrows(As400TransactionBuffer.BufferException.class, buffer::pendingBatch);
+        assertThrows(NormalizationException.class, () -> accept(entry('C', "CM", 10, new byte[0])));
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = { "CM", "RB", "SU" })
+    void shouldAcceptAutocommitRowsAfterTheConflictingClearHasCompletedOrRolledBack(String terminal) throws Exception {
+        var autocommit = new As400AutocommitBuffer("LIB/JRN/incarnation", new Limits(10, 100, 20, 4096), buffer::usage);
+        normalizer = new As400SourceNormalizer(buffer, (file, library) -> new TableBinding(table, decoder), 1024,
+                (source, control) -> SavepointRollback.RETAIN_TARGET, autocommit);
+        accept(entry('C', "SC", 10, new byte[0]));
+        Entry marker = entry('C', "SB", 10, new byte[0]);
+        accept(marker);
+        accept(clear('8'));
+        if (terminal.equals("SU")) {
+            accept(savepointRollback(marker));
+        }
+        else {
+            accept(entry('C', terminal, 10, new byte[0])).ifPresent(buffer::completeBatch);
+        }
+        var row = accept(row("PT", 0, 7)).orElseThrow();
+        assertThat(row.changes()).singleElement().satisfies(change -> {
+            assertThat(change.operation()).isEqualTo(Operation.CREATE);
+            assertThat(change.after().values()[0]).isEqualTo(7);
+        });
+    }
+
+    @ParameterizedTest
     @ValueSource(strings = { "3", "8" })
     void realWireDecodersPreserveIdentityMetadataAndOwnedValuesThroughCommit(String subtype) throws Exception {
         Entry start = entry('C', "SC", 10, new byte[0]);

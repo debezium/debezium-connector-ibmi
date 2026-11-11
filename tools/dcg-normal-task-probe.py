@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 import shutil
 import sys
+import time
 import zipfile
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -79,6 +80,8 @@ class NormalTaskExperiment(previous.OwnershipExperiment):
                   "database.dbname": "DB", "database.schema": "DCOC1107", "skipped.operations": "none", "max.batch.size": "1", "max.queue.size": "64",
                   "poll.interval.ms": "10", "heartbeat.interval.ms": "3600000", "provide.transaction.metadata": "true",
                   "event.converting.failure.handling.mode": "fail", "exactly.once.support": "requested", "transaction.boundary": "poll", "errors.tolerance": "none"}
+        if scenario == "normalduplicates":
+            config.update({"max.batch.size": "512", "max.queue.size": "2048"})
         (self.directory / (scenario + "-connector.json")).write_text(json.dumps(config, indent=2))
         for topic in ["test.DCOC1107.A", "test.DCOC1107.B", "test.transaction", "__debezium-heartbeat.test"]:
             self.command("docker", "exec", self.broker, "/opt/kafka/bin/kafka-topics.sh", "--bootstrap-server", "broker:9092", "--create", "--if-not-exists",
@@ -90,7 +93,7 @@ class NormalTaskExperiment(previous.OwnershipExperiment):
         self.patch_offset(worker, scenario, initial)
         self.check("preexisting Kafka F/W and immutable history before task admission", self.checkpoint(worker, scenario, "seed") == initial,
                    "control/" + scenario + "-seed-offsets-read_committed.json")
-        self.signal(scenario, "tail", 42)
+        self.signal(scenario, "tail", 631 if scenario == "normalduplicates" else 42)
         self.request(worker, scenario, "PUT", "/resume")
         return initial
 
@@ -148,24 +151,83 @@ class NormalTaskExperiment(previous.OwnershipExperiment):
         self.check("no custom ownership or receipt authorization in candidate", not list(self.control.glob("*.registry*")) and
                    not list(self.control.glob("*.authorized-worker*")), "control/")
 
+    def exercise_pause(self):
+        scenario = "normalresume"
+        worker = self.start_worker(scenario, "w1")
+        self.create_normal(worker, scenario)
+        generation = self.generation(scenario, "w1")
+        saved = self.completed(worker, scenario, 42)
+        self.signal(generation, "hold")
+        self.marker(generation, "held")
+        self.request(worker, scenario, "PUT", "/pause")
+        base.wait_for("paused task", lambda: all(t["state"] == "PAUSED" for t in
+                      self.rest(worker, "/connectors/" + scenario + "/status")["tasks"]))
+        # Allow the real reader to return its committed batch while polling is paused.
+        self.signal(scenario, "tail", 64)
+        self.signal(generation, "release")
+        base.wait_for("paused reader returned batch", lambda:
+                      json.loads((self.control / (generation + ".read.json")).read_text())["tail"] == 64)
+        started = time.monotonic()
+        while time.monotonic() - started < 125:
+            time.sleep(1)
+        self.report["paused_seconds"] = time.monotonic() - started
+        self.check("pause beyond former 120s deadline preserves durable W and hides pending truncate",
+                   self.checkpoint(worker, scenario, "paused") == saved
+                   and not self.records(worker, "test.DCOC1107.B", "paused-B"), "control/paused-B.json")
+        self.request(worker, scenario, "PUT", "/resume")
+        self.completed(worker, scenario, 59)
+        rows = self.records(worker, "test.DCOC1107.B", "resumed-B")
+        self.check("same task resumes pending truncate/reload without a timeout failure or restart",
+                   [r["value"]["op"] for r in rows] == ["t", "c"] and rows[0]["key"] is None
+                   and len(list(self.control.glob(scenario + "-w1-*.start.json"))) == 1,
+                   "control/resumed-B.json")
+
+    def exercise_duplicates(self):
+        scenario = "normalduplicates"
+        worker = self.start_worker(scenario, "w1")
+        initial = self.create_normal(worker, scenario)
+        self.generation(scenario, "w1")
+        final = self.completed(worker, scenario, 631)
+        rows = self.records(worker, "test.DCOC1107.A", "duplicates-A")
+        self.check("300 equal-key tombstones survive actual EOS callbacks and multiple 256-record acknowledgement barriers",
+                   len(rows) == 900 and [None if r["value"] is None else r["value"]["op"] for r in rows] == ["c", "d", None] * 300
+                   and all(r["key"] == {"ID": 8} for r in rows), "control/duplicates-A.json")
+        self.check("durable W advances only after the complete repeated-delete transaction",
+                   final["completed_through.sequence"] == "631" and initial["completed_through.sequence"] == "29",
+                   "control/normalduplicates-wait-631-offsets-read_committed.json")
+        self.request(worker, scenario, "PUT", "/stop")
+        base.wait_for("stopped duplicate task", lambda: self.rest(worker, "/connectors/" + scenario + "/status")["connector"]["state"] == "STOPPED")
+        self.request(worker, scenario, "PUT", "/resume")
+        base.wait_for("duplicate task restarted", lambda: len(list(self.control.glob(scenario + "-w1-*.recovered.json"))) == 2)
+        self.check("restart from completed W emits no duplicate transaction",
+                   self.records(worker, "test.DCOC1107.A", "duplicates-restarted-A") == rows
+                   and self.checkpoint(worker, scenario, "duplicates-restarted") == final,
+                   "control/duplicates-restarted-A.json")
+
 
 def main():
-    if len(sys.argv) != 2:
-        raise SystemExit("Usage: dcg-normal-task-probe.py NEW_EVIDENCE_DIRECTORY (compile tests/classpath first)")
+    if len(sys.argv) not in (2, 3) or len(sys.argv) == 3 and sys.argv[2] not in ("restart", "pause", "duplicates"):
+        raise SystemExit("Usage: dcg-normal-task-probe.py NEW_EVIDENCE_DIRECTORY [restart|pause|duplicates] (compile tests/classpath first)")
     experiment = NormalTaskExperiment(Path(sys.argv[1]))
     try:
         experiment.stage()
         experiment.start_broker()
-        experiment.exercise()
+        if len(sys.argv) == 3 and sys.argv[2] == "pause":
+            experiment.exercise_pause()
+        elif len(sys.argv) == 3 and sys.argv[2] == "duplicates":
+            experiment.exercise_duplicates()
+        else:
+            experiment.exercise()
         experiment.report["status"] = "passed"
     except BaseException as error:
         experiment.report["status"] = "failed"
         experiment.report["error"] = str(error)
         # Independent broker evidence is retained even when a safety assertion fails.
         for worker in reversed(experiment.containers):
-            if "-normalresume-" in worker:
+            scenario = "normalduplicates" if len(sys.argv) == 3 and sys.argv[2] == "duplicates" else "normalresume"
+            if "-" + scenario + "-" in worker:
                 try:
-                    for topic in ["test.DCOC1107.A", "test.DCOC1107.B", "offsets-normalresume", "bindings-normalresume"]:
+                    for topic in ["test.DCOC1107.A", "test.DCOC1107.B", "offsets-" + scenario, "bindings-" + scenario]:
                         experiment.records(worker, topic, "failure-" + topic)
                     break
                 except Exception as evidence_error:

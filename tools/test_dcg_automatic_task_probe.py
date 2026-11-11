@@ -81,6 +81,17 @@ class TaskLifecycleTest(unittest.TestCase):
         self.experiment.progressed.assert_called_once_with('662', 'writer-complete')
         self.experiment.point.assert_not_called()
 
+    def test_insert_lookup_handles_prior_truncates_and_tombstones_without_hiding_duplicates(self):
+        inserted = {'key': {'ID': 224}, 'value': {'op': 'c'}}
+        records = [{'key': None, 'value': {'op': 't'}},
+                   {'key': {'ID': 224}, 'value': None},
+                   {'key': {'ID': 224}, 'value': {'op': 'd'}}, inserted]
+        self.experiment.table_records = Mock(return_value=records)
+        self.assertEqual(inserted, self.experiment.inserted('M', 224, 'reload-after-clear'))
+        records.append(inserted.copy())
+        with self.assertRaisesRegex(ValueError, 'Duplicate fixture insert output'):
+            self.experiment.inserted('M', 224, 'duplicate-reload')
+
     def test_ambiguous_row_coordinate_cannot_choose_a_checkpoint_target(self):
         self.experiment.library = 'DCNC1002'
         self.experiment.progressed = Mock()

@@ -22,6 +22,16 @@ Where:
 * `<PROJECT_LIB>` is the Figaro database library
 * `<CDC_USER>` is the username of the CDC service account
 
+The optional transactional truncate path also uses the QSYS2 catalog, journal,
+member, object-statistics and lock-information services. Online initialization
+executes `ALCOBJ`, `DLCOBJ` and `SNDJRNE` through `QSYS2.QCMDEXC` in dedicated
+sessions. Native API-job encoding is checked through JT400 job information
+(`QUSRJOBI`), and cancellation ends only the connector's captured reader job. The grants
+above alone are not a complete authority specification for that profile. Qualify
+the service account for those operations on the complete journal scope, including
+tables excluded from output; an authorization failure cannot be treated as an
+empty inventory or successful release. See [the optional runtime contract](docs/dcg-configured-native.md).
+
 ## Required
 The following environment variables are mandatory configuration and have no default values
 
@@ -34,14 +44,31 @@ DEBEZIUM_REST_ADVERTISED_HOST_NAME
 
 ## Production
 
-Choose the replication factor for the available Kafka brokers. Truncate capture
-requires one partition per table topic so the keyless clear remains ordered with
-row events. The example below assumes at least three brokers:
+Choose the replication factor for the available Kafka brokers. The ordinary
+row-only example below assumes at least three brokers:
 
 ```
-PARTITIONS=1
+PARTITIONS=3
 REPLICATION_FACTOR=3
 ```
+
+If you enable truncate capture, use **one partition per table topic** so the
+keyless clear remains ordered with row events. This is a requirement of truncate
+ordering, not a change to the partition count required for ordinary row capture.
+
+## Row processing and restart compatibility
+
+With `event.processing.failure.handling.mode=fail` (the default), a row decode or
+dispatch failure stops the task before the journal position advances. Earlier
+versions could log some failures and continue, losing the row. `warn` and `skip`
+retain their explicitly lossy behavior for ordinary row processing. Truncate and
+online handoff failures remain fatal; those paths cannot safely skip a clear.
+
+A queue interrupted by the watchdog is retried from its retained offset rather
+than being treated as malformed data. As with other interrupted deliveries, an
+already emitted prefix can repeat. When transaction metadata is enabled and a
+restart begins inside a transaction, BEGIN/END describe the observed suffix;
+counts before the saved offset are not reconstructed.
 
 # Limitations
 
@@ -89,9 +116,12 @@ single-member files**. It queries `QSYS2.SYSPARTITIONSTAT` before emitting a cle
 and requires one matching member. The legacy reader does not buffer
 transactions, so an enabled clear with a nonzero commit-cycle identifier stops
 the connector through its error handler. It also stops for ambiguous member
-scope, malformed D/CG data, missing object identity, or failed truncate dispatch, rather than silently
-acknowledging the clear. Transactional truncates, including rolled-back truncates,
-require transaction buffering and restart-safe replay before they can be supported.
+scope, a missing member on an included table, unavailable table schema, or failed
+truncate dispatch, rather than silently acknowledging the clear. Clears with a
+missing file or library name are logged and skipped because the connector cannot
+determine whether they belong to an included table. Transactional truncates,
+including rolled-back truncates, require transaction buffering and restart-safe
+replay before they can be supported.
 Auto-commit alone does not guarantee a zero commit-cycle identifier; verify the
 source journal. Do not assume that adding `IMMEDIATE` alone bypasses this guard.
 
@@ -117,8 +147,12 @@ The main branch uses Debezium snapshot dependencies; build the matching core
 modules as described in `.github/workflows/cross-maven.yml` first if those
 artifacts are unavailable. `-DskipITs` keeps this build independent of a live IBM i.
 
-The live `As400ConnectorIT` class expects a disposable IBM i library named `DTEST`
-and table `TESTT`. It deletes rows during setup and clears and reloads the table.
+The live `As400ConnectorIT` class uses a disposable IBM i library named `DTEST`
+by default and table `TESTT`. Set `-Dtest.database.schema=YOURTEST` to use a separate
+library for concurrent testing; replace every `DTEST` reference in the fixture
+setup and cleanup below with that name. The name must contain only uppercase
+letters, digits, and underscores, begin with a letter, and be at most ten characters.
+The test deletes rows during setup and clears and reloads the table.
 Use a dedicated test environment and an account allowed to create this fixture,
 read its journal, and execute `CLRPFM`. Do not point it at an application library.
 
@@ -161,7 +195,10 @@ The properties flag prevents the test report from listing JVM system properties;
 review logs before sharing them because connection information can still appear.
 The tests run the connector in a local embedded Debezium engine and consume records
 in memory. They cover snapshot/insert streaming and clear/reload using both
-`CLRPFM` and SQL `TRUNCATE TABLE ... IMMEDIATE`, with commitment control disabled.
+`CLRPFM` and SQL `TRUNCATE TABLE ... IMMEDIATE`, with commitment control disabled,
+under `initial` and `no_data` snapshot modes. Both modes load table schemas;
+`no_data` skips snapshot rows so the clear is the first captured data event. Use a separate
+`-Ddbz.test.data.dir=/absolute/path/to/test-offsets` for concurrent runs.
 Each clear case asserts a keyless truncate followed by an insert. The SQL case
 requires a system where the operation produces `F/CR`; it does not establish
 support for `D/CG`. Inspect the fixture journal to record the entry type observed.

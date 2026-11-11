@@ -24,6 +24,42 @@ import io.debezium.config.Configuration;
 
 class As400DcgConfigTest {
     @Test
+    void shouldBindOnlineTemporalCompatibilityToTheWorkersZoneAndRules() {
+        var previous = java.util.TimeZone.getDefault();
+        try {
+            var config = Configuration.from(onlineProperties());
+            java.util.TimeZone.setDefault(java.util.TimeZone.getTimeZone("UTC"));
+            var utc = As400DcgConfig.onlineCandidate(config).onlinePolicy();
+            assertThat(utc.output()).containsEntry("temporal.compatibility", "legacy-jt400-v1")
+                    .containsEntry("temporal.worker.zone", "Z").containsEntry("temporal.worker.rules", "fixed");
+            java.util.TimeZone.setDefault(java.util.TimeZone.getTimeZone("Etc/UTC"));
+            assertThat(As400DcgConfig.onlineCandidate(config).onlinePolicy()).isEqualTo(utc);
+            java.util.TimeZone.setDefault(java.util.TimeZone.getTimeZone("America/Chicago"));
+            assertThat(As400DcgConfig.onlineCandidate(config).onlinePolicy()).isNotEqualTo(utc);
+        }
+        finally {
+            java.util.TimeZone.setDefault(previous);
+        }
+    }
+
+    @Test
+    void shouldKeepExistingOutputDefaultsWhenAdmittingOnlineTruncate() {
+        var p = onlineProperties();
+        for (String key : java.util.List.of("topic.naming.strategy", "time.precision.mode", "trim.non.xml.charsequence.field.mode")) {
+            p.remove(key);
+        }
+        var defaults = As400DcgConfig.onlineCandidate(Configuration.from(p));
+        assertThat(defaults.policy.output()).containsEntry("topic.naming.strategy", HostnamePrefixNamingScheme.class.getName())
+                .containsEntry("time.precision.mode", "adaptive").containsEntry("trim.non.xml.charsequence.field.mode", "both");
+        p.put("topic.naming.strategy", HostnamePrefixNamingScheme.class.getName());
+        p.put("time.precision.mode", "adaptive");
+        p.put("trim.non.xml.charsequence.field.mode", "both");
+        assertThat(As400DcgConfig.onlineCandidate(Configuration.from(p)).policy).isEqualTo(defaults.policy);
+        p.put("trim.non.xml.charsequence.field.mode", "none");
+        assertThat(As400DcgConfig.onlineCandidate(Configuration.from(p)).policy).isNotEqualTo(defaults.policy);
+    }
+
+    @Test
     void internalOnlineCandidateUsesTheSharedOutputContractWithoutAnOperatorInventory() {
         var p = onlineProperties();
         var admission = As400DcgConfig.onlineCandidate(Configuration.from(p));
@@ -276,16 +312,14 @@ class As400DcgConfigTest {
         assertThrows(IllegalArgumentException.class, () -> new As400DcgConfig(Configuration.from(p)));
     }
 
-    @ParameterizedTest
-    @ValueSource(strings = { "4.2.0", "4.2.2", "4.3.0", "4.3.1", "4.3.2" })
-    void runtimeLineUsesCapabilitiesInsteadOfAnExactPatch(String version) {
-        As400DcgConfig.requireRuntimeVersion(version);
-    }
-
-    @ParameterizedTest
-    @ValueSource(strings = { "3.9.1", "4.1.0", "4.4.0", "4.3.1-SNAPSHOT", "unknown" })
-    void unqualifiedRuntimeLinesStillReject(String version) {
-        assertThrows(IllegalStateException.class, () -> As400DcgConfig.requireRuntimeVersion(version));
+    @Test
+    void shouldRequireTheWorkersTransactionCapabilityInsteadOfGuessingItFromAVersionString() {
+        var config = new As400DcgConfig(Configuration.from(properties()));
+        var context = mock(SourceTaskContext.class);
+        assertThrows(IllegalStateException.class, () -> config.requireRuntime(null));
+        assertThrows(IllegalStateException.class, () -> config.requireRuntime(context));
+        when(context.transactionContext()).thenReturn(mock(org.apache.kafka.connect.source.TransactionContext.class));
+        config.requireRuntime(context);
     }
 
     @Test

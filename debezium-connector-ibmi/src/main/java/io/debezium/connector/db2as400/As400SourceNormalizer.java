@@ -18,6 +18,7 @@ import io.debezium.connector.db2as400.As400TransactionBuffer.TableIdentity;
 import io.debezium.ibmi.db2.journal.retrieve.CompleteRowEntryDecoder;
 import io.debezium.ibmi.db2.journal.retrieve.FileChangeEntryDecoder;
 import io.debezium.ibmi.db2.journal.retrieve.JournalPosition;
+import io.debezium.ibmi.db2.journal.retrieve.RawJournalPage;
 import io.debezium.ibmi.db2.journal.retrieve.TransactionControlEntryDecoder;
 import io.debezium.ibmi.db2.journal.retrieve.TransactionControlEntryDecoder.Control;
 import io.debezium.ibmi.db2.journal.retrieve.TransactionControlEntryDecoder.Kind;
@@ -38,7 +39,7 @@ final class As400SourceNormalizer {
     private final long maximumRowBytes;
     private final As400AutocommitBuffer autocommit;
     private final TransactionControlEntryDecoder controls = new TransactionControlEntryDecoder();
-    private final FileChangeEntryDecoder clears = new FileChangeEntryDecoder();
+    private final FileChangeEntryDecoder clears = new FileChangeEntryDecoder(RawJournalPage.METADATA_CCSID);
     private boolean stopped;
 
     As400SourceNormalizer(As400TransactionBuffer buffer, TableResolver tables, long maximumRowBytes) {
@@ -83,6 +84,7 @@ final class As400SourceNormalizer {
                     throw new IllegalArgumentException("Cycle-zero operation requires the future output coordinator");
                 }
                 TableBinding table = table(header, header.getFile(), header.getLibrary(), header.getMember(), ObjectKind.MEMBER_DATA);
+                buffer.requireNoConflictingClear(source.commitCycle(), table.identity());
                 if (header.getJournalCode() == 'F' && header.getEntryType().equals("CR")) {
                     return autocommit.accept(source, table.identity(), null, null, completedReplay);
                 }

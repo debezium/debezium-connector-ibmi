@@ -20,7 +20,8 @@ import io.debezium.ibmi.db2.journal.retrieve.JournalReceiver;
  * attempt, not a certificate: native scope, metadata, history, marker bytes and
  * completed holder drain must be validated separately. No metadata query runs
  * while the allocations are held. An ambiguous allocation or failed release
- * must not be converted into successful initialization or a blind DLCOBJ retry.
+ * must not be converted into successful initialization. The caller must establish
+ * that the dedicated job has no matching allocations before invoking the program.
  */
 record As400ShortBoundaryProgram(JournalReceiver journal, List<Target> targets, String nonce, String scopeDigest) {
 
@@ -73,22 +74,35 @@ record As400ShortBoundaryProgram(JournalReceiver journal, List<Target> targets, 
                 + ") FILE(*NONE) FORCE(" + (force ? "*YES" : "*NO") + ") OVRSTATE(*NONE) OVRRMTFTR(*NONE)";
     }
 
+    String release() {
+        String objects = targets.stream().map(t -> "(" + t.library() + "/" + t.file() + " *FILE *EXCLRD " + t.member() + ")")
+                .collect(Collectors.joining(" "));
+        return "DLCOBJ OBJ(" + objects + ") SCOPE(*JOB)";
+    }
+
     String statement() {
         String objects = targets.stream().map(t -> "(" + t.library() + "/" + t.file() + " *FILE *EXCLRD " + t.member() + ")")
                 .collect(Collectors.joining(" "));
         String allocate = "ALCOBJ OBJ(" + objects + ") WAIT(1) CONFLICT(*RQSRLS) SCOPE(*JOB)";
-        String release = "DLCOBJ OBJ(" + objects + ") SCOPE(*JOB)";
+        String release = release();
         var lines = new ArrayList<>(List.of("BEGIN NOT ATOMIC", "DECLARE HELD SMALLINT DEFAULT 0;", "DECLARE FAILED SMALLINT DEFAULT 0;",
                 "DECLARE RELEASE_FAILED SMALLINT DEFAULT 0;", "DECLARE ACQUIRED TIMESTAMP(6);", "DECLARE RELEASED TIMESTAMP(6);", "BEGIN"));
         lines.addAll(handlers("FAILED"));
-        lines.addAll(List.of("CALL QSYS2.QCMDEXC(" + literal(allocate) + ");", "SET HELD=1;", "SET ACQUIRED=CURRENT_TIMESTAMP;",
-                "CALL QSYS2.QCMDEXC(" + literal(marker(payload(), false)) + ");", "END;", "IF HELD=1 THEN", "BEGIN"));
-        lines.addAll(handlers("RELEASE_FAILED"));
-        lines.addAll(List.of("CALL QSYS2.QCMDEXC(" + literal(release) + ");", "SET HELD=0;", "SET RELEASED=CURRENT_TIMESTAMP;", "END;", "END IF;",
-                "IF FAILED=0 AND RELEASE_FAILED=0 THEN", "BEGIN"));
+        // Set before the native call: warnings/errors can arrive after a partial
+        // allocation. The dedicated holder was independently checked for locks.
+        lines.addAll(List.of("SET HELD=1;", "CALL QSYS2.QCMDEXC(" + literal(allocate) + ");", "SET ACQUIRED=CURRENT_TIMESTAMP;",
+                "CALL QSYS2.QCMDEXC(" + literal(marker(payload(), false)) + ");", "END;"));
+        for (int attempt = 0; attempt < 3; attempt++) {
+            lines.addAll(List.of("IF HELD=1 THEN", "SET RELEASE_FAILED=0;", "BEGIN"));
+            lines.addAll(handlers("RELEASE_FAILED"));
+            lines.addAll(List.of("CALL QSYS2.QCMDEXC(" + literal(release) + ");", "SET HELD=0;", "SET RELEASED=CURRENT_TIMESTAMP;", "END;",
+                    "IF RELEASE_FAILED=1 THEN", "SET FAILED=1;", "END IF;", "END IF;"));
+        }
+        lines.addAll(List.of("IF FAILED=0 AND HELD=0 THEN", "BEGIN"));
         lines.addAll(handlers("FAILED"));
         lines.addAll(List.of("INSERT INTO SESSION.DCGPULSE VALUES(" + literal(nonce) + ", " + literal(scopeDigest) + ", ACQUIRED, RELEASED);", "END;", "END IF;",
-                "IF FAILED=1 OR RELEASE_FAILED=1 THEN", "SIGNAL SQLSTATE '75001' SET MESSAGE_TEXT='Pulse failed; independent drain required';", "END IF;", "END"));
+                "IF HELD=1 THEN", "SIGNAL SQLSTATE '75002' SET MESSAGE_TEXT='Pulse release failed; independent drain required';", "END IF;",
+                "IF FAILED=1 THEN", "SIGNAL SQLSTATE '75001' SET MESSAGE_TEXT='Pulse failed; independent drain required';", "END IF;", "END"));
         return String.join("\n", lines);
     }
 

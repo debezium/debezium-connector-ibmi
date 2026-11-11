@@ -29,13 +29,16 @@ import io.debezium.storage.kafka.history.KafkaSchemaHistory;
  * Standard Kafka history writes/storage with strict bounded recovery. The base
  * recovery loop skips null/invalid/unparseable records before notifying listeners.
  * A binding manifest must instead reject them, holes, or a moving history cut.
- * Dedicated one-partition, nontransactional, immutable history only.
+ * Online proposals use a bounded eligible prefix: excess stale appends cannot be
+ * selected or invalidate an earlier acknowledged candidate. Strict baseline
+ * history still rejects overflow. Dedicated one-partition, immutable history only.
  */
 final class As400KafkaBindingHistory extends KafkaSchemaHistory {
     private static final Duration TIMEOUT = Duration.ofSeconds(30);
     private Properties readConfig;
     private String topic;
     private boolean candidateAppends;
+    private As400BindingHistory.HistoryBudget budget = new As400BindingHistory.HistoryBudget();
 
     @Override
     public void configure(Configuration config, HistoryRecordComparator comparator, SchemaHistoryListener listener, boolean useCatalogBeforeSchema) {
@@ -59,9 +62,14 @@ final class As400KafkaBindingHistory extends KafkaSchemaHistory {
         candidateAppends = true;
     }
 
+    As400BindingHistory.HistoryBudget recoveryBudget() {
+        return budget;
+    }
+
     @Override
     protected void recoverRecords(Consumer<HistoryRecord> records) throws InterruptedException {
         checkInterrupted();
+        budget = new As400BindingHistory.HistoryBudget();
         try (var consumer = new KafkaConsumer<byte[], byte[]>(readConfig)) {
             var partition = new TopicPartition(topic, 0);
             var partitions = List.of(partition);
@@ -69,12 +77,14 @@ final class As400KafkaBindingHistory extends KafkaSchemaHistory {
             consumer.assign(partitions);
             require(consumer.beginningOffsets(partitions, TIMEOUT).get(partition) == 0, "Binding history prefix was removed");
             long end = consumer.endOffsets(partitions, TIMEOUT).get(partition);
-            require(end > 0 && end <= 1024, "Missing or oversized binding history");
+            require(end > 0 && (candidateAppends || end <= As400BindingHistory.MAX_HISTORY_RECORDS), "Missing or oversized binding history");
+            if (candidateAppends) {
+                end = Math.min(end, As400BindingHistory.MAX_HISTORY_RECORDS);
+            }
             consumer.seek(partition, 0);
             long next = 0;
-            long bytes = 0;
             long deadline = System.nanoTime() + TIMEOUT.toNanos();
-            while (next < end) {
+            recovery: while (next < end) {
                 checkInterrupted();
                 require(System.nanoTime() < deadline, "Incomplete binding history recovery");
                 var batch = consumer.poll(Duration.ofMillis(100));
@@ -85,8 +95,9 @@ final class As400KafkaBindingHistory extends KafkaSchemaHistory {
                     }
                     require(record.offset() == next && record.offset() < end, "Missing, reordered or concurrently appended history record");
                     require(record.value() != null, "Null binding history record");
-                    bytes += record.value().length;
-                    require(record.value().length <= 4 * 1024 * 1024 && bytes <= 16 * 1024 * 1024, "Binding history exceeds byte bounds");
+                    if (!budget.accept(record.value().length, candidateAppends)) {
+                        break recovery;
+                    }
                     HistoryRecord history;
                     try {
                         // Invalid UTF-8 and JSON are errors, never replacement text or skipped records.

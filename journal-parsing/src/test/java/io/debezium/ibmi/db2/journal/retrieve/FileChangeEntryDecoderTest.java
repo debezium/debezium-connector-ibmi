@@ -34,6 +34,25 @@ class FileChangeEntryDecoderTest {
     private final FileChangeEntryDecoder decoder = new FileChangeEntryDecoder();
 
     @ParameterizedTest
+    @ValueSource(strings = { "en-US", "de-DE", "da-DK", "ja-JP" })
+    void shouldDecodeQualifiedNativeObjectNamesIndependentlyOfWorkerLocale(String language) throws Exception {
+        var previous = java.util.Locale.getDefault();
+        try {
+            java.util.Locale.setDefault(java.util.Locale.forLanguageTag(language));
+            byte[] bytes = data('8');
+            new AS400Text(30, 37).toBytes("FILE#$@_  LIB#$@_   MEMBER@   ", bytes, OFFSET + ESD_OFFSET + 16);
+            var change = new FileChangeEntryDecoder(RawJournalPage.METADATA_CCSID).decode(header(END), bytes, OFFSET);
+            assertEquals("FILE#$@_", change.file());
+            assertEquals("LIB#$@_", change.library());
+            assertEquals("MEMBER@", change.member());
+            assertTrue(change.clearsRows());
+        }
+        finally {
+            java.util.Locale.setDefault(previous);
+        }
+    }
+
+    @ParameterizedTest
     @ValueSource(chars = { '3', '8' })
     void decodesSanitizedLiveRpcPayloadWithBlankMember(char subtype) throws Exception {
         byte[] entrySpecificData;

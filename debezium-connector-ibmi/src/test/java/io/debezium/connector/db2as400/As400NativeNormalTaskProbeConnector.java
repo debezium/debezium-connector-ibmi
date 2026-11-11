@@ -23,7 +23,7 @@ import io.debezium.config.Configuration;
 import io.debezium.relational.TableId;
 import io.debezium.schema.AbstractTopicNamingStrategy;
 
-/** Actual task/coordinator, with native admission only for the explicitly owned edgeqa fixture. */
+/** Actual task/coordinator, with native admission only for the explicitly owned IBM i test fixture. */
 public class As400NativeNormalTaskProbeConnector extends As400ConnectProbeConnector {
     private static final ObjectMapper JSON = new ObjectMapper();
     private static Properties credentials;

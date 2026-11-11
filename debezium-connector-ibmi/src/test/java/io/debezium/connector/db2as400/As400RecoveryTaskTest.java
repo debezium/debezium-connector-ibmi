@@ -211,6 +211,43 @@ class As400RecoveryTaskTest {
         }
     }
 
+    @ParameterizedTest
+    @ValueSource(strings = { "read", "close" })
+    void shouldRejectPublicationAndRetainFwWhenSourceDrainDeadlineExpires(String stage) throws Exception {
+        var initial = As400RecoveryTaskFixture.initialize(new Fixture(directory));
+        try (var old = new Running(directory, initial, initial)) {
+            old.input.hold = stage;
+            old.start();
+            if (stage.equals("close")) {
+                old.throughCheckpoint("42");
+            }
+            else {
+                assertThat(old.input.held.await(5, TimeUnit.SECONDS)).isTrue();
+            }
+            try {
+                var source = old.task.source();
+                assertThat(assertThrows(IllegalStateException.class, () -> source.closeWithin(Duration.ofMillis(20))))
+                        .hasMessageContaining("deadline exceeded").hasMessageContaining("drain unverified");
+                assertThat(source.stopped()).isTrue();
+                assertThat(source.drained()).isFalse();
+                assertThrows(IllegalStateException.class, source::checkForPublication);
+                assertThat(old.durable.get()).isEqualTo(initial);
+                try (var replacement = new Running(directory, initial, initial)) {
+                    replacement.start();
+                    replacement.ack(replacement.throughCheckpoint("42"));
+                    assertThat(replacement.durable.get().get("completed_through.sequence")).isEqualTo("42");
+                }
+            }
+            finally {
+                old.input.release.countDown();
+                old.task.source().closeWithin(Duration.ofSeconds(5));
+            }
+            assertThat(old.task.recoveryDrained()).isTrue();
+            assertThat(old.input.closes).hasValue(1);
+            assertThat(old.durable.get()).isEqualTo(initial);
+        }
+    }
+
     @Test
     void publicTaskHasNoRecoveryAdmissionAndLegacyLoaderStillRejectsFw() throws Exception {
         var initial = As400RecoveryTaskFixture.initialize(new Fixture(directory));
@@ -295,6 +332,10 @@ class As400RecoveryTaskTest {
 
         AdmittedTask(As400TaskRecovery input) {
             this.input = input;
+        }
+
+        As400RecoverySource source() {
+            return (As400RecoverySource) coordinator.getStreamingSource().orElseThrow();
         }
 
         Map<String, ?> recoveredOffset() {

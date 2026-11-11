@@ -121,20 +121,18 @@ public class As400LegacyBarrierProbeConnector extends As400ConnectProbeConnector
             output = new ChangeEventQueue.Builder<DataChangeEvent>().maxBatchSize(1).maxQueueSize(64)
                     .pollInterval(Duration.ofMillis(10)).loggingContextSupplier(() -> taskContext.configureLoggingContext("barrier-probe")).build();
             errors = new ErrorHandler(As400RpcConnector.class, config, output, null);
-            inject("queue", output);
-            inject("errorHandler", errors);
+            initializeOutput(output, errors);
             // Do NOT inject configuredTransactions: the candidate boundary spans several polls.
             try {
                 reader = new As400ReaderFixture(generation, config, Long.parseLong(loaded.get("offset.event_sequence").toString()),
                         operation -> append(generation, "native", operation));
                 reader.scan.preSnapshotCompletion();
                 reader.scan.postSnapshotCompletion();
-                inject("rpcConnection", reader.rpc);
                 var jdbc = mock(As400JdbcConnection.class);
                 when(jdbc.getRealDatabaseName()).thenReturn("DB");
                 when(jdbc.getLongName(anyString(), anyString())).thenAnswer(i -> i.getArgument(1));
                 when(jdbc.isOnlyMember("LIB", "TEST", "TEST")).thenReturn(true);
-                inject("jdbcConnection", jdbc);
+                initializeConnections(reader.rpc, jdbc);
                 var schema = new As400TaskStopProbeConnector.FixtureSchema(reader.scan);
                 var topics = new AbstractTopicNamingStrategy<TableId>(raw.asProperties()) {
                     @Override
@@ -313,15 +311,5 @@ public class As400LegacyBarrierProbeConnector extends As400ConnectProbeConnector
             write(generation + ".stopped.json", Map.of("disconnected", reader.allReaderTransportsDisconnected()));
         }
 
-        private void inject(String name, Object value) {
-            try {
-                var field = As400ConnectorTask.class.getDeclaredField(name);
-                field.setAccessible(true);
-                field.set(this, value);
-            }
-            catch (ReflectiveOperationException e) {
-                throw new IllegalStateException(e);
-            }
-        }
     }
 }

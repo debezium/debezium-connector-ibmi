@@ -72,11 +72,6 @@ final class As400TaskStopFixture {
     }
 
     void install(As400ConnectorTask task) throws Exception {
-        var rpcField = As400ConnectorTask.class.getDeclaredField("rpcConnection");
-        rpcField.setAccessible(true);
-        rpcField.set(task, reader.rpc);
-        var jdbcField = As400ConnectorTask.class.getDeclaredField("jdbcConnection");
-        jdbcField.setAccessible(true);
-        jdbcField.set(task, jdbc);
+        task.initializeConnections(reader.rpc, jdbc);
     }
 }

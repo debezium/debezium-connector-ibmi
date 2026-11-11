@@ -147,7 +147,7 @@ class As400NativeThreadReplayTest {
         Map<String, TableBinding> bindings = new HashMap<>();
         for (JsonNode table : fixture("thread-enabled-bindings.json").get("tables")) {
             String file = table.get("file").asText();
-            bindings.put(file, new TableBinding(new TableIdentity(new TableId("AEQA", table.get("library").asText(), file), file,
+            bindings.put(file, new TableBinding(new TableIdentity(new TableId("TEST", table.get("library").asText(), file), file,
                     table.get("member").asText(), table.get("fileJournalId").asText(), table.get("memberJournalId").asText(), "FIXTURE_INT_NOT_NULL"), ROW));
         }
         List<Entry> entries = entries(scenario);

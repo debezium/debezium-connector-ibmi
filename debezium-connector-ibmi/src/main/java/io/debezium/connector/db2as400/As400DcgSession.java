@@ -58,11 +58,11 @@ final class As400DcgSession implements As400TaskInitialization, As400TaskRecover
     private final As400DcgNativeIo io;
     private final As400DcgScope scope;
     private final AtomicBoolean stopped = new AtomicBoolean();
-    private final AtomicBoolean closed = new AtomicBoolean();
+    private final As400AsyncCleanup cancellation = new As400AsyncCleanup("ibmi-snapshot-cancel");
+    private final As400AsyncCleanup cleanup = new As400AsyncCleanup("ibmi-session-close");
     private final Object snapshotIo = new Object();
     private volatile Connection locked;
     private volatile java.sql.Statement snapshotStatement;
-    private volatile Exception cancellationFailure;
     private volatile boolean released;
     private String identity;
     private String fingerprint;
@@ -288,15 +288,12 @@ final class As400DcgSession implements As400TaskInitialization, As400TaskRecover
     public void requestStop() {
         if (stopped.compareAndSet(false, true)) {
             io.requestStop();
-            var statement = snapshotStatement;
-            if (statement != null) {
-                try {
+            cancellation.start(() -> {
+                var statement = snapshotStatement;
+                if (statement != null) {
                     statement.cancel();
                 }
-                catch (Exception error) {
-                    cancellationFailure = error;
-                }
-            }
+            });
             LOGGER.info("D/CG native stop requested; drain is pending");
         }
     }
@@ -304,7 +301,7 @@ final class As400DcgSession implements As400TaskInitialization, As400TaskRecover
     @Override
     public void close() throws Exception {
         requestStop();
-        if (closed.compareAndSet(false, true)) {
+        cleanup.start(() -> {
             try {
                 if (locked != null) {
                     try {
@@ -319,10 +316,9 @@ final class As400DcgSession implements As400TaskInitialization, As400TaskRecover
             finally {
                 io.close();
             }
-            if (cancellationFailure != null) {
-                throw new IllegalStateException("Native snapshot cancellation failed; drain unverified", cancellationFailure);
-            }
+            cancellation.awaitInCleanupWorker();
             LOGGER.info("D/CG native handles drained");
-        }
+        });
+        cleanup.await(As400AsyncCleanup.STOP_TIMEOUT);
     }
 }

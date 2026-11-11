@@ -38,6 +38,34 @@ import io.debezium.pipeline.source.spi.ChangeEventSource.ChangeEventSourceContex
 class As400StreamingTaskStopTest {
     private static final As400Partition PARTITION = new As400Partition("synthetic");
 
+    @ParameterizedTest
+    @ValueSource(booleans = { false, true })
+    void shouldReturnAtStopDeadlineWithoutReopeningAdmissionWhenCleanupIsHeld(boolean cancellation) throws Exception {
+        var journal = mock(io.debezium.ibmi.db2.journal.retrieve.RetrieveJournal.class);
+        var rpc = new As400RpcConnection(As400ReaderFixture.config(false), null,
+                mock(io.debezium.ibmi.db2.journal.retrieve.JournalInfoRetrieval.class), journal);
+        CountDownLatch release = new CountDownLatch(1);
+        if (cancellation) {
+            doAnswer(i -> {
+                await(release);
+                return null;
+            }).when(journal).cancelJob();
+        }
+        var lease = cancellation ? null : rpc.admitRetry();
+        try {
+            assertThat(rpc.stopWithin(java.time.Duration.ofMillis(10))).isFalse();
+            org.assertj.core.api.Assertions.assertThatThrownBy(rpc::connection).isInstanceOf(IOException.class);
+            org.assertj.core.api.Assertions.assertThatThrownBy(rpc::admitRetry).isInstanceOf(IOException.class);
+        }
+        finally {
+            release.countDown();
+            if (lease != null) {
+                lease.close();
+            }
+            assertThat(rpc.stopWithin(java.time.Duration.ofSeconds(5))).isTrue();
+        }
+    }
+
     static Stream<Arguments> errors() {
         return Stream.of("io", "sql", "interrupted", "metadata", "empty").flatMap(kind -> Stream.of(false, true).map(secure -> Arguments.of(kind, secure)));
     }

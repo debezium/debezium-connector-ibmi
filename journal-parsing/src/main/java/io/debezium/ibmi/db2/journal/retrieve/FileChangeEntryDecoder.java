@@ -20,9 +20,18 @@ import io.debezium.ibmi.db2.journal.retrieve.rjne0200.EntryHeader;
  */
 public class FileChangeEntryDecoder implements JournalEntryDeocder<FileChangeEntryDecoder.FileChange> {
     private static final int CHANGE_TYPE_OFFSET = 108;
-    private final AS400Text name = new AS400Text(10);
-    private final AS400Text changeType = new AS400Text(1);
+    private final AS400Text name;
+    private final AS400Text changeType;
     private final AS400ZonedDecimal length = new AS400ZonedDecimal(5, 0);
+
+    public FileChangeEntryDecoder() {
+        this(65535);
+    }
+
+    public FileChangeEntryDecoder(int ccsid) {
+        name = new AS400Text(10, ccsid);
+        changeType = new AS400Text(1, ccsid);
+    }
 
     @Override
     public FileChange decode(EntryHeader header, byte[] data, int offset) throws IOException {

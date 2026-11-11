@@ -47,6 +47,85 @@ class RawJournalPageTest {
         return new JournalPosition(BigInteger.valueOf(sequence), RECEIVER);
     }
 
+    @ParameterizedTest
+    @ValueSource(strings = { "en-US", "de-DE", "da-DK", "ja-JP" })
+    void shouldPreserveNativeNamesAndRequestsIndependentlyOfWorkerLocale(String language) throws Exception {
+        var previous = java.util.Locale.getDefault();
+        try {
+            java.util.Locale.setDefault(java.util.Locale.forLanguageTag(language));
+            byte[] data = page();
+            new AS400Text(30, 37).toBytes("FILE#$@_  LIB#$@_   MEMBER@   ", data, 64 + 157);
+            var first = RawJournalPage.decode(data, pos(75), pos(100), 1).entries().get(0);
+            assertEquals("FILE#$@_", first.header().getFile());
+            assertEquals("LIB#$@_", first.header().getLibrary());
+            assertEquals("MEMBER@", first.header().getMember());
+            var from = new JournalPosition(BigInteger.ONE, new JournalReceiver("RCV#@$", "LIB#@$"));
+            var start = new JournalProcessedPosition(from, java.time.Instant.EPOCH, false);
+            var parameters = new ParameterListBuilder(RawJournalPage.METADATA_CCSID).withJournal("JRN#@$", "LIB#@$")
+                    .withRange(new PositionRange(false, start, from)).build();
+            assertEquals("JRN#@$    LIB#@$    ", new AS400Text(20, 37).toObject(parameters[2].getInputData()));
+            byte[] criteria = parameters[4].getInputData();
+            String decoded = new AS400Text(criteria.length, 37).toObject(criteria).toString();
+            assertTrue(decoded.contains("RCV#@$    LIB#@$    RCV#@$    LIB#@$    "));
+            var decoder = new io.debezium.ibmi.db2.journal.retrieve.rjne0200.EntryHeaderDecoder(RawJournalPage.METADATA_CCSID);
+            assertEquals(first.header().getFile(), decoder.decode(first.data(), 0).getFile());
+        }
+        finally {
+            java.util.Locale.setDefault(previous);
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(ints = { 0, 273, 500, 65535 })
+    void shouldRejectUnqualifiedApiJobEncodingBeforeStartingTheNativeCall(int ccsid) throws Exception {
+        var transport = mock(AS400.class);
+        var reader = new RetrieveJournal(new RetrieveConfigBuilder().withAs400(() -> transport)
+                .withJournalInfo(new JournalInfo("JRN", "LIB", false)).build(), mock(JournalInfoRetrieval.class));
+        var job = mock(Job.class);
+        when(job.getCodedCharacterSetID()).thenReturn(ccsid);
+        try (var calls = mockConstruction(ServiceProgramCall.class, (call, context) -> when(call.getServerJob()).thenReturn(job))) {
+            var failure = assertThrows(IllegalArgumentException.class, () -> reader.readRawPage(pos(75), pos(100), 100));
+            assertTrue(failure.getMessage().contains("CCSID 37"));
+            verify(calls.constructed().get(0), org.mockito.Mockito.never()).run();
+            assertTrue(!reader.readState().registered());
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(ints = { 1, 10, 14, 16, 17 })
+    void shouldPaginateAnOversizedNativeResponseAtTheFirstUnreturnedEntry(int budget) throws Exception {
+        var complete = RawJournalPage.decode(page(), pos(75), pos(100), 100);
+        var first = RawJournalPage.decode(page(), pos(75), pos(100), budget);
+        assertEquals(budget, first.entries().size());
+        var collected = new ArrayList<>(first.entries());
+        if (budget < complete.entries().size()) {
+            var next = complete.entries().get(budget).position();
+            assertEquals(next, first.continuation().orElseThrow());
+            var remaining = complete.entries().subList(budget, complete.entries().size());
+            var second = RawJournalPage.decode(page(remaining.stream().map(RawJournalPage.Entry::data).toList()), next, pos(100), 100);
+            collected.addAll(second.entries());
+            assertTrue(second.continuation().isEmpty());
+        }
+        else {
+            assertTrue(first.continuation().isEmpty());
+        }
+        assertEquals(complete.entries().stream().map(RawJournalPage.Entry::position).toList(), collected.stream().map(RawJournalPage.Entry::position).toList());
+        for (int i = 0; i < collected.size(); i++) {
+            assertArrayEquals(complete.entries().get(i).data(), collected.get(i).data());
+        }
+    }
+
+    @Test
+    void shouldRejectMalformedDeferredEntriesBeforeReturningAnyPrefix() throws Exception {
+        byte[] bytes = page();
+        int next = 64;
+        for (int i = 0; i < 12; i++) {
+            next += ByteBuffer.wrap(bytes).getInt(next);
+        }
+        ByteBuffer.wrap(bytes).putInt(next + 72, 1);
+        assertThrows(IllegalArgumentException.class, () -> RawJournalPage.decode(bytes, pos(75), pos(100), 10));
+    }
+
     @Test
     void ownsAllEntriesAndUsesNativeContinuationRatherThanArithmeticOrNumericGapRules() throws Exception {
         byte[] bytes = page();
@@ -117,7 +196,9 @@ class RawJournalPageTest {
         var data = page();
         List<ProgramParameter[]> requests = new ArrayList<>();
         try (var calls = mockConstruction(ServiceProgramCall.class, (call, context) -> {
-            when(call.getServerJob()).thenReturn(mock(Job.class));
+            Job job = mock(Job.class);
+            when(job.getCodedCharacterSetID()).thenReturn(37);
+            when(call.getServerJob()).thenReturn(job);
             when(call.run()).thenReturn(true);
             when(call.getMessageList()).thenReturn(new AS400Message[0]);
             doAnswer(invocation -> {
@@ -166,7 +247,9 @@ class RawJournalPageTest {
         var reader = new RetrieveJournal(new RetrieveConfigBuilder().withAs400(() -> as400)
                 .withJournalInfo(new JournalInfo("JRN", "LIB", false)).build(), mock(JournalInfoRetrieval.class));
         try (var calls = mockConstruction(ServiceProgramCall.class, (call, context) -> {
-            when(call.getServerJob()).thenReturn(mock(Job.class));
+            Job job = mock(Job.class);
+            when(job.getCodedCharacterSetID()).thenReturn(37);
+            when(call.getServerJob()).thenReturn(job);
             AS400Message message = mock(AS400Message.class);
             when(message.getID()).thenReturn(code);
             when(call.getMessageList()).thenReturn(new AS400Message[]{ message });
@@ -202,7 +285,9 @@ class RawJournalPageTest {
         }
         List<ProgramParameter[]> requests = new ArrayList<>();
         try (var calls = mockConstruction(ServiceProgramCall.class, (call, context) -> {
-            when(call.getServerJob()).thenReturn(mock(Job.class));
+            Job job = mock(Job.class);
+            when(job.getCodedCharacterSetID()).thenReturn(37);
+            when(call.getServerJob()).thenReturn(job);
             when(call.run()).thenReturn(true);
             when(call.getMessageList()).thenReturn(new AS400Message[0]);
             doAnswer(invocation -> {
@@ -272,6 +357,7 @@ class RawJournalPageTest {
     void failedOrPointerBackedRawResponseCancelsOnlyItsCapturedJobBeforeUnregistering(boolean pointer) throws Exception {
         AS400 transport = mock(AS400.class);
         Job captured = mock(Job.class);
+        when(captured.getCodedCharacterSetID()).thenReturn(37);
         when(captured.getName()).thenReturn("QZRCSRVS");
         when(captured.getUser()).thenReturn("FIXTURE");
         when(captured.getNumber()).thenReturn("123456");

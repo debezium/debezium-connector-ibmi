@@ -40,7 +40,7 @@ commit/rollback, both clear subtypes, decoded mixed values and rejected unsafe
 startup. The measured 126.883 seconds from release of a deliberately busy
 transaction to completed handoff includes metadata and Kafka acknowledgement;
 it is not write-lock duration or an activation SLA. The
-[archived report](https://github.com/gardnmi/debezium-connector-ibmi/blob/fc4ffaa2aa7bf8acc5d9630d493450391814f8c0/docs/dcg-public-online-validation.md)
+[validation scope](dcg-validation.md)
 records failed attempts, corrections, artifact identity and successful cleanup.
 
 The [restart and soak report](dcg-restart-soak-validation.md) records a subsequent
@@ -82,14 +82,93 @@ Upstream acceptance is separate from local qualification. Contributor registrati
 in Debezium core's `COPYRIGHT.txt` and `Aliases.txt`, DCO-signed commits and
 maintainer agreement on the supported configuration still apply.
 
-## Historical evidence
+## Evidence handling
 
-Superseded design proposals, investigation diaries and per-stage reports were
-removed from the PR's current tree to keep the review focused. Their complete,
-immutable contents remain at the
-[pre-cleanup development commit](https://github.com/gardnmi/debezium-connector-ibmi/tree/fc4ffaa2aa7bf8acc5d9630d493450391814f8c0/docs).
-This includes native API research, the timeout matrix, first-start profiles and
-failed experiments. Links to individual archived reports deliberately pin that
-commit. The abandoned custom-owner/receipt prototype runner and its unused SQL
-fixture are also retained in Git history; they are not build prerequisites or
-additional guarantees of the current runtime.
+Published fixtures replace source system names, user profiles and job numbers with
+fixed-width aliases, including identities embedded in D/CG payloads. Aliases retain
+producer distinctions and binary section offsets; raw-byte checksums are recomputed.
+These are sanitized regression inputs, not byte-for-byte copies of a private source.
+
+Private investigation logs are not contributor prerequisites. The reproducible
+commands and environment requirements are in [contributor testing](dcg-contributor-testing.md).
+Historical successful runs qualify the artifacts they used; rerun affected cases
+before treating later changes as native-validated.
+
+## Review corrections — 2026-11-11
+
+The correction build passes 3,071 Java tests and 148 Python tests, assembly,
+formatter/import validation and workflow linting. Targeted regressions exercise
+blocked queue interruption, legacy transaction metadata after a fresh restart,
+terminal decode errors, bounded stop with unfinished native work, raw-page
+continuation, repeated equal-key tombstones, large key-change batches and native
+output compatibility. Connector tests/probes use typed construction and lifecycle
+seams instead of reflective private-field mutation.
+
+Native checks additionally exercised a 12,001-entry receiver with requested page
+budgets of 1, 10, 501 and 10,000. One actual 1 MiB response held 3,854 entries;
+the real decoder returned the requested prefix and resumed at the actual next
+entry. Boundary-program failure cases verified that failed object-lock release
+can survive connection close in a pooled job. Release handling now verifies lock
+absence, distinguishes known server failure from an uncertain network response,
+and never treats connection close as release proof. Every owned fixture was
+removed after verification, including failed attempts.
+
+Captured records cover save operations, grants, record-limit growth and classic
+reorganization. The classifier accepts only documented metadata-only forms after
+identity/payload checks; classic reorganization requires logical primary keys.
+Clear companions permit both `OMTJRNE(*NONE)` and `OMTJRNE(*OPNCLO)`, with complete
+before/after images still mandatory and remote journal filtering rejected. A live
+run exposed the old hard-coded `*OPNCLO` check after successful admission; that
+failed run and cleanup are retained, and commit/rollback/savepoint regressions
+cover the corrected start-journaling payload validation.
+Restore, unqualified DDL, concurrent or RRN-key reorganization, and abnormal-IPL
+semantics remain explicit failures. Two concurrent writers produced 200 actual
+updates with adjacent before/after pairs in this experiment; this does not prove
+that every possible native workload has that property.
+
+The final ordinary-plugin native run passed 17 assertions with a worker using
+`America/Chicago` and German locale. Six DATE/TIME/TIMESTAMP/null cases matched
+the actual legacy output after online handoff, without another snapshot. Commit,
+rollback, worker replacement and termination of an exact owned transaction job
+preserved ordering and unrelated-table progress. With `OMTJRNE(*NONE)`, the live
+runtime also continued across GRANT, classic RGZPFM, SAVOBJ, save-while-active and
+SAVLIB; metadata-only entries emitted no table changes. That native-tested artifact was
+`b02df4334fdc53098e914a7a604b83bbf5fba45330dc38f036df0b564d8230e3`.
+Native jobs, fixture library/schema/inquiries and owned Docker resources passed
+cleanup checks. Earlier harness and profile-check failures are retained as
+failures, with their own cleanup evidence; the final run is a separate fresh fixture.
+
+Actual local Connect 4.2/4.3 checks also passed repeated-tombstone acknowledgement,
+replacement/recovery, missing-offset rejection and a 125-second pause/resume.
+Those reports identify the preceding artifact; its only runtime-class difference
+from that native build is the subsequently corrected clear-companion profile
+validator. They are not relabeled as tests of a different distribution.
+
+Independent review subsequently found that repeated online candidate replacement
+could exhaust binding-history recovery bounds. The correction checks record and
+UTF-8 byte capacity before appending and restricts online selection to a bounded
+immutable prefix. A racing stale append cannot invalidate a selected epoch or
+gain publication authority beyond that prefix. Legacy CDC continues when no new
+proposal fits. Six additional deterministic cases cover count/byte limits, an
+oversized UTF-8 record, competing writers and fresh-task recovery. Strict history
+overflow and malformed eligible records remain errors. This history-only change
+postdates the first native-tested artifact above and received separate local
+verification before the final native rerun.
+Actual Kafka 4.3.1 then retained 1,025 proposal records: a fresh reader recovered
+the acknowledged eligible epoch, refused selection of the extra proposal and
+left broker history unchanged. The actual-task replacement, drain, rollback and
+missing-offset checks also passed again on the corrected classes. Both local
+experiments verified Docker cleanup. The resulting distribution is
+`3c2e3a50e9152d901dde232db8066c6b70c274d52d56d4e4fe6273de8fe78515`.
+That exact distribution then passed all 17 native assertions again in a fresh
+isolated IBM i fixture, with `America/Chicago` and German worker locale. Online
+handoff, temporal values, unrelated-table progress, task replacement, commit and
+rollback, owned-job termination and the maintenance operations above all passed.
+The fixture library, schema and inquiries were verified absent after cleanup;
+the owned local Kafka resources and temporary credentials were also removed.
+
+The [repeated performance comparison](dcg-performance-comparison.md#review-correction-comparison--2026-11-11)
+retains both a slower intermediate candidate and the improved final candidate,
+with exact artifact identities. No production system or downstream sink was
+used. Published Git history and upstream submission scope are separate from
+these local verification results.

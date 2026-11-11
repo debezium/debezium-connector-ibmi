@@ -20,8 +20,50 @@ import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
 class As400OnlineFenceEvidenceTest {
+    static As400OnlineFenceEvidence.Candidate replayMetadata(JsonNode captured) throws Exception {
+        return As400OnlineFenceEvidence.validateOffLock(withUnverifiedAccessControlsForReplay(captured));
+    }
+
+    /**
+     * Component-only assumption for old captures that predate the RCAC query.
+     * Never edits or publishes the captured resources. The native validators and
+     * command-line replay still reject those files without real control evidence.
+     */
+    static <T extends JsonNode> T withUnverifiedAccessControlsForReplay(T original) {
+        T copy = original.deepCopy();
+        addUnverifiedControls(copy);
+        return copy;
+    }
+
+    private static void addUnverifiedControls(JsonNode node) {
+        if (node.isObject() && node.path("queries").isArray() && node.path("targets").isArray()) {
+            ArrayNode queries = (ArrayNode) node.get("queries");
+            for (JsonNode target : node.get("targets")) {
+                String library = target.path("library").asText();
+                String file = target.path("file").asText();
+                ObjectNode query = queries.addObject().put("name", "controls").put("phase", "layout")
+                        .put("sql", As400NativeBindingAcquisition.CONTROLS_SQL).put("synthetic_test_assumption", true);
+                query.putArray("parameters").add(library).add(file);
+                query.putArray("rows").addObject().put("TABLE_SCHEMA", library).put("SYSTEM_TABLE_SCHEMA", library)
+                        .put("TABLE_NAME", file).put("SYSTEM_TABLE_NAME", file).put("CONTROL", " ");
+            }
+            return;
+        }
+        if (node.isContainerNode()) {
+            node.forEach(As400OnlineFenceEvidenceTest::addUnverifiedControls);
+        }
+    }
+
     static ObjectNode fixture() throws Exception {
-        return (ObjectNode) new ObjectMapper().readTree(As400OnlineFenceEvidenceTest.class.getResourceAsStream("/native-transactions/automatic-fence-metadata.json"));
+        return withUnverifiedAccessControlsForReplay((ObjectNode) new ObjectMapper()
+                .readTree(As400OnlineFenceEvidenceTest.class.getResourceAsStream("/native-transactions/automatic-fence-metadata.json")));
+    }
+
+    @Test
+    void shouldRejectHistoricalCaptureThatCannotEstablishAccessControlSettings() throws Exception {
+        var raw = new ObjectMapper().readTree(getClass().getResourceAsStream("/native-transactions/automatic-fence-metadata.json"));
+        assertThat(assertThrows(Exception.class, () -> As400OnlineFenceEvidence.validate(raw)))
+                .hasStackTraceContaining("Native validator requested uncaptured evidence");
     }
 
     @Test
@@ -41,7 +83,8 @@ class As400OnlineFenceEvidenceTest {
 
     @Test
     void offLockMetadataCannotMasqueradeAsLockedEvidence() throws Exception {
-        ObjectNode data = (ObjectNode) new ObjectMapper().readTree(getClass().getResourceAsStream("/native-transactions/automatic-fence-native-scope.json"));
+        ObjectNode data = withUnverifiedAccessControlsForReplay((ObjectNode) new ObjectMapper()
+                .readTree(getClass().getResourceAsStream("/native-transactions/automatic-fence-native-scope.json")));
         assertThrows(IllegalArgumentException.class, () -> As400OnlineFenceEvidence.validateOffLock(data));
         data.put("profile", As400OnlineFenceEvidence.OFFLOCK_PROFILE).put("status", "observed").put("outside_lock", true);
         assertThat(As400OnlineFenceEvidence.validateOffLock(data).tables().definitions()).hasSize(5);
@@ -53,7 +96,7 @@ class As400OnlineFenceEvidenceTest {
     @ParameterizedTest
     @ValueSource(strings = { "missing-scope", "missing-query", "promoted", "receiver", "member" })
     void offLockMetadataPreservesExistingScopeAndIdentityChecks(String fault) throws Exception {
-        ObjectNode data = (ObjectNode) new ObjectMapper().readTree(getClass().getResourceAsStream("/native-transactions/automatic-fence-native-scope.json"));
+        ObjectNode data = As400OnlineLockScopeTest.fixture();
         data.put("profile", As400OnlineFenceEvidence.OFFLOCK_PROFILE).put("status", "observed").put("outside_lock", true);
         switch (fault) {
             case "missing-scope" -> data.remove("native_scope");

@@ -5,6 +5,7 @@
  */
 package io.debezium.connector.db2as400;
 
+import java.nio.ByteBuffer;
 import java.nio.file.Files;
 import java.time.Duration;
 import java.util.Map;
@@ -22,6 +23,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import io.debezium.config.Configuration;
 import io.debezium.connector.db2as400.As400RecoveryTestSupport.Fixture;
 import io.debezium.ibmi.db2.journal.retrieve.RawJournalPage;
+import io.debezium.ibmi.db2.journal.retrieve.rjne0200.EntryHeaderDecoder;
 import io.debezium.relational.history.SchemaHistory;
 import io.debezium.storage.kafka.history.KafkaSchemaHistory;
 
@@ -84,8 +86,46 @@ public final class As400NormalTaskProbeConnector extends As400ConnectProbeConnec
             this.name = name;
             this.generation = generation;
             history(fixture, name);
+            if (name.equals("normalduplicates")) {
+                repeatedDeletes();
+            }
             // The replacement must use durable bindings, not fixture schema definitions.
             fixture.definitions.clear();
+        }
+
+        /** Synthetic load on captured row/control layouts, not new native evidence. */
+        private void repeatedDeletes() {
+            byte[] row = fixture.entry(42).data();
+            byte[] start = fixture.entry(31).data();
+            byte[] commit = fixture.entry(59).data();
+            var anchor = fixture.entry(29);
+            fixture.entries.clear();
+            fixture.entries.add(anchor);
+            // Use one producer for the complete cycle; retain native object bindings.
+            for (byte[] control : new byte[][]{ start, commit }) {
+                System.arraycopy(row, 40, control, 40, 8);
+                System.arraycopy(row, 101, control, 101, 26);
+                System.arraycopy(row, 208, control, 208, 8);
+            }
+            fixture.entries.add(repeatedEntry(start, 30, "CSC"));
+            for (int i = 0; i < 300; i++) {
+                fixture.entries.add(repeatedEntry(row, 31 + 2 * i, "RPT"));
+                fixture.entries.add(repeatedEntry(row, 32 + 2 * i, "RDL"));
+            }
+            fixture.entries.add(repeatedEntry(commit, 631, "CCM"));
+        }
+
+        private static RawJournalPage.Entry repeatedEntry(byte[] template, long sequence, String type) {
+            byte[] raw = template.clone();
+            ByteBuffer.wrap(raw).putLong(24, sequence).putLong(64, 30);
+            new com.ibm.as400.access.AS400Text(3, 37).toBytes(type, raw, 98);
+            new com.ibm.as400.access.AS400Text(1, 37).toBytes(type.equals("RDL") ? "1" : "0", raw, 216);
+            return new RawJournalPage.Entry(Fixture.position(sequence), new EntryHeaderDecoder().decode(raw, 0), raw);
+        }
+
+        @Override
+        As400OperatorCutReader.Limits readerLimits() {
+            return name.equals("normalduplicates") ? new As400OperatorCutReader.Limits(16, 1000, 1_000_000) : super.readerLimits();
         }
 
         @Override

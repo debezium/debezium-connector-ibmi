@@ -36,7 +36,7 @@ final class As400JournalRecordContent {
     static EntryHeader userMarker(RawJournalPage.Entry entry) throws Exception {
         byte[] raw = entry.data();
         digest(raw, entry.position());
-        var header = new EntryHeaderDecoder().decode(raw, 0);
+        var header = new EntryHeaderDecoder(RawJournalPage.METADATA_CCSID).decode(raw, 0);
         var info = As400SourceNormalizer.validateSource(header, raw, 0, entry.position()).recordInfo();
         require(header.getJournalCode() == 'U' && header.getEntryType().equals("DN") && header.getCommitCycle().signum() == 0
                 && header.getFile().isEmpty() && header.getLibrary().isEmpty() && header.getMember().isEmpty()
@@ -46,7 +46,7 @@ final class As400JournalRecordContent {
 
     static String digest(byte[] raw, JournalPosition position) throws Exception {
         require(raw.length >= 236 && raw.length <= 1024 * 1024, "Bounded RJNE0200 copy required");
-        var header = new EntryHeaderDecoder().decode(raw, 0);
+        var header = new EntryHeaderDecoder(RawJournalPage.METADATA_CCSID).decode(raw, 0);
         var input = ByteBuffer.wrap(raw);
         require(input.getInt(0) == 0 && input.getInt(12) == 0 && input.getInt(16) == 0 && header.getPointerHandle() == 0,
                 "Owned inline copy without XA/LUW required");

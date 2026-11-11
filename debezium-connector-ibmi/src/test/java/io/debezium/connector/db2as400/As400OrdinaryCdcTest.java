@@ -48,6 +48,138 @@ class As400OrdinaryCdcTest {
     private static final As400Checkpoint INITIAL = As400Checkpoint.afterVerifiedBoundary(JOURNAL, FINGERPRINT, position(24), "fixture-receiver");
     private static final List<String> EXPECTED = List.of("d:A:1", "c:A:4", "d:A:2", "c:A:5", "t:A", "c:A:10", "t:A", "c:A:11", "t:B", "c:B:100");
 
+    @ParameterizedTest
+    @ValueSource(strings = { "commit", "rollback" })
+    void shouldRejectNativeNoncommitInsertAfterAnOpenClearWithoutOutputOrCheckpointAdvancement(String terminal) throws Exception {
+        var json = new ObjectMapper().readTree(getClass().getResourceAsStream("/native-transactions/noncommit-after-clear.json"));
+        var bindings = capturedBindings(json);
+        var scenario = java.util.stream.StreamSupport.stream(json.get("cases").spliterator(), false)
+                .filter(c -> c.path("terminal").asText().equals(terminal)).findFirst().orElseThrow();
+        var receiver = new JournalReceiver(json.path("receiver").asText(), json.path("library").asText());
+        long baseline = scenario.path("baseline").asLong();
+        long through = scenario.path("through").asLong();
+        var initial = As400Checkpoint.afterVerifiedBoundary(JOURNAL, FINGERPRINT, new JournalPosition(BigInteger.valueOf(baseline), receiver), "fixture-receiver");
+        var order = new As400JournalOrder(List.of(receiver), Map.of(receiver, "fixture-receiver"),
+                Map.of(receiver, new As400JournalOrder.Range(BigInteger.valueOf(baseline), BigInteger.valueOf(through))));
+        List<SourceRecord> records = new ArrayList<>();
+        for (int restart = 0; restart < 2; restart++) {
+            try (var replay = new As400ReplayCoordinator(roundTrip(initial.toOffset()), JOURNAL, FINGERPRINT, order,
+                    new As400TransactionBuffer.Limits(16, 1000, 128, 65536), 1024, 100, (file, library) -> bindings.get(file),
+                    As400SourceNormalizer.SavepointPolicy.consumingTargets(), PARTITION.getSourcePartition(), records::add,
+                    new As400JournalLifecycle.Limits(100, 65536, 16, 128, 100, 64), true);
+                    var output = new As400IncrementalLifecycleTest.Output(bindings, true).dispatcher) {
+                for (var raw : json.get("entries")) {
+                    long sequence = raw.path("sequence").asLong();
+                    if (sequence <= baseline || sequence > through) {
+                        continue;
+                    }
+                    byte[] bytes = HexFormat.of().parseHex(raw.path("hex").asText());
+                    assertThat(HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(bytes)))
+                            .isEqualTo(raw.path("sha256").asText());
+                    var header = new EntryHeaderDecoder().decode(bytes, 0);
+                    var position = new JournalPosition(BigInteger.valueOf(sequence), receiver);
+                    if (sequence == scenario.path("rejected_sequence").asLong()) {
+                        assertThat(header.getCommitCycle()).isEqualTo(BigInteger.ZERO);
+                        var failure = assertThrows(As400ReplayCoordinator.RecoveryException.class,
+                                () -> replay.accept(header, bytes, 0, position));
+                        assertThat(failure).hasRootCauseMessage("Change from another commit cycle overlaps an uncommitted clear of "
+                                + receiver.library() + "." + scenario.path("table").asText());
+                        break;
+                    }
+                    if (replay.accept(header, bytes, 0, position).isPresent()) {
+                        replay.deliver(output);
+                    }
+                }
+                assertThat(records).isEmpty();
+                assertThat(replay.checkpoint()).isEqualTo(initial);
+            }
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = { "F/OP", "F/CL", "F/MS", "D/DH", "D/GT", "R/IL", "F/SS", "D/DW", "F/RG", "F/RM" })
+    void shouldTreatCapturedAdministrativeEntriesAsNoOutputWithoutRelaxingIdentityOrPayloadChecks(String type) throws Exception {
+        var json = new ObjectMapper().readTree(getClass().getResourceAsStream("/native-transactions/"
+                + (type.equals("R/IL") ? "record-limit.json"
+                        : List.of("F/SS", "D/DW").contains(type) ? "save-while-active.json"
+                                : List.of("F/RG", "F/RM").contains(type) ? "reorganization.json" : "administrative-entries.json")));
+        var bindings = capturedBindings(json);
+        var raw = java.util.stream.StreamSupport.stream(json.get("entries").spliterator(), false)
+                .filter(e -> e.path("type").asText().equals(type)).findFirst().orElseThrow();
+        byte[] captured = HexFormat.of().parseHex(raw.path("hex").asText());
+        assertThat(HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(captured)))
+                .isEqualTo(raw.path("sha256").asText());
+        var receiver = new JournalReceiver(json.path("receiver").asText(), json.path("library").asText());
+        var position = new JournalPosition(new BigInteger(raw.path("sequence").asText()), receiver);
+        var initial = As400Checkpoint.afterVerifiedBoundary(JOURNAL, FINGERPRINT,
+                new JournalPosition(position.offset().subtract(BigInteger.ONE), receiver), "fixture-receiver");
+        var order = new As400JournalOrder(List.of(receiver), Map.of(receiver, "fixture-receiver"),
+                Map.of(receiver, new As400JournalOrder.Range(initial.replayFrom().offset(), position.offset())));
+        List<SourceRecord> records = new ArrayList<>();
+        var faults = new ArrayList<>(List.of("none", "none-restart", "identity", "payload", "transaction", "record-number", "strict-profile"));
+        if (type.equals("F/RG") || type.equals("F/RM")) {
+            faults.add("rrn-key");
+        }
+        if (type.equals("F/RM")) {
+            faults.add("concurrent-reorganization");
+        }
+        for (String fault : faults) {
+            byte[] bytes = captured.clone();
+            if (fault.equals("identity")) {
+                bytes[206] ^= 1;
+            }
+            if (fault.equals("payload")) {
+                // Preserve a structurally readable entry but shorten its metadata payload.
+                int offset = java.nio.ByteBuffer.wrap(bytes).getInt(8);
+                if (offset == 0) {
+                    offset = 236;
+                    bytes = java.util.Arrays.copyOf(bytes, Math.max(bytes.length, 253));
+                    java.nio.ByteBuffer.wrap(bytes).putInt(0, 0).putInt(8, offset);
+                }
+                new com.ibm.as400.access.AS400Text(5, 37).toBytes("00001", bytes, offset);
+            }
+            if (fault.equals("transaction")) {
+                java.nio.ByteBuffer.wrap(bytes).putLong(64, 1);
+            }
+            if (fault.equals("record-number")) {
+                java.nio.ByteBuffer.wrap(bytes).putLong(56, 1);
+            }
+            if (fault.equals("concurrent-reorganization")) {
+                new com.ibm.as400.access.AS400Text(1, 37).toBytes("F", bytes, java.nio.ByteBuffer.wrap(bytes).getInt(8) + 16 + 108);
+            }
+            final byte[] input = bytes;
+            var header = new EntryHeaderDecoder().decode(input, 0);
+            try (var replay = new As400ReplayCoordinator(roundTrip(initial.toOffset()), JOURNAL, FINGERPRINT, order,
+                    new As400TransactionBuffer.Limits(16, 1000, 128, 65536), 1024, 100, (file, library) -> {
+                        var binding = bindings.get(file);
+                        return fault.equals("rrn-key") ? new TableBinding(binding.identity(), binding.decoder(), true) : binding;
+                    },
+                    As400SourceNormalizer.SavepointPolicy.consumingTargets(), PARTITION.getSourcePartition(), records::add,
+                    new As400JournalLifecycle.Limits(100, 65536, 16, 128, 100, 64), !fault.equals("strict-profile"))) {
+                if (fault.startsWith("none")) {
+                    assertThat(replay.accept(header, input, 0, position)).isEmpty();
+                    replay.verifyEndOfAvailableJournal();
+                    assertThat(replay.scanPosition()).contains(position);
+                }
+                else {
+                    assertThrows(As400ReplayCoordinator.RecoveryException.class, () -> replay.accept(header, input, 0, position));
+                }
+                assertThat(replay.checkpoint()).isEqualTo(initial);
+                assertThat(records).isEmpty();
+            }
+        }
+    }
+
+    private static Map<String, TableBinding> capturedBindings(com.fasterxml.jackson.databind.JsonNode json) throws Exception {
+        var bindings = new HashMap<String, TableBinding>();
+        var array = io.debezium.document.DocumentReader.defaultReader().read("{\"tables\":" + json.get("bindings") + "}").getArray("tables");
+        for (var change : new io.debezium.relational.history.JsonTableChangeSerializer().deserialize(array, false)) {
+            var binding = As400BindingDefinition.restore(change.getTable());
+            bindings.put(binding.identity().physicalFile(), binding.binding(1024));
+        }
+        return bindings;
+    }
+
     @Test
     void mixesAutocommitRowsNativeClearsCommittedSqlClearAndRollbackThroughActualDispatcher() throws Exception {
         Fixture fixture = new Fixture();

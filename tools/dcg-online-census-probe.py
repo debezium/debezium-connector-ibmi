@@ -864,7 +864,7 @@ def main():
     if len(sys.argv) not in [3, 4]:
         raise SystemExit("Usage: dcg-online-census-probe.py NEW_DIRECTORY DCNCdddd [repetitions=1]; explicit IBMI_TEST_CONFIG required")
     import pyodbc
-    pyodbc.pooling = False  # Before the first connection: close must release fixture job resources.
+    pyodbc.pooling = False  # Avoid client reuse; connection close does not prove native *JOB lock release.
     experiment = Experiment(sys.argv[1], sys.argv[2], int(sys.argv[3]) if len(sys.argv) == 4 else 1)
     try:
         experiment.run()

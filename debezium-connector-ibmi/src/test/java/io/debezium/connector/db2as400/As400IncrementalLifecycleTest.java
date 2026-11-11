@@ -15,7 +15,6 @@ import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.when;
 
 import java.io.IOException;
-import java.lang.reflect.Field;
 import java.math.BigInteger;
 import java.nio.ByteBuffer;
 import java.time.Instant;
@@ -148,6 +147,38 @@ class As400IncrementalLifecycleTest {
                 assertNativeFinalRows(name, records);
             }
         }
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = { "T_commit", "D_commit", "T_rollback", "D_rollback", "T_savepoint", "D_savepoint" })
+    void shouldPreserveTransactionOutcomeWhenClearRestoresJournalingWithOpenCloseEntries(String name) throws Exception {
+        var entries = entries("thread-enabled", name);
+        // A documented OMTJRNE(*NONE) variant of the captured *OPNCLO sequences.
+        // The three bytes do not alter image flags, identity or lifecycle order.
+        for (Entry entry : entries) {
+            if (entry.type().equals("D/JF") || entry.type().equals("F/JM")) {
+                new AS400Text(3, 37).toBytes("000", entry.bytes(), entry.header().getEntrySpecificDataOffset() + 16);
+            }
+        }
+        List<SourceRecord> records = new ArrayList<>();
+        try (var output = new Output(bindings("thread-enabled")).dispatcher;
+                var replay = coordinator(initial(entries).toOffset(), "thread-enabled", entries, records::add, LIMITS)) {
+            for (Entry entry : entries) {
+                feed(replay, entry, output);
+            }
+            replay.verifyEndOfAvailableJournal();
+            assertThat(data(records)).containsExactlyElementsOf(expected(name));
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = { "D/JF:001", "F/JM:001", "D/JF:010", "F/JM:010", "D/JF:200", "F/JM:200", "D/JF:101", "F/JM:101" })
+    void shouldRejectRemoteFilteringInheritanceOrUnknownOmissionBeforeClearPublication(String fault) throws Exception {
+        var entries = entries("thread-enabled", "T_commit");
+        String[] fields = fault.split(":");
+        Entry entry = entries.get(index(entries, fields[0]));
+        new AS400Text(3, 37).toBytes(fields[1], entry.bytes(), entry.header().getEntrySpecificDataOffset() + 16);
+        assertRejectedWithoutPublication("thread-enabled", "T_commit", entries);
     }
 
     /** Local projection against independently read native outcomes, not a live sink claim. */
@@ -462,20 +493,21 @@ class As400IncrementalLifecycleTest {
 
     /** Native transport is replaced with owned pages; RPC iteration/decoding/position updates are real. */
     private static final class RpcPages {
-        final As400RpcConnection rpc = mock(As400RpcConnection.class, CALLS_REAL_METHODS);
+        final As400RpcConnection rpc;
         final RetrieveJournal journal;
         final As400OffsetContext scan;
 
         RpcPages(As400Checkpoint checkpoint) throws Exception {
             var lifecycle = new JournalReadLifecycle();
-            journal = spy(new RetrieveJournal(new RetrieveConfigBuilder().withAs400(rpc).withJournalInfo(new JournalInfo("JRN", "LIB", false))
-                    .withJournalBufferSize(65536).withMaxServerSideEntries(100).withTransactionControls(true).build(), mock(JournalInfoRetrieval.class), lifecycle));
-            set(rpc, "lifecycle", lifecycle);
-            set(rpc, "retrieveJournal", journal);
-            Field periodic = As400RpcConnection.class.getDeclaredField("periodic");
-            periodic.setAccessible(true);
-            periodic.set(rpc, mock(periodic.getType()));
             var config = As400ReaderFixture.config(false);
+            java.util.function.Function<As400RpcConnection, RetrieveJournal> readerFactory = connection -> spy(new RetrieveJournal(
+                    new RetrieveConfigBuilder().withAs400(connection).withJournalInfo(new JournalInfo("JRN", "LIB", false))
+                            .withJournalBufferSize(65536).withMaxServerSideEntries(100).withTransactionControls(true).build(),
+                    mock(JournalInfoRetrieval.class), lifecycle));
+            rpc = mock(As400RpcConnection.class, org.mockito.Mockito.withSettings().useConstructor(config, null, null, null, lifecycle, readerFactory)
+                    .defaultAnswer(CALLS_REAL_METHODS));
+            journal = rpc.journal();
+            org.mockito.Mockito.doNothing().when(rpc).logOffsets(any(), any());
             scan = new As400OffsetContext(config, new JournalProcessedPosition(checkpoint.replayFrom(), Instant.EPOCH, !checkpoint.replayInclusive()));
         }
 
@@ -494,7 +526,6 @@ class As400IncrementalLifecycleTest {
                 var next = new JournalProcessedPosition(last.position(), last.header().getTimestamp(), true);
                 journal.setOutputData(page, new FirstHeader(page.length, 64, entries.size(), OffsetStatus.DATA, next),
                         new JournalProcessedPosition(previous));
-                set(journal, "offset", -1);
                 return RetrievalState.Success;
             }).when(journal).retrieveJournal(any(JournalProcessedPosition.class));
             ChangeEventSourceContext context = mock(ChangeEventSourceContext.class);
@@ -518,11 +549,6 @@ class As400IncrementalLifecycleTest {
             Arrays.fill(page, (byte) 0);
         }
 
-        private static void set(Object object, String field, Object value) throws Exception {
-            Field member = object.getClass().getDeclaredField(field);
-            member.setAccessible(true);
-            member.set(object, value);
-        }
     }
 
     @Test
@@ -951,7 +977,7 @@ class As400IncrementalLifecycleTest {
         var decoder = new CompleteRowEntryDecoder(new AS400DataType[]{ new AS400Bin4() }, new boolean[]{ false }, 64);
         for (JsonNode table : fixture(fixture + "-bindings").get("tables")) {
             String file = table.get("file").asText();
-            result.put(file, new TableBinding(new TableIdentity(new TableId("AEQA", table.get("library").asText(), file), file,
+            result.put(file, new TableBinding(new TableIdentity(new TableId("TEST", table.get("library").asText(), file), file,
                     table.get("member").asText(), table.get("fileJournalId").asText(), table.get("memberJournalId").asText(), "FIXTURE_INT_NOT_NULL"), decoder));
         }
         return result;
@@ -974,7 +1000,7 @@ class As400IncrementalLifecycleTest {
         }
 
         Output(Map<String, TableBinding> bindings, boolean ordinary, Map<String, String> selection) {
-            var raw = Configuration.create().with("topic.prefix", "test").with("database.dbname", "AEQA")
+            var raw = Configuration.create().with("topic.prefix", "test").with("database.dbname", "TEST")
                     .with("database.schema", "FIXTURE").with("skipped.operations", "none").with("heartbeat.interval.ms", "3600000")
                     .with("provide.transaction.metadata", "true").with("event.converting.failure.handling.mode", "fail").build()
                     .edit().with(Configuration.from(selection)).build();

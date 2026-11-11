@@ -15,6 +15,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 import com.ibm.as400.access.AS400Text;
 
@@ -22,6 +23,7 @@ import io.debezium.connector.db2as400.As400SourceNormalizer.TableBinding;
 import io.debezium.connector.db2as400.As400SourceNormalizer.TableResolver;
 import io.debezium.ibmi.db2.journal.retrieve.FileChangeEntryDecoder;
 import io.debezium.ibmi.db2.journal.retrieve.JournalPosition;
+import io.debezium.ibmi.db2.journal.retrieve.RawJournalPage;
 import io.debezium.ibmi.db2.journal.retrieve.TransactionControlEntryDecoder;
 import io.debezium.ibmi.db2.journal.retrieve.rjne0200.EntryHeader;
 import io.debezium.ibmi.db2.journal.retrieve.rjne0200.EntryHeaderDecoder;
@@ -34,6 +36,8 @@ import io.debezium.ibmi.db2.journal.retrieve.rjne0200.EntryHeaderDecoder;
  * The ordinary profile requires verified receiver order; ambiguous producers fail closed.
  */
 final class As400JournalLifecycle implements AutoCloseable {
+    private static final Set<String> ADMINISTRATIVE_ENTRIES = Set.of("F/OP", "F/CL", "F/MS", "D/DH", "F/SS", "D/DW", "D/GT", "R/IL", "F/RG", "F/RM");
+
     record Limits(int entries, long bytes, int cycles, int markers, int clears, int dependencies) {
         Limits {
             require(entries > 0 && bytes >= 236 && cycles > 0 && markers > 0 && clears > 0 && dependencies > 0,
@@ -114,7 +118,7 @@ final class As400JournalLifecycle implements AutoCloseable {
     private final As400Checkpoint loaded;
     private final boolean ordinary;
     private final TransactionControlEntryDecoder controls = new TransactionControlEntryDecoder();
-    private final EntryHeaderDecoder headers = new EntryHeaderDecoder();
+    private final EntryHeaderDecoder headers = new EntryHeaderDecoder(RawJournalPage.METADATA_CCSID);
 
     long[] bufferUsage() {
         return new long[]{ cycles.size(), heldBytes };
@@ -212,6 +216,9 @@ final class As400JournalLifecycle implements AutoCloseable {
 
     private boolean classify(Entry entry) throws Exception {
         var h = entry.header();
+        if (ordinary && administrative(entry, tables)) {
+            return false;
+        }
         Producer producer = producer(h);
         if (ordinary && entry.type().equals("F/CB")) {
             statistics(entry);
@@ -245,7 +252,7 @@ final class As400JournalLifecycle implements AutoCloseable {
             else if (entry.type().equals("D/CG")) {
                 require(h.getCommitCycle().equals(window.cycle.start.offset())
                         && h.getControlInfo().nestedCommitLevel() == window.marker.level(), "Clear has wrong transaction/scope");
-                var clear = new FileChangeEntryDecoder().decode(h, entry.bytes(), 0);
+                var clear = new FileChangeEntryDecoder(RawJournalPage.METADATA_CCSID).decode(h, entry.bytes(), 0);
                 require(clear.clearsRows() && String.valueOf(clear.changeType()).equals(window.subtype), "Clear subtype mismatch");
                 identity(h, expected.table());
                 require(clear.file().equals(h.getFile()) && clear.library().equals(h.getLibrary())
@@ -278,7 +285,7 @@ final class As400JournalLifecycle implements AutoCloseable {
             Marker marker = new ArrayList<>(cycle.markers.values()).get(cycle.markers.size() - 1);
             TableBinding table = tables.resolve(h.getFile(), h.getLibrary());
             auxiliary(entry, table, 0);
-            String subtype = new AS400Text(1).toObject(payload(entry)).toString();
+            String subtype = new AS400Text(1, RawJournalPage.METADATA_CCSID).toObject(payload(entry)).toString();
             require(subtype.equals("3") || subtype.equals("8"), "Unsupported legacy change");
             windows.put(producer, new Window(table, subtype, cycle, marker, List.of("F/EJ", "D/EF", "D/JF", "F/JM", "D/CG", "C/SQ")));
             return false;
@@ -357,15 +364,78 @@ final class As400JournalLifecycle implements AutoCloseable {
         identity(h, table);
         byte[] data = payload(entry);
         require(data.length >= 109, "Incomplete statistics request");
-        var name = new AS400Text(10);
+        var name = new AS400Text(10, RawJournalPage.METADATA_CCSID);
         require(name.toObject(data, 0).toString().trim().equals(h.getFile())
                 && name.toObject(data, 10).toString().trim().equals(h.getLibrary())
                 && name.toObject(data, 20).toString().trim().equals(h.getMember())
-                && new AS400Text(30).toObject(data, 30).toString().isBlank()
-                && new AS400Text(1).toObject(data, 108).toString().equals("C"),
+                && new AS400Text(30, RawJournalPage.METADATA_CCSID).toObject(data, 30).toString().isBlank()
+                && new AS400Text(1, RawJournalPage.METADATA_CCSID).toObject(data, 108).toString().equals("C"),
                 "Unsupported or mismatched F/CB subtype; only a statistics request is admitted");
         // No output, cycle/window transition, or completed-output advancement.
         // Only the enclosing coordinator's diagnostic scan R can move here.
+    }
+
+    /**
+     * IBM documents these entries as open/close, save history, or authority grants,
+     * not row changes. Keep exact header identity and complete payload validation;
+     * restore, abnormal-end and journaling transitions remain separate. Classic
+     * reorganization is admitted only for logical keys; RRN keys remain rejected.
+     * https://www.ibm.com/docs/en/i/7.5.0?topic=information-all-journal-entries-by-code-type
+     */
+    static boolean administrative(Entry entry, TableResolver tables) throws Exception {
+        if (!ADMINISTRATIVE_ENTRIES.contains(entry.type())) {
+            return false;
+        }
+        var h = entry.header();
+        As400SourceNormalizer.validateSource(h, entry.bytes(), 0, entry.position());
+        var control = h.getControlInfo();
+        require(h.getCommitCycle().signum() == 0 && control.nestedCommitLevel() == 0 && control.flags() == 0
+                && control.indicatorFlag() == '0' && h.getRecordInfo().recordNumber().signum() == 0,
+                "Unsupported administrative record metadata");
+        TableBinding binding = tables.resolve(h.getFile(), h.getLibrary());
+        identity(h, binding);
+        byte[] data = payload(entry);
+        int minimum = switch (entry.type()) {
+            case "F/RG" -> 0;
+            case "F/RM" -> 109;
+            case "F/OP" -> 41;
+            case "F/CL" -> 30;
+            case "D/GT" -> 60;
+            case "F/SS", "D/DW" -> 64; // Start of save-while-active, not restore.
+            case "R/IL" -> 8; // Internal record-limit data; never a row image.
+            default -> 160; // Native save history layout, not save-with-storage-freed.
+        };
+        require(data.length >= minimum, "Incomplete administrative record");
+        require(!entry.type().equals("R/IL") || data.length == 8, "Unqualified record-limit layout");
+        if (entry.type().equals("F/RG") || entry.type().equals("F/RM")) {
+            // Classic reorganization moves physical record numbers, not logical
+            // rows. It cannot be ignored when the emitted key is an RRN.
+            require(!binding.rrnKey(), "Reorganization cannot preserve relative-record-number keys");
+            if (entry.type().equals("F/RG")) {
+                require(data.length == 0, "Unqualified reorganization-start payload");
+            }
+            else {
+                var name = new AS400Text(10, 37);
+                require(name.toObject(data, 0).toString().trim().equals(h.getFile())
+                        && name.toObject(data, 10).toString().trim().equals(h.getLibrary())
+                        && name.toObject(data, 20).toString().trim().equals(h.getMember())
+                        && new AS400Text(30, 37).toObject(data, 30).toString().isBlank()
+                        && new AS400Text(1, 37).toObject(data, 108).equals("E"), "Unqualified reorganization identity or mode");
+            }
+        }
+        if (entry.type().equals("D/GT")) {
+            var name = new AS400Text(10, 37);
+            require(name.toObject(data, 0).toString().trim().equals(h.getFile())
+                    && name.toObject(data, 10).toString().trim().equals(h.getLibrary())
+                    && new AS400Text(40, 37).toObject(data, 20).toString().isBlank(), "Authority record object identity mismatch");
+        }
+        // F/OP and F/CL payload names may identify a logical file. The header's
+        // physical member/JID, validated above, is the captured object identity.
+        // A native F/MS can have thread zero even with receiver thread recording.
+        // These cycle-zero records do not correlate producers or resolve any state;
+        // row, clear and transaction records still require a complete producer.
+        // No output, pending image removal, transaction resolution, or W advance.
+        return true;
     }
 
     private void complete(Producer producer, Window window, JournalPosition end) {
@@ -384,7 +454,15 @@ final class As400JournalLifecycle implements AutoCloseable {
         byte[] payload = payload(entry);
         switch (entry.type()) {
             case "F/CH" -> require(payload.length == 1 && control.indicatorFlag() == '0', "Unsupported legacy change payload");
-            case "D/JF", "F/JM" -> require(control.indicatorFlag() == '1' && Arrays.equals(payload, new AS400Text(3).toBytes("100")), "Recording profile changed");
+            case "D/JF", "F/JM" -> {
+                // IBM's start-journal layout: omit open/close, inherit, remote filter.
+                // Both OMTJRNE(*NONE) and *OPNCLO retain complete row history. The
+                // image flag must still select *BOTH; inheritance/filtering are not
+                // admitted. Open/close records use the identity-checked classifier.
+                require(control.indicatorFlag() == '1' && payload.length == 3
+                        && new AS400Text(3, RawJournalPage.METADATA_CCSID).toObject(payload).toString().matches("[01]00"),
+                        "Unsupported start-journal recording profile");
+            }
             default -> require(payload.length == 0 && control.indicatorFlag() == '0', "Unexpected lifecycle payload");
         }
     }
@@ -414,7 +492,7 @@ final class As400JournalLifecycle implements AutoCloseable {
             return new byte[0];
         }
         require(prefix >= 236 && (long) prefix + 16 <= entry.header().getEndOffset(), "Invalid lifecycle payload prefix");
-        String digits = new AS400Text(5).toObject(entry.bytes(), prefix).toString();
+        String digits = new AS400Text(5, RawJournalPage.METADATA_CCSID).toObject(entry.bytes(), prefix).toString();
         require(digits.matches("[0-9]{5}"), "Invalid lifecycle payload length");
         int length = Integer.parseInt(digits);
         require((long) prefix + 16 + length <= entry.header().getEndOffset(), "Truncated lifecycle payload");

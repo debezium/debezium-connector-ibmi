@@ -9,7 +9,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.Mockito.CALLS_REAL_METHODS;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -35,17 +34,17 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
-import org.mockito.ArgumentCaptor;
 
 import io.debezium.bean.StandardBeanNames;
 import io.debezium.config.Configuration;
 import io.debezium.connector.base.ChangeEventQueue;
 import io.debezium.connector.common.DebeziumHeaderProducer;
 import io.debezium.connector.db2as400.As400StreamingChangeEventSource.RowProcessingException;
+import io.debezium.connector.db2as400.metrics.As400StreamingChangeEventSourceMetrics;
 import io.debezium.heartbeat.HeartbeatImpl;
 import io.debezium.ibmi.db2.journal.retrieve.JdbcFileDecoder;
+import io.debezium.ibmi.db2.journal.retrieve.JournalInfoRetrieval;
 import io.debezium.ibmi.db2.journal.retrieve.JournalProcessedPosition;
-import io.debezium.ibmi.db2.journal.retrieve.JournalReadLifecycle;
 import io.debezium.ibmi.db2.journal.retrieve.JournalReceiver;
 import io.debezium.ibmi.db2.journal.retrieve.RawJournalPage;
 import io.debezium.ibmi.db2.journal.retrieve.RetrievalState;
@@ -61,6 +60,51 @@ import io.debezium.util.Clock;
 /** Real legacy handler, dispatcher and RPC advancement boundary; no IBM i connection. */
 class As400LegacyRowFailureTest {
     private static final As400Partition PARTITION = new As400Partition("test");
+
+    @ParameterizedTest
+    @ValueSource(strings = { "fail", "warn", "skip" })
+    void shouldReplayAfterWatchdogInterruptsAFullQueue(String mode) throws Exception {
+        try (var f = new Fixture(Map.of("event.processing.failure.handling.mode", mode), false)) {
+            var filler = new DataChangeEvent(new SourceRecord(Map.of("server", "filler"), Map.of("position", "1"), "filled", null, null));
+            while (f.queue.remainingCapacity() != 0) {
+                f.queue.enqueue(filler);
+            }
+            var failure = new java.util.concurrent.atomic.AtomicReference<Throwable>();
+            var done = new java.util.concurrent.CountDownLatch(1);
+            var reader = new Thread(() -> {
+                try {
+                    f.rpc.getJournalEntries(f.running, f.offset, f.source.processJournalEntries(PARTITION, f.offset), mock(WatchDog.class));
+                }
+                catch (Throwable e) {
+                    failure.set(e);
+                }
+                finally {
+                    done.countDown();
+                }
+            }, "blocked-row-reader");
+            var watchdog = new WatchDog(reader, 50);
+            reader.start();
+            watchdog.start();
+            try {
+                assertThat(done.await(5, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
+                assertThat(failure.get()).isInstanceOf(InterruptedException.class);
+                assertThat(f.offset.getPosition().getOffset()).isEqualTo(BigInteger.valueOf(40));
+                verify(f.journal, never()).getPosition();
+                verifyNoInteractions(f.errors);
+            }
+            finally {
+                watchdog.stop();
+                reader.interrupt();
+                reader.join(5000);
+            }
+            while (f.queue.remainingCapacity() != f.queue.totalCapacity()) {
+                f.queue.poll();
+            }
+            f.run("PT");
+            assertThat(f.offset.getPosition().getOffset()).isEqualTo(BigInteger.valueOf(42));
+            assertThat(f.queue.poll()).hasSize(1);
+        }
+    }
 
     @ParameterizedTest
     @ValueSource(strings = { "matched", "missing", "thread", "record", "member-id", "cycle", "overlap" })
@@ -164,7 +208,7 @@ class As400LegacyRowFailureTest {
     @ParameterizedTest
     @CsvSource({ "PT,decode", "UB,decode", "PT,checked-decode", "PT,io-decode", "PT,dispatch", "PX,dispatch", "UP,dispatch", "DL,dispatch", "DR,dispatch",
             "PT,false", "UP,false", "DL,false", "UP,partial" })
-    void failModeReachesErrorHandlerBeforeRpcPositionCanAdvance(String type, String failure) throws Exception {
+    void failModePropagatesToCoordinatorBeforeRpcPositionCanAdvance(String type, String failure) throws Exception {
         try (var f = new Fixture(Map.of(), failure.equals("partial"))) {
             switch (failure) {
                 case "decode" -> when(f.journal.decode(f.decoder)).thenThrow(new IllegalArgumentException("malformed row"));
@@ -175,8 +219,8 @@ class As400LegacyRowFailureTest {
                 case "partial" -> f.beforeImage(1, 2);
                 default -> throw new AssertionError(failure);
             }
-            f.run(type);
-            var stopped = f.assertStopped();
+            var stopped = org.junit.jupiter.api.Assertions.assertThrows(RowProcessingException.class, () -> f.run(type));
+            f.assertStopped();
             switch (failure) {
                 case "decode" -> assertThat(stopped).hasRootCauseMessage("malformed row");
                 case "checked-decode" -> assertThat(stopped).hasRootCauseMessage("unsupported row layout");
@@ -364,7 +408,7 @@ class As400LegacyRowFailureTest {
     @Test
     void shouldKeepDeleteReplayableIfTombstoneCreationFails() throws Exception {
         try (var f = new Fixture(Map.of(), true)) {
-            f.run("DL");
+            org.junit.jupiter.api.Assertions.assertThrows(RowProcessingException.class, () -> f.run("DL"));
             f.assertStopped();
             var prefix = f.queue.poll().get(0).getRecord();
             assertThat(((Struct) prefix.value()).getString("op")).isEqualTo("d");
@@ -473,7 +517,7 @@ class As400LegacyRowFailureTest {
         final RetrieveJournal journal = mock(RetrieveJournal.class);
         final JdbcFileDecoder decoder = mock(JdbcFileDecoder.class);
         final As400JdbcConnection jdbc = mock(As400JdbcConnection.class);
-        final As400RpcConnection rpc = mock(As400RpcConnection.class, CALLS_REAL_METHODS);
+        final As400RpcConnection rpc;
         final ChangeEventSourceContext running = mock(ChangeEventSourceContext.class);
         final EventDispatcher<As400Partition, TableId> dispatcher;
         final As400StreamingChangeEventSource source;
@@ -502,26 +546,26 @@ class As400LegacyRowFailureTest {
                 }
             };
             var count = new AtomicInteger();
-            dispatcher = spy(new EventDispatcher<As400Partition, TableId>(config, topics,
+            dispatcher = spy(new As400EventDispatcher(config, topics,
                     new As400TaskStopProbeConnector.FixtureSchema(offset, new TableId("DB", "LIB", "TEST"), new TableId("DB", "LIB", "OTHER")), queue,
                     config.getTableFilters().dataCollectionFilter(), record -> {
                         if (failAfterFirstRecord && count.incrementAndGet() == 2) {
                             throw new IllegalStateException("controlled dispatch failure after first subrecord");
                         }
                         return new DataChangeEvent(record);
-                    }, null, new As400EventMetadataProvider(), new HeartbeatImpl(config.getHeartbeatInterval(), "heartbeat", "test", config.schemaNameAdjuster(), queue),
+                    }, new As400EventMetadataProvider(), new HeartbeatImpl(config.getHeartbeatInterval(), "heartbeat", "test", config.schemaNameAdjuster(), queue),
                     config.schemaNameAdjuster(), null, new DebeziumHeaderProducer(context)));
             when(jdbc.getRealDatabaseName()).thenReturn("DB");
             when(jdbc.getLongName(anyString(), anyString())).thenAnswer(i -> i.getArgument(1));
             var schema = mock(As400DatabaseSchema.class);
             when(schema.getFileDecoder()).thenReturn(decoder);
+            when(schema.getRecordFormat(anyString(), anyString()))
+                    .thenReturn(java.util.Optional.of(mock(io.debezium.ibmi.db2.journal.retrieve.SchemaCacheIF.TableInfo.class)));
             when(journal.decode(decoder)).thenReturn(new Object[]{ 1 });
+            rpc = spy(new As400RpcConnection(config, mock(As400StreamingChangeEventSourceMetrics.class), mock(JournalInfoRetrieval.class), journal));
+            doReturn(offset.getPosition().asJournalPosition()).when(rpc).getCurrentPosition();
             source = new As400StreamingChangeEventSource(config, rpc, jdbc, dispatcher, errors, Clock.system(), schema);
             source.init(offset);
-            set("lifecycle", new JournalReadLifecycle());
-            set("retrieveJournal", journal);
-            var periodic = As400RpcConnection.class.getDeclaredField("periodic");
-            set("periodic", mock(periodic.getType()));
             when(journal.retrieveJournal(any())).thenReturn(RetrievalState.Success);
             when(journal.nextEntry()).thenReturn(true, false);
             when(journal.getEntryHeader()).thenReturn(As400ConnectProbeConnector.event(42, "R/PT", 0, 1).header());
@@ -555,21 +599,12 @@ class As400LegacyRowFailureTest {
             source.execute(running, PARTITION, offset);
         }
 
-        RowProcessingException assertStopped() throws Exception {
-            var failure = ArgumentCaptor.forClass(RowProcessingException.class);
-            verify(errors).setProducerThrowable(failure.capture());
-            assertThat(failure.getValue()).hasMessageContaining("42");
+        void assertStopped() throws Exception {
+            verifyNoInteractions(errors);
             assertThat(offset.getPosition().getOffset()).isEqualTo(BigInteger.valueOf(40));
             verify(journal, never()).getPosition();
             verify(journal).nextEntry();
             verify(rpc).getJournalEntries(any(), any(), any(), any());
-            return failure.getValue();
-        }
-
-        private void set(String name, Object value) throws Exception {
-            var field = As400RpcConnection.class.getDeclaredField(name);
-            field.setAccessible(true);
-            field.set(rpc, value);
         }
 
         @Override

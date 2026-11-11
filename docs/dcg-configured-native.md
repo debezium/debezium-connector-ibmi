@@ -8,7 +8,7 @@ custom durable receipt store or injected task is installed in that worker.
 transactional clears. F/CR PR #114 is separate and unchanged.
 
 The implementation is a **configured release candidate**, not a deployment or
-qualification of an existing ASI installation. Its support boundaries below are deliberate. It is not
+qualification of an existing installation. Its support boundaries below are deliberate. It is not
 a drop-in migration of an existing legacy connector or its offsets.
 
 ## First supported configuration
@@ -39,9 +39,12 @@ control completion. A LAST row carries a pending offset, never early F/W.
   DATE/TIMESTAMP values have no timezone conversion. Timestamp precision above 9,
   timestamp hour 24, non-ISO layouts, LOB/XML and other layouts remain rejected.
   TIMESTAMP(7–9) also requires a value representable by Debezium's epoch-nanosecond
-  converter; see [temporal validation](https://github.com/gardnmi/debezium-connector-ibmi/blob/fc4ffaa2aa7bf8acc5d9630d493450391814f8c0/docs/dcg-temporal-validation.md). Mixed-column native
+  converter; see [validation scope](dcg-validation.md). Mixed-column native
   qualification covers the columns in the validation report, not every possible
   CCSID/type/precision combination. Unsupported metadata fails before output.
+  Active row or column access controls reject: SQL snapshots can be masked or
+  filtered while native journal images are not. Acquisition requires an exact
+  `QSYS2.SYSTABLES.CONTROL` observation with no enforcement.
 - Both before/after journal images, no minimized images, no removed internal or
   fixed-length data, no journal cache. Required receiver fields include job and
   thread identity; XA/LUW identity layouts are not admitted. Every required
@@ -52,11 +55,23 @@ control completion. A LAST row carries a pending offset, never early F/W.
   changes. The collector follows exact reciprocal links; names do not define order.
   At most 128 required receivers may be spanned at once. Retired receivers before
   F do not impose a lifetime rotation limit. This does not authorize their deletion.
-- Distributed Kafka Connect **4.2.x or 4.3.x** (primary Debezium 3.8 baseline: 4.3.1;
-  exact local coverage is recorded in [runtime qualification](https://github.com/gardnmi/debezium-connector-ibmi/blob/fc4ffaa2aa7bf8acc5d9630d493450391814f8c0/docs/dcg-upstream-preflight.md)), one task, source transactions enabled on the
+  Task-owned native journal observations also require
+  `JOURNAL_INFO.DELETE_RECEIVER_OPTION=NO`; automatic deletion does not track F/W.
+  Manual receiver deletion remains an operator responsibility.
+- Native journal requests and metadata names use explicit CCSID 37, independently
+  of the worker JVM locale. Before each raw read, the actual API job must report
+  CCSID 37; another or unknown CCSID rejects before that API call. This is the
+  validated native metadata profile, not a claim that every IBM i name encoding
+  is interchangeable. Row character columns still use their acquired CCSIDs.
+  The metadata profile is included in the capture fingerprint.
+- Distributed Kafka Connect compatible with the connector's Debezium version,
+  one task, source transactions enabled on the
   worker, `exactly.once.support=requested`, `transaction.boundary=connector`.
   The task requires the public `SourceTaskContext.transactionContext()` capability
   and requests a Kafka transaction commit for each nonempty returned poll.
+  Local validation covers **4.2.0 and 4.3.1**; see [validation scope](dcg-validation.md).
+  Admission checks the transaction capability, not a version-string allowlist.
+  This does not claim testing of every compatible worker release.
   Source exactly-once capability remains **UNSUPPORTED**: an interrupted committed
   source transaction can replay its complete output batch.
 - `heartbeat.interval.ms` must be positive (the ordinary default of zero is not
@@ -67,7 +82,8 @@ control completion. A LAST row carries a pending offset, never early F/W.
   snapshot. Dispatcher construction retains the same checks as a second boundary.
 - Pre-created, distinct, single-partition data, transaction, heartbeat,
   initialization and binding-history topics. Preserve this topology for the
-  connector's lifetime. Standard `SchemaTopicNamingStrategy`, explicit Kafka
+  connector's lifetime. The built-in `HostnamePrefixNamingScheme` (ordinary
+  default) or `SchemaTopicNamingStrategy`, explicit Kafka
   Connect key/value Converter classes, no SMTs, predicates, custom Debezium key/type
   converters, tolerated record errors or producer interceptors. Local converter
   contracts cover JSON with and without schemas and Avro with a mock registry;
@@ -76,6 +92,10 @@ control completion. A LAST row carries a pending offset, never early F/W.
   are excluded as described below. Connect must fail converter errors; no record is
   acknowledged after a tolerated drop. Keep converter binaries and worker-level
   interceptors consistent across workers.
+- Native output uses the ordinary IBM i converter for character cleanup and
+  `trim.non.xml.charsequence.field.mode` (default `both`). It preserves the chosen
+  `adaptive` (ordinary default) or `adaptive_time_microseconds` time precision.
+  Effective defaults are pinned in history, just like explicit settings.
 - Worker and connector Kafka clients must use the intended Kafka cluster. Explicit
   producer/admin bootstrap overrides must match the history bootstrap. Kafka
   replication, `min.insync.replicas`, ACLs, transport security and durable storage
@@ -90,8 +110,8 @@ values were exercised with the complete worker settings retained in the reports,
 including `exactly.once.source.support=enabled` and a policy allowing the declared
 client overrides. The task can verify the public transactional context, but cannot
 inspect every worker setting through `SourceTaskContext`; operators must verify
-the worker configuration. See the [timeout matrix](https://github.com/gardnmi/debezium-connector-ibmi/blob/fc4ffaa2aa7bf8acc5d9630d493450391814f8c0/docs/dcg-timeout-profile-validation.md)
-and the [current validation report](https://github.com/gardnmi/debezium-connector-ibmi/blob/fc4ffaa2aa7bf8acc5d9630d493450391814f8c0/docs/dcg-configured-validation.md). A new timeout,
+the worker configuration. See the [validation scope](dcg-contributor-testing.md)
+and the [validation scope](dcg-validation.md). A new timeout,
 broker topology, transport or worker version requires deployment qualification;
 these local values are not a universal recovery SLA.
 
@@ -103,14 +123,14 @@ validation observed this wait beyond 100 seconds and automatic recovery within
 the experiment's 240-second membership budget. A healthy REST endpoint alone
 does not mean the worker has joined or the task has resumed. Account for the
 configured transaction timeout in startup monitoring; do not reset offsets or
-relax committed reads to bypass it. See the [source release checklist](https://github.com/gardnmi/debezium-connector-ibmi/blob/fc4ffaa2aa7bf8acc5d9630d493450391814f8c0/docs/dcg-source-release-checklist.md)
+relax committed reads to bypass it. See the [validation scope](dcg-validation.md)
 for the measured intervals and the distinction between the controlled local
 reproduction and the retained earlier native timeout.
 
 The [connector configuration template](examples/dcg-connector.json) uses placeholders;
 its source TLS setting must match a qualified server/trust configuration. Supply
 Kafka security separately for the intended cluster. The native experiments use
-the isolated edgeqa transport settings recorded in their reports.
+the isolated IBM i test transport settings recorded in their reports.
 
 The concrete new fields are `dcg.mode` (`disabled`, `initialize`, `resume`),
 `dcg.journal` (`LIBRARY/JOURNAL`), `dcg.tables`, `dcg.controlled.tables`,
@@ -183,7 +203,28 @@ Uncoordinated reorganization remains unsupported: an unmatched `F/RG` stops
 capture without checkpoint progress and fails again after restart. Do not skip
 that entry or reset offsets to continue. Plan maintenance and a new generation
 when the physical identity contract cannot be preserved. Native validation of
-normal rows/clears is not a claim of RGZPFM support.
+normal rows/clears is not a claim of RRN-safe RGZPFM support. For declared primary
+keys, captured classic `F/RG` and subtype-E `F/RM` records are accepted after exact
+identity checks; physical record movement does not change the logical key.
+Concurrent reorganization, restore and ambiguous transition records remain rejected.
+
+The ordinary native runtime accepts validated open/close (`F/OP`, `F/CL`), save
+history (`F/MS`, `D/DH`), save-while-active (`F/SS`, `D/DW`), authority grant (`D/GT`),
+and record-limit (`R/IL`) metadata without producing table events or changing W.
+These entries never resolve a transaction or remove a pending before-image.
+Both `OMTJRNE(*NONE)` and `OMTJRNE(*OPNCLO)` are supported: the clear's matched
+start-journaling companions must still restore `IMAGES(*BOTH)`, without inheritance
+or remote journal filtering. An unmatched start/end-journaling record still rejects.
+`CHGPF` still requires a separately qualified schema transition: its subtype-1
+`D/CG` record cannot be assumed harmless just because a tested command changed
+only file size. Abnormal-end/IPL entries (`D/ID`, `F/IU`, `C/BA`) and restore remain
+unsupported; preserve the checkpoint/history and investigate rather than skipping
+them or resetting offsets. No system IPL or shared-job termination was tested.
+
+Binding history now uses a versioned connector-owned encoding. A saved legacy
+version-one history fixture is recovered without relying on the current Debezium
+core serializer. Unknown versions, changed table contents and fingerprints still
+reject; this is serialization compatibility, not permission to alter a capture.
 
 ## Initial start and ordinary restart
 
@@ -283,8 +324,9 @@ of a particular sink plugin.
 Stopping closes RPC/JDBC admission, requests active-call cancellation, drains the
 source and closes owned handles. A stop request is not proof of completed drain.
 Late native calls cannot start further reads through their wrapped handles.
-Cancellation/close failure does not become a successful drain; a stuck driver has
-no promised hard deadline. Kafka fencing permits a legitimate replacement to
+Task stop waits at most 30 seconds for its asynchronous native cleanup.
+Cancellation/close failure or timeout does not become a successful drain; cleanup
+may continue after that deadline with terminal admission closed. Kafka fencing permits a legitimate replacement to
 progress independently, subject to the source's locks and retained history.
 
 Use normal Connect task state/error monitoring and the offset API to monitor
@@ -297,16 +339,16 @@ outside this ordinary-CDC contract.
 
 `tools/dcg-packaged-probe NEW_EVIDENCE_DIRECTORY DCNCdddd [smoke|large|partial]`
 builds the distribution, installs only those jars in the worker plugin directory,
-and controls a newly owned edgeqa fixture. Credentials go through stdin into a
+and controls a newly owned IBM i test fixture. Credentials go through stdin into a
 container tmpfs file using the standard FileConfigProvider. Audit/transaction
 helpers run in separate JVMs and are excluded from the worker plugin path.
 
 The retained report must include source/distribution/plugin hashes, raw broker
 records, exact connector/worker settings, native inventory and cleanup evidence.
-See [configured validation](https://github.com/gardnmi/debezium-connector-ibmi/blob/fc4ffaa2aa7bf8acc5d9630d493450391814f8c0/docs/dcg-configured-validation.md) for the recorded results
-and the [source release checklist](https://github.com/gardnmi/debezium-connector-ibmi/blob/fc4ffaa2aa7bf8acc5d9630d493450391814f8c0/docs/dcg-source-release-checklist.md) for current
+See [validation scope](dcg-validation.md) for the recorded results
+and the [validation scope](dcg-validation.md) for current
 qualification status and extended workload commands. The previous
-[bounded snapshot validation](https://github.com/gardnmi/debezium-connector-ibmi/blob/fc4ffaa2aa7bf8acc5d9630d493450391814f8c0/docs/dcg-bounded-snapshot-validation.md) and stricter
+[validation scope](dcg-validation.md) and stricter
 ownership/recovery tests remain applicable to their stated test-entry scopes.
 
 
@@ -337,8 +379,8 @@ payload plus staged raw lifecycle data) and `OldestTransactionAgeInMilliseconds`
 make open transactions visible without conflating them with durable progress.
 Age uses source timestamps and therefore depends on source/worker clock agreement.
 
-See [upstream submission and design decisions](https://github.com/gardnmi/debezium-connector-ibmi/blob/fc4ffaa2aa7bf8acc5d9630d493450391814f8c0/docs/dcg-upstream-submission.md) and
+See [validation scope](dcg-validation.md) and
 [portable validation](dcg-contributor-testing.md). Historical qualification reports
 remain evidence for their recorded revisions, not blanket qualification of later
-changes. The [temporal validation](https://github.com/gardnmi/debezium-connector-ibmi/blob/fc4ffaa2aa7bf8acc5d9630d493450391814f8c0/docs/dcg-temporal-validation.md) records the separately
+changes. The [validation scope](dcg-validation.md) records the separately
 captured layouts, strict rejection cases and snapshot/replay equality coverage.

@@ -131,22 +131,11 @@ class As400StreamingChunksTest {
     static void boundary(Running run, TransactionContext context) throws Exception {
         // Only the public framework boundary is controlled; task/dispatcher and
         // acknowledgement code are real. Packaged native runs cover admission.
-        var field = As400ConnectorTask.class.getDeclaredField("configuredTransactions");
-        field.setAccessible(true);
-        field.set(run.task, context);
+        run.task.configureTransactions(context);
     }
 
-    static int retained(Running run) throws Exception {
-        var source = As400ConnectorTask.class.getDeclaredField("recoverySource");
-        source.setAccessible(true);
-        var trackerField = As400RecoverySource.class.getDeclaredField("acknowledgements");
-        trackerField.setAccessible(true);
-        var tracker = trackerField.get(source.get(run.task));
-        var order = As400RecoveryAcknowledgements.class.getDeclaredField("order");
-        order.setAccessible(true);
-        synchronized (tracker) {
-            return ((List<?>) order.get(tracker)).size();
-        }
+    static int retained(Running run) {
+        return run.task.pendingAcknowledgementCount();
     }
 
     Running start(LargeBatch source, Map<String, ?> saved) {

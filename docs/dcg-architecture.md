@@ -29,12 +29,13 @@ recorded job/thread fields and relevant journal history are validated as well.
 Unknown records or incomplete bindings fail closed; current-row SQL reads never
 replace historical journal images.
 
-The implementation uses `QjoRetrieveJournalEntries` for journal records and
-native SQL/IFS evidence collectors for metadata and identities. The
-[archived API assessment](https://github.com/gardnmi/debezium-connector-ibmi/blob/fc4ffaa2aa7bf8acc5d9630d493450391814f8c0/docs/dcg-evidence-apis.md)
-and [file/member identity evidence](https://github.com/gardnmi/debezium-connector-ibmi/blob/fc4ffaa2aa7bf8acc5d9630d493450391814f8c0/docs/dcg-file-member-identity.md)
-record the native sources and limits of those observations. Identity observations
-alone do not grant retention protection or permission to publish a checkpoint.
+The implementation uses `QjoRetrieveJournalEntries` for journal records,
+`JOURNAL_RECEIVER_INFO` for receiver relationships and recording settings, and
+exact-path `IFS_OBJECT_STATISTICS` observations for object identities. Paired
+physical-file and member-data journal identifiers are verified separately.
+Identity observations alone do not grant retention protection or permission to
+publish a checkpoint. See [validation scope](dcg-validation.md) for the limits of
+the native evidence.
 
 ## Transaction buffering and delivery
 

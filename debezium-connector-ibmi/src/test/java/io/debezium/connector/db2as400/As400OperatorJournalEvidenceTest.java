@@ -35,6 +35,36 @@ import org.junit.jupiter.params.provider.ValueSource;
 import io.debezium.ibmi.db2.journal.retrieve.JournalReceiver;
 
 class As400OperatorJournalEvidenceTest {
+    @ParameterizedTest
+    @ValueSource(strings = { "NO", "YES", "UNKNOWN", "null", "missing", "duplicate", "wrong-journal", "warning" })
+    void shouldValidateRetentionOnTheExactDirectoryRowBeforeReadingReceivers(String fault) throws Exception {
+        var f = new Fixture();
+        f.data.get(0).put("DELETE_RECEIVER_OPTION", fault.equals("null") ? null : List.of("YES", "UNKNOWN").contains(fault) ? fault : "NO");
+        switch (fault) {
+            case "missing" -> when(f.rows.get(0).next()).thenReturn(false);
+            case "duplicate" -> when(f.rows.get(0).next()).thenReturn(true);
+            case "wrong-journal" -> f.data.get(0).put("JOURNAL_NAME", "OTHER");
+            case "warning" -> when(f.rows.get(0).getWarnings()).thenReturn(new SQLWarning("Incomplete observation"));
+        }
+        var collector = As400OperatorJournalEvidence.retained(() -> f.connection, new JournalReceiver("JRN", "LIB"),
+                new As400OperatorJournalEvidence.Limits(2, 5));
+        if (fault.equals("NO")) {
+            assertThat(collector.collect().receivers()).hasSize(1);
+        }
+        else {
+            assertThrows(SQLException.class, collector::collect);
+            verify(f.connection, never()).prepareStatement(org.mockito.ArgumentMatchers.startsWith(As400OperatorJournalEvidence.RECEIVERS_SQL));
+        }
+        verify(f.connection).prepareStatement(As400OperatorJournalEvidence.RETAINED_JOURNAL_SQL);
+        verify(f.statements.get(0)).setString(1, "LIB");
+        verify(f.statements.get(0)).setString(2, "JRN");
+        verify(f.statements.get(0)).setMaxRows(2);
+        verify(f.statements.get(0)).setQueryTimeout(5);
+        verify(f.statements.get(0)).close();
+        verify(f.rows.get(0)).close();
+        verify(f.connection).close();
+    }
+
     @Test
     void collectsBoundedReadOnlyCurrentDirectoryAndRequiresRecordingProfile() throws Exception {
         Fixture f = new Fixture();
@@ -224,6 +254,7 @@ class As400OperatorJournalEvidenceTest {
                     "ATTACHED_JOURNAL_RECEIVER_NAME", "RCV", "REMOVE_INTERNAL_ENTRIES", "NO", "REMOVE_FIXED_LENGTH_DETAIL", "NO"));
             journal.put("MINIMIZE_ESD_FOR_FILES", "NO");
             journal.put("JOURNAL_CACHE", "NO");
+            journal.put("DELETE_RECEIVER_OPTION", "NO");
             data.add(journal);
             Map<String, Object> receiver = new HashMap<>(Map.of("JOURNAL_LIBRARY", "LIB", "JOURNAL_NAME", "JRN", "JOURNAL_RECEIVER_LIBRARY", "LIB",
                     "JOURNAL_RECEIVER_NAME", "RCV", "JOURNAL_RECEIVER_ASP_NUMBER", 1, "STATUS", "ATTACHED", "FIRST_SEQUENCE_NUMBER", 1,

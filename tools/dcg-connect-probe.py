@@ -65,11 +65,15 @@ class Experiment:
         return subprocess.check_output(["git", "-C", str(ROOT), *args], text=True).strip()
 
     def command(self, *args, timeout=45, check=True):
-        result = subprocess.run(list(args), text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=timeout)
+        redact = getattr(getattr(self, "fixture", None), "redact", lambda text: text)
+        try:
+            result = subprocess.run(list(args), text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=timeout)
+        except subprocess.TimeoutExpired as error:
+            raise RuntimeError(redact(f"Command timed out after {timeout}s: {args!r}")) from None
         with (self.directory / "commands.log").open("a") as log:
-            log.write(json.dumps(list(args)) + "\n" + result.stdout + "\n")
+            log.write(redact(json.dumps(list(args)) + "\n" + result.stdout + "\n"))
         if check and result.returncode:
-            raise RuntimeError(f"Command failed ({result.returncode}): {args!r}\n{result.stdout[-3000:]}")
+            raise RuntimeError(redact(f"Command failed ({result.returncode}): {args!r}\n{result.stdout[-3000:]}"))
         return result.stdout.strip()
 
     def save(self):

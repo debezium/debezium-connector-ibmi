@@ -57,7 +57,7 @@ class As400OnlineControlInventoryTest {
         for (var start : inventory.openThrough().entrySet()) {
             assertThat(start.getValue().source().position().offset()).isEqualTo(start.getKey());
             assertThat(start.getValue().producer().thread()).isPositive();
-            assertThat(start.getValue().producer().system()).isEqualTo("AEQA");
+            assertThat(start.getValue().producer().system()).isEqualTo("TEST");
         }
         // These old completed tails are explicitly excluded, never treated as
         // recovered row context, active cycles or completed-output checkpoints.

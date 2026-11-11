@@ -369,7 +369,7 @@ class As400NativeTransactionReplayTest {
         try (var stream = As400NativeTransactionReplayTest.class.getResourceAsStream("/native-transactions/bindings.json")) {
             for (JsonNode table : new ObjectMapper().readTree(stream).get("tables")) {
                 String file = table.get("file").asText();
-                result.put(file, new TableBinding(new TableIdentity(new TableId("AEQA", table.get("library").asText(), file), file,
+                result.put(file, new TableBinding(new TableIdentity(new TableId("TEST", table.get("library").asText(), file), file,
                         table.get("member").asText(), table.get("fileJournalId").asText(), table.get("memberJournalId").asText(), "FIXTURE_INT_NOT_NULL"), ROW));
             }
         }

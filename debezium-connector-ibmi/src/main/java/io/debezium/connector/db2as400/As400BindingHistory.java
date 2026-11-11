@@ -6,7 +6,7 @@
 package io.debezium.connector.db2as400;
 
 import java.math.BigInteger;
-import java.util.ArrayList;
+import java.nio.charset.StandardCharsets;
 import java.util.Comparator;
 import java.util.HashSet;
 import java.util.List;
@@ -27,7 +27,6 @@ import io.debezium.ibmi.db2.journal.retrieve.JournalReceiver;
 import io.debezium.relational.Tables;
 import io.debezium.relational.history.HistoryRecord;
 import io.debezium.relational.history.HistoryRecordComparator;
-import io.debezium.relational.history.JsonTableChangeSerializer;
 import io.debezium.relational.history.SchemaHistory;
 import io.debezium.relational.history.SchemaHistoryListener;
 import io.debezium.relational.history.TableChanges;
@@ -39,11 +38,64 @@ import io.debezium.storage.kafka.history.KafkaSchemaHistory;
  * fallback or protected-startup proof. Recovered by the configured task before journal replay.
  */
 final class As400BindingHistory {
+    static final int MAX_HISTORY_RECORDS = 1024;
+    static final int MAX_HISTORY_BYTES = 16 * 1024 * 1024;
+    static final int MAX_RECORD_BYTES = 4 * 1024 * 1024;
     private static final int MAX_TABLES = 1024;
     private static final int MAX_MANIFEST_CHARS = 4 * 1024 * 1024;
     private final Supplier<SchemaHistory> factory;
     private final Configuration config;
     private final Map<String, String> source;
+
+    static final class CandidateHistoryFullException extends IllegalStateException {
+        CandidateHistoryFullException() {
+            super("Online binding proposal capacity exhausted; preserve history and offsets and continue legacy capture");
+        }
+    }
+
+    /** Only this bounded immutable prefix can be selected by a handoff or F/W. */
+    static final class HistoryBudget {
+        private int records;
+        private long bytes;
+        private boolean exhausted;
+
+        boolean accept(int size, boolean online) {
+            if (online && (exhausted || records == MAX_HISTORY_RECORDS)) {
+                exhausted = true;
+                return false;
+            }
+            require(size > 0 && size <= MAX_RECORD_BYTES, "Oversized binding history record");
+            if (records >= MAX_HISTORY_RECORDS || bytes + size > MAX_HISTORY_BYTES) {
+                require(online, "Binding history exceeds recovery bounds");
+                exhausted = true;
+                return false;
+            }
+            records++;
+            bytes += size;
+            exhausted = records == MAX_HISTORY_RECORDS || bytes == MAX_HISTORY_BYTES;
+            return true;
+        }
+
+        void requireAppend(int size) {
+            if (exhausted || records >= MAX_HISTORY_RECORDS || size <= 0 || size > MAX_RECORD_BYTES || bytes + size > MAX_HISTORY_BYTES) {
+                throw new CandidateHistoryFullException();
+            }
+        }
+
+        void include(HistoryBudget wire) {
+            records = Math.max(records, wire.records);
+            bytes = Math.max(bytes, wire.bytes);
+            exhausted |= wire.exhausted;
+        }
+    }
+
+    private static int recordBytes(HistoryRecord record) throws Exception {
+        return DocumentWriter.defaultWriter().write(record.document()).getBytes(StandardCharsets.UTF_8).length;
+    }
+
+    private HistoryRecord record(Manifest manifest) {
+        return new HistoryRecord(source, manifest.position, null, null, null, new TableChanges(), null);
+    }
 
     As400BindingHistory(Supplier<SchemaHistory> factory, Configuration config, Map<String, String> source) {
         this.factory = Objects.requireNonNull(factory);
@@ -103,6 +155,7 @@ final class As400BindingHistory {
     }
 
     private void storeBaselineIfAbsent(Manifest manifest) throws Exception {
+        new HistoryBudget().accept(recordBytes(record(manifest)), false);
         SchemaHistory writer = factory.get();
         requireQualified(writer);
         try {
@@ -114,7 +167,7 @@ final class As400BindingHistory {
             if (!writer.exists()) {
                 // No snapshot batch is opened: KafkaSchemaHistory flushes and awaits
                 // acknowledgement of this complete record before returning.
-                writer.record(source, manifest.position, null, null, null, changes(manifest.definitions), null);
+                writer.record(source, manifest.position, null, null, null, new TableChanges(), null);
             }
         }
         finally {
@@ -127,26 +180,54 @@ final class As400BindingHistory {
                                   As400CaptureFingerprint.Policy policy, Discovery discovery, Map<String, ?> legacy)
             throws Exception {
         require(source.equals(policy.sourcePartition()), "History and output partitions differ");
-        As400LegacyHandoff.position(As400LegacyHandoff.strings(legacy));
+        As400LegacyHandoff.startingPosition(As400LegacyHandoff.strings(legacy));
         require(!legacy.containsKey(As400LegacyHandoff.VERSION) && !legacy.containsKey(As400LegacyHandoff.CHECKPOINT),
                 "Cannot propose new history after the handoff barrier");
-        storeBaselineIfAbsent(manifest(journal, origin, receiverIdentity, definitions, policy, Optional.empty(), Optional.of(discovery), true));
-        return pendingOnlineCandidate(legacy, policy).orElseThrow();
+        var proposal = manifest(journal, origin, receiverIdentity, definitions, policy, Optional.empty(), Optional.of(discovery), true);
+        var observed = new Validation(policy, candidate -> {
+        }, true, null);
+        var current = read(observed, true);
+        if (current.isEmpty() || !current.orElseThrow().fingerprint().equals(proposal.fingerprint())) {
+            // Check before opening a writer. A stale writer can still race this
+            // check: recovery selects only the bounded prefix, and the readback
+            // below rejects a proposal that landed beyond it before any barrier.
+            observed.budget.requireAppend(recordBytes(record(proposal)));
+            SchemaHistory writer = factory.get();
+            requireQualified(writer);
+            try {
+                writer.configure(config, HistoryRecordComparator.INSTANCE, SchemaHistoryListener.NOOP, false);
+                if (!writer.storageExists()) {
+                    writer.initializeStorage();
+                }
+                writer.start();
+                // A proposal grants no publication authority. A fenced Connect
+                // barrier selects it explicitly; later stale appends cannot win.
+                writer.record(source, proposal.position, null, null, null, new TableChanges(), null);
+            }
+            finally {
+                writer.stop();
+            }
+        }
+        return pending(read(new Validation(policy, candidate -> {
+        }, true, proposal.fingerprint()), false).orElseThrow());
     }
 
     Optional<Pending> pendingOnlineCandidate(Map<String, ?> legacy, As400CaptureFingerprint.Policy policy) throws Exception {
         require(source.equals(policy.sourcePartition()), "History and output partitions differ");
         var durable = As400LegacyHandoff.strings(legacy);
-        As400LegacyHandoff.position(durable);
+        As400LegacyHandoff.startingPosition(durable);
         boolean barrier = durable.containsKey(As400LegacyHandoff.VERSION);
         require(barrier == durable.containsKey(As400LegacyHandoff.CHECKPOINT)
                 && (!barrier || "1".equals(durable.get(As400LegacyHandoff.VERSION))), "Incomplete legacy activation barrier");
         var recovered = read(new Validation(policy, candidate -> {
-        }, true, null), true);
+        }, true, barrier ? durable.getOrDefault(As400LegacyHandoff.FINGERPRINT, "") : null), true);
         require(!barrier || recovered.isPresent(), "An acknowledged legacy barrier requires its binding history");
-        return recovered.map(result -> new Pending(result.journalIdentity(), result.manifest.baseline(),
-                result.manifest.position.get("receiver.identity"), result.fingerprint(), result.definitions(),
-                discoveryFrom(result.manifest.position), Optional.empty()));
+        return recovered.map(this::pending);
+    }
+
+    private Pending pending(Recovered result) {
+        return new Pending(result.journalIdentity(), result.manifest.baseline(), result.manifest.position.get("receiver.identity"),
+                result.fingerprint(), result.definitions(), discoveryFrom(result.manifest.position), Optional.empty());
     }
 
     Recovered recoverOnlineCandidate(Map<String, ?> offset, String journal, As400CaptureFingerprint.Policy policy) throws Exception {
@@ -246,13 +327,19 @@ final class As400BindingHistory {
                 return Optional.empty();
             }
             reader.start();
-            // Validate every observed record, including ones the base comparator
-            // would skip. Online selection can choose among canonical immutable
-            // proposals; it cannot hide malformed, foreign-source or mixed records.
+            // Validate every eligible record, including ones the base comparator
+            // would skip. Online selection cannot hide malformed, foreign-source
+            // or mixed records within its bounded immutable proposal prefix.
             reader.recover(source, Map.of(), new Tables(), null);
+            if (reader instanceof As400KafkaBindingHistory kafka) {
+                listener.budget.include(kafka.recoveryBudget());
+            }
         }
         finally {
             reader.stop();
+        }
+        if (listener.online && listener.manifest == null && listener.budget.exhausted) {
+            throw new CandidateHistoryFullException();
         }
         require(listener.manifest != null, "Required binding history is empty");
         return Optional.of(new Recovered(listener.manifest, Optional.ofNullable(listener.handoff)));
@@ -357,6 +444,13 @@ final class As400BindingHistory {
                                      As400CaptureFingerprint.Policy policy, Optional<Initialization> initialization, Optional<Discovery> discovery,
                                      boolean online)
             throws Exception {
+        return manifest(journal, baseline, receiverIdentity, input, policy, initialization, discovery, online, false);
+    }
+
+    private static Manifest manifest(String journal, JournalPosition baseline, String receiverIdentity, List<As400BindingDefinition> input,
+                                     As400CaptureFingerprint.Policy policy, Optional<Initialization> initialization, Optional<Discovery> discovery,
+                                     boolean online, boolean legacyEncoding)
+            throws Exception {
         require(!online || initialization.isEmpty() && discovery.isPresent(), "Online candidate requires its native discovery origin");
         // Reuse checkpoint identifier/position validation without inventing a cursor.
         As400Checkpoint.afterVerifiedBoundary(journal, "v1:" + "0".repeat(64), baseline, receiverIdentity);
@@ -371,9 +465,7 @@ final class As400BindingHistory {
             require(journalIds.add(definition.identity().fileJournalId()) && journalIds.add(definition.identity().memberJournalId()),
                     "Captured native journal identities must be distinct");
         }
-        var document = Document.create();
-        document.setArray("tables", new JsonTableChangeSerializer().serialize(changes(definitions)));
-        String encoded = DocumentWriter.defaultWriter().write(document);
+        String encoded = As400BindingEncoding.encode(definitions, legacyEncoding);
         require(encoded.length() <= MAX_MANIFEST_CHARS, "Binding manifest exceeds bound");
         Map<String, String> fields = new TreeMap<>(Map.of("version", "1", "journal", journal, "sequence", baseline.offset().toString(),
                 "library", baseline.receiver().library(), "receiver", baseline.receiver().name(), "receiver.identity", receiverIdentity));
@@ -395,17 +487,15 @@ final class As400BindingHistory {
             fields.put("discovery.library", value.floor().receiver().library());
             fields.put("discovery.receiver.identity", value.receiverIdentity());
         });
+        if (!legacyEncoding) {
+            fields.put("binding.encoding", As400BindingEncoding.VERSION);
+            fields.put("bindings", encoded);
+        }
         Map<String, String> fingerprint = new TreeMap<>(fields);
         fingerprint.put("tables", encoded);
         fingerprint.put("policy", policy.fingerprint(definitions.stream().map(As400BindingDefinition::identity).toList()));
         fields.put("fingerprint", "v1:" + As400CaptureFingerprint.hash("ordinary-binding-history-v1", fingerprint));
         return new Manifest(Map.copyOf(fields), definitions, encoded);
-    }
-
-    private static TableChanges changes(List<As400BindingDefinition> definitions) {
-        var changes = new TableChanges();
-        definitions.forEach(d -> changes.create(d.storedTable()));
-        return changes;
     }
 
     private final class Validation implements SchemaHistoryListener {
@@ -415,7 +505,7 @@ final class As400BindingHistory {
         private final String selectedFingerprint;
         private Manifest manifest;
         private As400LegacyHandoff handoff;
-        private int records;
+        private final HistoryBudget budget = new HistoryBudget();
 
         Validation(As400CaptureFingerprint.Policy policy, Consumer<Manifest> validateOrigin) {
             this(policy, validateOrigin, false, null);
@@ -431,7 +521,11 @@ final class As400BindingHistory {
         @Override
         public void onChangeFromHistory(HistoryRecord record) {
             try {
-                require(++records <= 1024, "Binding history exceeds record bound");
+                if (!budget.accept(recordBytes(record), online)) {
+                    // A late unfenced proposal outside the eligible prefix must
+                    // neither grant authority nor poison a previously selected epoch.
+                    return;
+                }
                 Document doc = record.document();
                 require(strings(doc.getDocument("source")).equals(source) && !doc.has("ddl"), "Foreign or DDL history record");
                 require(DocumentWriter.defaultWriter().write(doc).length() <= MAX_MANIFEST_CHARS + 4096, "Oversized binding history record");
@@ -449,31 +543,37 @@ final class As400BindingHistory {
                 }
                 require(handoff == null, "Binding record follows activation");
                 Optional<Initialization> initialization = initializationFrom(position);
-                require(array != null && array.size() > 0 && array.size() <= MAX_TABLES, "Incomplete binding history record");
-                List<As400BindingDefinition> definitions = new ArrayList<>();
-                for (var change : new JsonTableChangeSerializer().deserialize(array, false)) {
-                    require(change.getType() == TableChanges.TableChangeType.CREATE && change.getPreviousId() == null, "Binding history is immutable");
-                    definitions.add(As400BindingDefinition.restore(change.getTable()));
+                boolean legacyEncoding = !position.containsKey("binding.encoding");
+                List<As400BindingDefinition> definitions;
+                if (legacyEncoding) {
+                    require(!position.containsKey("bindings"), "Incomplete binding encoding version");
+                    definitions = As400BindingEncoding.decode(array);
                 }
-                require(new JsonTableChangeSerializer().serialize(changes(definitions)).equals(array), "Noncanonical or lossy table history");
+                else {
+                    require(As400BindingEncoding.VERSION.equals(position.get("binding.encoding")) && array != null && array.isEmpty(),
+                            "Unsupported or mixed connector binding encoding");
+                    definitions = As400BindingEncoding.decode(position.get("bindings"));
+                }
                 var candidate = manifest(position.get("journal"),
                         new JournalPosition(new BigInteger(position.get("sequence")), new JournalReceiver(position.get("receiver"), position.get("library"))),
-                        position.get("receiver.identity"), definitions, policy, initialization, discoveryFrom(position), online);
+                        position.get("receiver.identity"), definitions, policy, initialization, discoveryFrom(position), online, legacyEncoding);
                 require(candidate.position.equals(position), online ? "Changed, incomplete or noncanonical online candidate history"
                         : "Changed, incomplete or noncanonical binding history. "
-                                + "Pre-fix configured D/CG fingerprints that included converter credentials cannot be migrated automatically; "
+                                + "Earlier configured D/CG fingerprints with different output conversion or converter credentials cannot be migrated automatically; "
                                 + "preserve this history and offsets and initialize a new empty generation under a new operator window");
                 if (online) {
-                    // Every observed record remains canonical and policy-bound.
-                    // Before publication choose the first immutable candidate;
-                    // after publication only the fenced Connect offset selects it.
-                    if (selectedFingerprint == null && manifest != null
-                            || selectedFingerprint != null && !selectedFingerprint.equals(candidate.fingerprint())) {
+                    // Ordinary legacy offsets may adopt a newer proposal. A
+                    // durable barrier/F/W selects one exact fingerprint, even if
+                    // an old task later appends another proposal. Historical v1
+                    // barriers lacked that field and retain their first proposal.
+                    if ("".equals(selectedFingerprint) && manifest != null
+                            || selectedFingerprint != null && !selectedFingerprint.isEmpty() && !selectedFingerprint.equals(candidate.fingerprint())) {
                         return;
                     }
                 }
                 validateOrigin.accept(candidate);
-                require(manifest == null || manifest.position.equals(candidate.position) && manifest.encodedTables.equals(candidate.encodedTables),
+                require(manifest == null || online && selectedFingerprint == null
+                        || manifest.position.equals(candidate.position) && manifest.encodedTables.equals(candidate.encodedTables),
                         "Conflicting binding epochs");
                 manifest = candidate;
             }

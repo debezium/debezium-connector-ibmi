@@ -68,7 +68,7 @@ final class As400ControlInventory {
         var completedBeforeHistory = new LinkedHashMap<BigInteger, JournalPosition>();
         var maintenance = new ArrayList<Maintenance>();
         Map<BigInteger, Start> atLower = null;
-        var headers = new EntryHeaderDecoder();
+        var headers = new EntryHeaderDecoder(RawJournalPage.METADATA_CCSID);
         var controls = new TransactionControlEntryDecoder();
         JournalPosition previous = null;
         long bytes = 0;

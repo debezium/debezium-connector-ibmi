@@ -267,6 +267,7 @@ class As400LegacyActivationTest {
         var seed = new HashMap<>(initialBarrier);
         seed.remove(As400LegacyHandoff.VERSION);
         seed.remove(As400LegacyHandoff.CHECKPOINT);
+        seed.remove(As400LegacyHandoff.FINGERPRINT);
         Map<String, ?> saved;
         try (var run = new As400RecoveryTaskTest.Running(new TransitionSource(directory, initial), seed)) {
             var transactions = org.mockito.Mockito.mock(org.apache.kafka.connect.source.TransactionContext.class);
@@ -322,6 +323,7 @@ class As400LegacyActivationTest {
         var seed = new HashMap<>(handoff(f, initial).barrier());
         seed.remove(As400LegacyHandoff.VERSION);
         seed.remove(As400LegacyHandoff.CHECKPOINT);
+        seed.remove(As400LegacyHandoff.FINGERPRINT);
         var changed = new HashMap<>(seed);
         changed.put("offset.time", "1");
         var input = new TransitionSource(directory, initial);

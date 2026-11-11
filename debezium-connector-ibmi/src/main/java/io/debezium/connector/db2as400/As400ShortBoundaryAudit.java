@@ -15,6 +15,7 @@ import java.util.List;
 import java.util.Set;
 
 import io.debezium.ibmi.db2.journal.retrieve.JournalPosition;
+import io.debezium.ibmi.db2.journal.retrieve.RawJournalPage;
 import io.debezium.ibmi.db2.journal.retrieve.RetrieveJournal;
 import io.debezium.ibmi.db2.journal.retrieve.TransactionControlEntryDecoder;
 import io.debezium.ibmi.db2.journal.retrieve.rjne0200.EntryHeaderDecoder;
@@ -52,7 +53,7 @@ final class As400ShortBoundaryAudit {
                     && (previous == null || entry.position().offset().compareTo(previous) > 0),
                     "Unordered, foreign or excessive raw audit suffix at " + entry.position());
             previous = entry.position().offset();
-            var header = new EntryHeaderDecoder().decode(data, 0);
+            var header = new EntryHeaderDecoder(RawJournalPage.METADATA_CCSID).decode(data, 0);
             As400SourceNormalizer.validateSource(header, data, 0, entry.position());
             if (i > 0 && header.getJournalCode() == 'U' && header.getEntryType().equals("DN")
                     && Arrays.equals(payload(data, header.getEntrySpecificDataOffset()), closing)) {
@@ -82,7 +83,7 @@ final class As400ShortBoundaryAudit {
     static JournalPosition validate(As400ShortBoundaryProgram program, Completion completion,
                                     As400NativeJournalWindow.Window window, RetrieveJournal.AuditPage page,
                                     List<As400BindingDefinition> definitions, JournalPosition metadataBefore, JournalPosition metadataAfter)
-            throws java.io.IOException {
+            throws Exception {
         var from = window.from();
         var through = window.through();
         require(program.journal().equals(window.before().directory().journal()) && from.receiver().equals(through.receiver()),
@@ -104,8 +105,15 @@ final class As400ShortBoundaryAudit {
             if (entry.position().equals(from)) {
                 continue; // The already-existing inclusive API anchor is outside (from,through].
             }
-            var header = new EntryHeaderDecoder().decode(bytes, 0);
+            var header = new EntryHeaderDecoder(RawJournalPage.METADATA_CCSID).decode(bytes, 0);
             var source = As400SourceNormalizer.validateSource(header, bytes, 0, entry.position());
+            if (As400JournalLifecycle.administrative(new As400JournalLifecycle.Entry(header, bytes, entry.position()),
+                    (file, library) -> definitions.stream()
+                            .filter(d -> d.identity().physicalFile().equals(file) && d.identity().tableId().schema().equals(library))
+                            .findFirst().map(d -> d.binding(1024 * 1024)).orElse(null))) {
+                require(!markers.isEmpty() && markers.size() < 3, "Administrative work is outside A/Z audit bracket");
+                continue;
+            }
             if (header.getJournalCode() == 'R' || header.getJournalCode() == 'C') {
                 require(markers.size() > 0 && markers.size() < 3, "Concurrent work is outside A/Z audit bracket");
                 var info = source.recordInfo();

@@ -13,11 +13,8 @@ import static org.mockito.Mockito.mockConstruction;
 import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.withSettings;
 
-import java.lang.reflect.Field;
-import java.lang.reflect.Method;
 import java.math.BigInteger;
 import java.nio.ByteBuffer;
-import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -35,7 +32,6 @@ import java.util.function.Consumer;
 import org.mockito.invocation.InvocationOnMock;
 
 import com.ibm.as400.access.AS400;
-import com.ibm.as400.access.AS400Structure;
 import com.ibm.as400.access.AS400Text;
 import com.ibm.as400.access.Job;
 import com.ibm.as400.access.ProgramParameter;
@@ -51,7 +47,6 @@ import io.debezium.ibmi.db2.journal.retrieve.JournalReadLifecycle;
 import io.debezium.ibmi.db2.journal.retrieve.RetrievalState;
 import io.debezium.ibmi.db2.journal.retrieve.RetrieveConfigBuilder;
 import io.debezium.ibmi.db2.journal.retrieve.RetrieveJournal;
-import io.debezium.ibmi.db2.journal.retrieve.rjne0200.EntryHeaderDecoder;
 import io.debezium.ibmi.db2.journal.retrieve.rnrn0200.DetailedJournalReceiver;
 import io.debezium.ibmi.db2.journal.retrieve.rnrn0200.JournalReceiverInfo;
 import io.debezium.ibmi.db2.journal.retrieve.rnrn0200.JournalStatus;
@@ -102,22 +97,9 @@ final class As400ReaderFixture {
     volatile BoundaryHook boundaryHook = boundary -> {
     };
 
-    // Observation only: reads state under the implementation's own monitor.
-    // It neither installs a startup proof nor changes cancellation/registration.
-    Map<String, Boolean> activeReadState() throws Exception {
-        Field lock = RetrieveJournal.class.getDeclaredField("activeReadLock");
-        lock.setAccessible(true);
-        synchronized (lock.get(journal)) {
-            Field active = RetrieveJournal.class.getDeclaredField("activeRead");
-            active.setAccessible(true);
-            Object read = active.get(journal);
-            if (read == null) {
-                return Map.of("registered", false, "cancelled", false);
-            }
-            Field cancelled = read.getClass().getDeclaredField("cancellationRequested");
-            cancelled.setAccessible(true);
-            return Map.of("registered", true, "cancelled", cancelled.getBoolean(read));
-        }
+    Map<String, Boolean> activeReadState() {
+        var state = journal.readState();
+        return Map.of("registered", state.registered(), "cancelled", state.cancellationRequested());
     }
 
     private void boundary(Boundary point) throws Exception {
@@ -130,7 +112,6 @@ final class As400ReaderFixture {
         this.observer = observer;
         // Bypass ONLY construction, which discovers a real source. All lifecycle
         // and read methods below are the production implementation, not copied loops.
-        rpc = mock(As400RpcConnection.class, CALLS_REAL_METHODS);
         JournalInfo info = new JournalInfo("JRN", "LIB", false);
         JournalInfoRetrieval metadata = mock(JournalInfoRetrieval.class, invocation -> switch (invocation.getMethod().getName()) {
             case "getDelayedDetailedJournalReceiver" -> {
@@ -156,8 +137,14 @@ final class As400ReaderFixture {
             }
             default -> throw unexpected("metadata", invocation.getMethod().getName());
         });
-        journal = new RetrieveJournal(new RetrieveConfigBuilder().withAs400(rpc).withJournalInfo(info)
-                .withJournalBufferSize(4096).withMaxServerSideEntries(10).withTransactionControls(true).build(), metadata, lifecycle);
+        java.util.function.Function<As400RpcConnection, RetrieveJournal> readerFactory = connection -> new RetrieveJournal(
+                new RetrieveConfigBuilder().withAs400(connection).withJournalInfo(info)
+                        .withJournalBufferSize(4096).withMaxServerSideEntries(10).withTransactionControls(true).build(),
+                metadata, lifecycle);
+        rpc = mock(As400RpcConnection.class, withSettings().useConstructor(config, null, metadata, info, lifecycle, readerFactory)
+                .defaultAnswer(CALLS_REAL_METHODS));
+        journal = rpc.journal();
+        org.mockito.Mockito.doNothing().when(rpc).logOffsets(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any());
         doAnswer(invocation -> {
             if (activeReadState().get("registered")) {
                 // Exact registration-to-run admission boundary, before acquiring
@@ -166,21 +153,20 @@ final class As400ReaderFixture {
             }
             return invocation.callRealMethod();
         }).when(lifecycle).enter();
-        set(rpc, "lifecycle", lifecycle);
-        set(rpc, "config", config);
-        set(rpc, "isSecure", config.isSecure());
-        set(rpc, "retrieveJournal", journal);
-        set(rpc, "journalInfo", info);
-        set(rpc, "journalInfoRetrieval", metadata);
-        // Suppress only periodic diagnostic queries, not the retrieval/pagination path.
-        Class<?> limiter = Class.forName(As400RpcConnection.class.getName() + "$LogLimmiting");
-        var constructor = limiter.getDeclaredConstructor(long.class);
-        constructor.setAccessible(true);
-        Object instance = constructor.newInstance(300000L);
-        Field logged = limiter.getDeclaredField("lastLogged");
-        logged.setAccessible(true);
-        ((Map<String, Long>) logged.get(instance)).put("offsets", System.currentTimeMillis() + 86400000L);
-        set(rpc, "periodic", instance);
+        // Mockito construction scopes are thread-local. Install the controlled
+        // JT400 transport on the real asynchronous terminal cleanup thread too.
+        doAnswer(invocation -> nativeScope(() -> {
+            try {
+                invocation.callRealMethod();
+            }
+            catch (Exception e) {
+                throw e;
+            }
+            catch (Throwable e) {
+                throw new AssertionError(e);
+            }
+            return null;
+        })).when(rpc).drainStopped();
         scan = new As400OffsetContext(config, new JournalProcessedPosition(BigInteger.valueOf(start), RECEIVER, Instant.EPOCH, true));
     }
 
@@ -204,6 +190,7 @@ final class As400ReaderFixture {
                 var secure = mockConstruction(SecureAS400.class, withSettings().defaultAnswer(this::connectionCall), (m, context) -> {
                     constructedConnection(m, context.arguments(), true);
                 });
+                var parameters = mockConstruction(ProgramParameter.class);
                 var jobs = mockConstruction(Job.class, withSettings().defaultAnswer(this::cancelCall), (m, context) -> {
                     List<?> a = context.arguments();
                     if (a.size() != 4 || !a.get(1).equals(jobName()) || !a.get(2).equals("FIXTURE") || !a.get(3).equals("000001")
@@ -309,9 +296,11 @@ final class As400ReaderFixture {
         }
 
         private final Job server = mock(Job.class, i -> switch (i.getMethod().getName()) {
+            case "getCodedCharacterSetID" -> 37;
             case "getName" -> jobName();
             case "getUser" -> "FIXTURE";
             case "getNumber" -> "000001";
+            case "getQualifiedJobName" -> "000001/FIXTURE/" + jobName();
             case "setLoggingLevel" -> {
                 if (!i.getArgument(0).equals(0)) {
                     throw unexpected("job", "logging level");
@@ -369,9 +358,7 @@ final class As400ReaderFixture {
                     }
                     note("read-enter", Map.of("through", end, "transport", transportState(), "read", activeReadState()));
                     duringRead.call();
-                    Method output = ProgramParameter.class.getDeclaredMethod("setOutputData", byte[].class);
-                    output.setAccessible(true);
-                    output.invoke(parameters[0], (Object) page.clone());
+                    org.mockito.Mockito.when(parameters[0].getOutputData()).thenReturn(page.clone());
                     note("read-return", Map.of("through", end));
                     yield true;
                 }
@@ -449,26 +436,36 @@ final class As400ReaderFixture {
         observer.accept(event);
     }
 
-    static void set(Object target, String name, Object value) throws Exception {
-        Field f = target.getClass().getDeclaredField(name);
-        f.setAccessible(true);
-        f.set(target, value);
+    private static void text(byte[] bytes, int offset, int length, String value) {
+        new AS400Text(length, 37).toBytes(value, bytes, offset);
     }
 
     static byte[] page(As400ConnectProbeConnector.Event event) throws Exception {
         var h = event.header();
         byte[] entry = event.data().clone();
-        EntryHeaderDecoder decoder = new EntryHeaderDecoder();
-        Field field = EntryHeaderDecoder.class.getDeclaredField("structure");
-        field.setAccessible(true);
-        AS400Structure structure = (AS400Structure) field.get(decoder);
-        byte[] header = structure.toBytes(new Object[]{ 0L, 0L, (long) h.getEntrySpecificDataOffset(), 0L, 0L, 0L,
-                h.getSequenceNumber(), Timestamp.from(h.getTime()), BigInteger.ONE, BigInteger.ONE, BigInteger.ONE,
-                h.getCommitCycle(), 0L, 0, 0, 0, "", String.valueOf(h.getJournalCode()), h.getEntryType(), "JOB", "USER", "123456",
-                "PGM", "LIB", "", h.getObjectName(), "USER", "", "", "SYS", String.valueOf(h.getControlInfo().indicatorFlag()), "1", h.getControlInfo().flags(),
-                h.getRecordInfo().objectType(),
-                "", h.getControlInfo().nestedCommitLevel() });
-        System.arraycopy(header, 0, entry, 0, header.length);
+        // Encode the public RJNE0200 wire layout, independent of decoder fields.
+        java.util.Arrays.fill(entry, 0, 236, (byte) 0);
+        var header = ByteBuffer.wrap(entry);
+        header.putInt(8, h.getEntrySpecificDataOffset()).putLong(24, h.getSequenceNumber().longValueExact())
+                .putLong(40, 1).putLong(48, 1).putLong(56, 1).putLong(64, h.getCommitCycle().longValueExact());
+        text(entry, 82, 16, "");
+        text(entry, 98, 1, String.valueOf(h.getJournalCode()));
+        text(entry, 99, 2, h.getEntryType());
+        text(entry, 101, 10, "JOB");
+        text(entry, 111, 10, "USER");
+        text(entry, 121, 6, "123456");
+        text(entry, 127, 10, "PGM");
+        text(entry, 137, 10, "LIB");
+        text(entry, 147, 10, "");
+        text(entry, 157, 30, h.getObjectName());
+        text(entry, 187, 10, "USER");
+        text(entry, 207, 1, "");
+        text(entry, 208, 8, "SYS");
+        text(entry, 216, 1, String.valueOf(h.getControlInfo().indicatorFlag()));
+        text(entry, 217, 1, "1");
+        entry[218] = (byte) h.getControlInfo().flags();
+        text(entry, 219, 10, h.getRecordInfo().objectType());
+        header.putInt(232, (int) h.getControlInfo().nestedCommitLevel());
         // JT400's DTS decoder uses an unsigned midpoint at 2000-01-01 and
         // 2^12 units per microsecond; its toBytes() still writes text format.
         long micros = Math.multiplyExact(h.getTime().getEpochSecond(), 1000000L) + h.getTime().getNano() / 1000;

@@ -168,16 +168,16 @@ class As400NativeTaskSession implements As400TaskInitialization, As400TaskRecove
             var created = factory.create(evidence);
             source = created;
             if (stopped.get()) {
-                created.lifecycle.requestStop();
-                created.guardedReader.cancelJob();
+                created.lifecycle().requestStop();
+                created.guardedReader().cancelJob();
                 throw new IllegalStateException("Stopped during native handle construction");
             }
             try (var connection = created.connection(false)) {
-                checkRunning(); // Existing connection adapter requires CURRENT_SERVER=AEQA.
+                checkRunning(); // Existing connection adapter requires CURRENT_SERVER=the configured server.
             }
         }
         var target = new Target("/QSYS.LIB/" + library + ".LIB/QSQJRN.JRN", Kind.JOURNAL);
-        var objects = source.identities.collect(List.of(target));
+        var objects = source.identities().collect(List.of(target));
         String current = As400OperatorCutReader.token(target, objects.objects().get(target));
         if (identity != null && !identity.equals(current)) {
             throw new IllegalArgumentException("Durable native journal identity differs from current object");
@@ -246,6 +246,10 @@ class As400NativeTaskSession implements As400TaskInitialization, As400TaskRecove
         return Math.max(1, (deadline - System.nanoTime()) / 1_000_000);
     }
 
+    void trackSnapshotStatement(java.sql.Statement statement) {
+        snapshotStatement = statement;
+    }
+
     @Override
     public void scanBaseline(String token, List<As400BindingDefinition> definitions, As400SnapshotChunks.Consumer consumer) throws Exception {
         var limits = chunkLimits().orElseThrow();
@@ -254,7 +258,7 @@ class As400NativeTaskSession implements As400TaskInitialization, As400TaskRecove
             throw new IllegalArgumentException("Snapshot table outside owned native capture");
         }
         new As400NativeSnapshotScanner(locked, snapshotIo, () -> requireEpoch(token), this::checkRunning,
-                statement -> snapshotStatement = statement, limits).scan(definitions, consumer);
+                this::trackSnapshotStatement, limits).scan(definitions, consumer);
         var changes = new io.debezium.relational.history.TableChanges();
         definitions.forEach(d -> changes.create(d.storedTable()));
         var document = io.debezium.document.Document.create();
@@ -265,8 +269,8 @@ class As400NativeTaskSession implements As400TaskInitialization, As400TaskRecove
 
     @Override
     public As400NativeInitialization initializer() {
-        return new As400NativeInitialization(source.acquisition, source.census, source.journals, source.identities,
-                source.tables, source.guardedReader, source.cutLimits, source.requests, As400NativeInitializationProbe.POLICY, source.history);
+        return new As400NativeInitialization(source.acquisition, source.census, source.journals, source.identities(),
+                source.tables, source.guardedReader(), source.cutLimits, source.requests, As400NativeInitializationProbe.POLICY, source.history);
     }
 
     @Override
@@ -347,7 +351,7 @@ class As400NativeTaskSession implements As400TaskInitialization, As400TaskRecove
         if (!history.initialization().orElseThrow().epoch().equals(epoch) || !history.fingerprint().equals(fingerprint)) {
             throw new IllegalArgumentException("Recovered native initialization history differs");
         }
-        reader = new As400OperatorCutReader(source.journals, source.identities, source.journal, history, source.guardedReader, source.cutLimits);
+        reader = new As400OperatorCutReader(source.journals, source.identities(), source.journal, history, source.guardedReader(), source.cutLimits);
         recovered = history;
         write(generation + ".recovered.json", Map.of("checkpoint", durable, "fingerprint", fingerprint, "tables", history.definitions().size()));
         return history;
@@ -453,8 +457,8 @@ class As400NativeTaskSession implements As400TaskInitialization, As400TaskRecove
         if (stopped.compareAndSet(false, true)) {
             var current = source;
             if (current != null) {
-                current.lifecycle.requestStop();
-                current.guardedReader.cancelJob();
+                current.lifecycle().requestStop();
+                current.guardedReader().cancelJob();
             }
             var snapshot = snapshotStatement;
             if (snapshot != null) {

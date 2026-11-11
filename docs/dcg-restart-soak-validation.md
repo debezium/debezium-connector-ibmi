@@ -41,7 +41,7 @@ changes, immutable queued offsets, fresh-instance before-image replay, and
 failure between delete and tombstone. Existing decode/dispatch, migration,
 transaction metadata and stop/recovery assertions remain in place.
 
-Native validation uses the ordinary packaged connector, fresh isolated Edgeqa
+Native validation uses the ordinary packaged connector, fresh isolated IBM i test
 libraries and local Kafka. The fixed legacy run repeats two 5,000-row
 stop/load/resume trials after 21 insert/update bursts. The transactional run
 repeats those same checks after real online handoff and then adds:
@@ -159,7 +159,7 @@ that change. Artifact comparison limits the changed runtime entries to
 Transaction-buffer and recovery classes are byte-identical. The final correction
 was checked with the full local suite and repeated native legacy workload. Its
 exact two-table interleaving is deterministic local evidence, not a claim that
-Edgeqa happened to produce that interleaving. Both artifact identities and the
+IBM i test happened to produce that interleaving. Both artifact identities and the
 comparison are retained in `review-artifact-delta.json`.
 
 All three fresh fixture libraries, DCNC1111–DCNC1113, were deleted and independently
@@ -177,8 +177,7 @@ key-change sequence, and release the floor only after B completes. This closes
 the reported finding; the independent verdict itself remains a concern with its
 resolution recorded, rather than being relabeled a second review pass.
 
-Private evidence root:
-`/home/gardnmi/.bb/thread-storage/thr_vzfz57gebs/dcg-restart-soak-20261110/`.
+Raw evidence was retained privately; rerun the documented tools in a new local evidence directory.
 It includes both run reports and raw observer output, durable offsets/history,
 native cleanup evidence, JFR recordings/exports, `summary.json`, `analyze.py`,
 build/test logs, the tested ZIP and final source/artifact verification.

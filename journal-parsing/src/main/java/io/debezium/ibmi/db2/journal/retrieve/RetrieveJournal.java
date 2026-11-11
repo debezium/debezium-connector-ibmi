@@ -133,6 +133,17 @@ public class RetrieveJournal {
         }
     }
 
+    /** Diagnostic snapshot only: it does not grant admission or certify drain. */
+    public record ReadState(boolean registered, boolean cancellationRequested, String job) {
+    }
+
+    public ReadState readState() {
+        synchronized (activeReadLock) {
+            return activeRead == null ? new ReadState(false, false, "")
+                    : new ReadState(true, activeRead.cancellationRequested, activeRead.job.getQualifiedJobName());
+        }
+    }
+
     public void cancelJob() {
         synchronized (activeReadLock) {
             ActiveRead read = activeRead;
@@ -304,7 +315,21 @@ public class RetrieveJournal {
         lifecycle.checkOpen();
         final Job job = spc.getServerJob();
         lifecycle.checkOpen();
-        job.setLoggingLevel(0);
+        if (rawEntryLimit > 0) {
+            // The owned native profile must not inherit the worker locale.
+            // Qualify the actual API job before encoding names or retrieving bytes.
+            // Each call observes the job again, including after reconnect.
+            if (job.getCodedCharacterSetID() != RawJournalPage.METADATA_CCSID) {
+                throw new IllegalArgumentException("Native journal retrieval requires an API job with CCSID " + RawJournalPage.METADATA_CCSID);
+            }
+            lifecycle.checkOpen();
+        }
+        else {
+            job.setLoggingLevel(0);
+        }
+        final ParameterListBuilder builder = rawEntryLimit == 0 ? this.builder
+                : new ParameterListBuilder(RawJournalPage.METADATA_CCSID)
+                        .withJournal(config.journalInfo().journalName(), config.journalInfo().journalLibrary());
         builder.init();
         builder.withBufferLenth(config.journalBufferSize());
         // An allowlist must not hide rollback/savepoint or unknown C controls from
@@ -478,6 +503,8 @@ public class RetrieveJournal {
 
     public void setOutputData(byte[] b, FirstHeader header, JournalProcessedPosition position) {
         outputData = b;
+        this.offset = -1;
+        this.entryHeader = null;
         this.header = header;
         this.position = position;
     }

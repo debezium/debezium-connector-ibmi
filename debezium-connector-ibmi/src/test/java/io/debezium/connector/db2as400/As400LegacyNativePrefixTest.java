@@ -72,6 +72,57 @@ class As400LegacyNativePrefixTest {
         }, new As400OperatorCutReader.Limits(16, entryLimit, 1_000_000));
     }
 
+    @org.junit.jupiter.api.Test
+    void shouldValidateOnlyRequiredReceiverIdentitiesWhenTheDirectoryIncludesOlderHistory() throws Exception {
+        var current = fixture.receiverDirectory(64).receivers().get(0);
+        var old = new io.debezium.ibmi.db2.journal.retrieve.JournalReceiver("OLD", Fixture.RECEIVER.library());
+        var older = new As400OperatorJournalEvidence.Receiver(old, "ONLINE", java.math.BigInteger.ONE, java.math.BigInteger.valueOf(28),
+                Optional.empty(), Optional.of(Fixture.RECEIVER), "NO", "YES", "YES", "NO", "NO");
+        when(journals.collectFrom(any())).thenReturn(new As400OperatorJournalEvidence.Observation(Fixture.JOURNAL, Fixture.RECEIVER,
+                List.of(older, current)));
+        var anchor = fixture.entries.get(0);
+        when(transport.readAuditHistoryPage(any(), any(), anyInt()))
+                .thenReturn(new RetrieveJournal.AuditPage(List.of(anchor), Optional.empty(), 1024));
+        when(transport.readRawPage(any(), any(), anyInt()))
+                .thenReturn(new RawJournalPage(List.of(anchor), Optional.empty(), 1024));
+        var prefix = prefix(100);
+        assertThat(prefix.publishNext()).isEmpty();
+        assertThat(prefix.completePosition()).isPresent();
+        assertThat(prefix.scan()).isEqualTo(anchor.position());
+        verify(handler, never()).processOwnedEntry(any(), any(), any());
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = { false, true })
+    void shouldReplayUnprocessedAnchorBeforeAcknowledgingItsPosition(boolean fails) throws Exception {
+        var anchor = fixture.entries.get(0);
+        scan.getPosition().setProcessed(false);
+        when(transport.readAuditHistoryPage(any(), any(), anyInt()))
+                .thenReturn(new RetrieveJournal.AuditPage(List.of(anchor), Optional.empty(), 1024));
+        when(transport.readRawPage(any(), any(), anyInt()))
+                .thenReturn(new RawJournalPage(List.of(anchor), Optional.empty(), 1024));
+        doAnswer(invocation -> {
+            assertThat(scan.getPosition().processed()).isFalse();
+            if (fails) {
+                throw new IllegalStateException("dispatch failed before acknowledgement");
+            }
+            return null;
+        }).when(handler).processOwnedEntry(any(), any(), any());
+        var prefix = prefix(100);
+        if (fails) {
+            assertThrows(IllegalStateException.class, prefix::publishNext);
+            assertThat(scan.getPosition().processed()).isFalse();
+            assertThat(prefix.completePosition()).isEmpty();
+        }
+        else {
+            var complete = prefix.publishNext().orElseThrow();
+            assertThat(complete.get("offset.processed")).isEqualTo("true");
+            assertThat(prefix.publishNext()).isEmpty();
+        }
+        verify(handler).processOwnedEntry(any(), any(), org.mockito.ArgumentMatchers.eq(anchor));
+        assertThat(prefix.scan()).isEqualTo(anchor.position());
+    }
+
     @ParameterizedTest
     @ValueSource(strings = { "complete", "remaining-row", "continuation", "before-image", "missing", "wrong-type", "object", "commit", "stop", "identity" })
     void shouldAdvanceToObservedMarkerOnlyWhenInterveningCdcAndPendingImagesAreAbsent(String fault) throws Exception {

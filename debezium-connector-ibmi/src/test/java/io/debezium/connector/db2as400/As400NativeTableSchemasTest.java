@@ -7,21 +7,172 @@ package io.debezium.connector.db2as400;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 import java.math.BigDecimal;
 import java.nio.ByteBuffer;
 import java.util.Arrays;
 import java.util.List;
+import java.util.TimeZone;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import io.debezium.config.Configuration;
+import io.debezium.relational.CustomConverterRegistry;
 import io.debezium.relational.TableId;
+import io.debezium.relational.TableSchema;
 import io.debezium.schema.AbstractTopicNamingStrategy;
+import io.debezium.spi.topic.TopicNamingStrategy;
 
 class As400NativeTableSchemasTest {
+    @ParameterizedTest
+    @CsvSource({ "default,both", "none,none", "leading,leading", "trailing,trailing", "both,both" })
+    void shouldPreserveLegacyCharacterKeysAndValuesWhenUsingNativeSchemas(String configured, String expectedMode) throws Exception {
+        var acquired = new As400NativeBindingAcquisitionTest.Fixture().acquire().definitions().get(0);
+        // The character column participates in the key so trim/cleanup drift
+        // cannot pass by comparing only non-key payloads.
+        var definition = new As400BindingDefinition(acquired.identity(), acquired.schema().edit()
+                .addColumn(acquired.schema().columnWithName("C").edit().optional(false).create()).setPrimaryKeyNames("ID", "C").create(), acquired.codecs());
+        var raw = Configuration.create().with("topic.prefix", "test").with("database.dbname", "TEST");
+        if (!configured.equals("default")) {
+            raw.with("trim.non.xml.charsequence.field.mode", configured);
+        }
+        var config = new As400ConnectorConfig(raw.build());
+        assertThat(config.getCharSequenceTrimMode().getValue()).isEqualTo(expectedMode);
+        var topics = config.<TableId> getTopicNamingStrategy(As400ConnectorConfig.TOPIC_NAMING_STRATEGY, true);
+        var nativeSchema = new As400NativeTableSchemas(List.of(definition), config, topics).schemaFor(definition.schema().id());
+        var legacy = legacySchema(definition, config, topics);
+        for (String text : List.of("  A   ", " \u0000A\u200B\uE000 ", " Ä[]😃 ")) {
+            Object[] values = row();
+            values[4] = text;
+            assertThat(nativeSchema.keyFromColumnData(values)).as("key %s", configured).isEqualTo(legacy.keyFromColumnData(values));
+            assertThat(nativeSchema.valueFromColumnData(values)).as("value %s", configured).isEqualTo(legacy.valueFromColumnData(values));
+        }
+    }
+
+    @ParameterizedTest
+    @CsvSource({ "adaptive,UTC", "adaptive,America/Chicago", "adaptive,Asia/Tokyo", "adaptive_time_microseconds,UTC",
+            "adaptive_time_microseconds,America/Chicago", "adaptive_time_microseconds,Asia/Tokyo" })
+    void shouldPreserveLegacyTemporalSchemasAndValuesAcrossWorkerTimeZones(String mode, String zone) throws Exception {
+        var previous = TimeZone.getDefault();
+        try {
+            TimeZone.setDefault(TimeZone.getTimeZone(zone));
+            var definition = As400TemporalTest.definition();
+            var config = new As400ConnectorConfig(Configuration.create().with("topic.prefix", "test").with("database.dbname", "TEST")
+                    .with("time.precision.mode", mode).build());
+            var topics = config.<TableId> getTopicNamingStrategy(As400ConnectorConfig.TOPIC_NAMING_STRATEGY, true);
+            var nativeSchema = new As400NativeTableSchemas(List.of(definition), config, topics).schemaFor(definition.schema().id());
+            var legacy = legacySchema(definition, config, topics);
+            byte[] bytes = java.util.HexFormat.of().parseHex(As400TemporalTest.entries().get(0).get("hex"));
+            var header = new io.debezium.ibmi.db2.journal.retrieve.rjne0200.EntryHeaderDecoder().decode(bytes, 0);
+            Object[] values = definition.binding(1024).values(header, bytes, 0);
+            assertThat(nativeSchema.keyFromColumnData(values)).isEqualTo(legacy.keyFromColumnData(values));
+            assertThat(nativeSchema.valueFromColumnData(values)).isEqualTo(legacy.valueFromColumnData(values));
+            // Exercise the actual legacy byte codecs, not merely two schema
+            // builders receiving the strict decoder's already-normalized values.
+            // The legacy timestamp codec is fixed at precision six. Keep the
+            // captured columns at other precisions out of this compatibility claim.
+            var decoder = new io.debezium.ibmi.db2.journal.retrieve.JdbcFileDecoder(() -> {
+                throw new AssertionError("Temporal codec comparison must not query a database");
+            }, "TEST", new io.debezium.ibmi.db2.journal.retrieve.SchemaCacheHash(), -1, -1);
+            Object[] legacyValues = values.clone();
+            int position = (int) header.getEntrySpecificDataOffset() + 16;
+            for (int i = 0; i < definition.codecs().size(); i++) {
+                if (i == 1 || i == 2 || i == 5) {
+                    var column = definition.schema().columns().get(i);
+                    // SYSCOLUMNS uses TIMESTMP; DatabaseMetaData uses TIMESTAMP.
+                    String jdbcTypeName = column.jdbcType() == java.sql.Types.TIMESTAMP ? "TIMESTAMP" : column.typeName();
+                    var codec = decoder.toDataType("LIB", "M", column.name(), jdbcTypeName, column.length(), column.scale().orElse(0));
+                    legacyValues[i] = decoder.decodeEntry(new com.ibm.as400.access.AS400Structure(new com.ibm.as400.access.AS400DataType[]{ codec }),
+                            bytes, position)[0];
+                }
+                position += definition.codecs().get(i).decoder().getByteLength();
+            }
+            if (zone.equals("UTC")) {
+                assertThat(legacy.valueFromColumnData(legacyValues)).isEqualTo(nativeSchema.valueFromColumnData(values));
+            }
+            else {
+                // Characterize the pre-existing legacy timezone dependence.
+                assertThat(legacy.valueFromColumnData(legacyValues)).isNotEqualTo(nativeSchema.valueFromColumnData(values));
+            }
+            var online = new As400ConnectorConfig(config.getConfig().edit().with("truncate.transactional.enabled", true).build());
+            // The old timestamp decoder cannot read the other physical widths;
+            // migration refuses them before installing a history/checkpoint.
+            assertThrows(IllegalArgumentException.class, () -> new As400NativeTableSchemas(List.of(definition), online, topics));
+            var identity = definition.identity();
+            var format = identity.recordFormat().split(":");
+            var projectedIdentity = new As400TransactionBuffer.TableIdentity(identity.tableId(), identity.physicalFile(), identity.member(),
+                    identity.fileJournalId(), identity.memberJournalId(), format[0] + ":" + format[1] + ":48:4:false");
+            var projection = new As400BindingDefinition(projectedIdentity, definition.schema().edit()
+                    .removeColumn("TS0").removeColumn("TS3").removeColumn("TS9").create(),
+                    List.of(definition.codecs().get(0), definition.codecs().get(1), definition.codecs().get(2), definition.codecs().get(5)));
+            var onlineSchema = new As400NativeTableSchemas(List.of(projection), online, topics).schemaFor(projection.schema().id());
+            var legacyProjection = legacySchema(projection, config, topics);
+            Object[] strictProjection = { values[0], values[1], values[2], values[5] };
+            Object[] decodedProjection = { legacyValues[0], legacyValues[1], legacyValues[2], legacyValues[5] };
+            assertThat(onlineSchema.keyFromColumnData(strictProjection)).isEqualTo(legacyProjection.keyFromColumnData(decodedProjection));
+            assertThat(onlineSchema.valueFromColumnData(strictProjection)).isEqualTo(legacyProjection.valueFromColumnData(decodedProjection));
+            // Dates around the calendar cutover, leap years and DST gaps/folds,
+            // plus IBM i's end-of-day TIME spelling. Compare real byte decoders.
+            var temporalKeys = new As400BindingDefinition(projection.identity(), projection.schema().edit()
+                    .addColumn(projection.schema().columnWithName("D").edit().optional(false).create())
+                    .addColumn(projection.schema().columnWithName("T").edit().optional(false).create())
+                    .addColumn(projection.schema().columnWithName("TS6").edit().optional(false).create())
+                    .setPrimaryKeyNames("ID", "D", "T", "TS6").create(), projection.codecs());
+            var nativeKeys = new As400NativeTableSchemas(List.of(temporalKeys), online, topics).schemaFor(projection.schema().id());
+            var legacyKeys = legacySchema(temporalKeys, config, topics);
+            for (String timestamp : List.of("0001-01-01-00.00.00.000001", "1500-02-28-23.59.59.999999", "1582-10-10-12.00.00.000000",
+                    "1969-12-31-23.59.59.999999", "2000-02-29-12.34.56.123456", "2024-03-10-02.30.00.000000",
+                    "2024-11-03-01.30.00.000000", "9999-12-31-23.59.59.999999")) {
+                Object[] strict = { 7, null, null, null };
+                Object[] old = strict.clone();
+                String[] encoded = { "", timestamp.substring(0, 10), timestamp.substring(11, 19), timestamp };
+                for (int i = 1; i < 4; i++) {
+                    var column = projection.schema().columns().get(i);
+                    byte[] data = new com.ibm.as400.access.AS400Text(encoded[i].length(), 37).toBytes(encoded[i]);
+                    strict[i] = projection.codecs().get(i).decoder().toObject(data);
+                    String type = column.jdbcType() == java.sql.Types.TIMESTAMP ? "TIMESTAMP" : column.typeName();
+                    old[i] = decoder.toDataType("LIB", "M", column.name(), type, column.length(), column.scale().orElse(0)).toObject(data);
+                }
+                if (zone.equals("Asia/Tokyo") && timestamp.startsWith("1500-02-28")) {
+                    // The existing JT400/calendar conversion creates Julian
+                    // February 29, which the shared Gregorian converter rejects.
+                    // Migration must preserve that failure, never coerce a key.
+                    assertThrows(java.time.DateTimeException.class, () -> legacyKeys.keyFromColumnData(old));
+                    assertThrows(java.time.DateTimeException.class, () -> nativeKeys.keyFromColumnData(strict));
+                    continue;
+                }
+                assertThat(nativeKeys.keyFromColumnData(strict)).as("temporal key %s in %s", timestamp, zone)
+                        .isEqualTo(legacyKeys.keyFromColumnData(old));
+                assertThat(onlineSchema.valueFromColumnData(strict)).as("temporal value %s in %s", timestamp, zone)
+                        .isEqualTo(legacyProjection.valueFromColumnData(old));
+            }
+            Object[] nulls = { 7, null, null, null };
+            assertThat(onlineSchema.valueFromColumnData(nulls)).isEqualTo(legacyProjection.valueFromColumnData(nulls));
+            byte[] endOfDay = new com.ibm.as400.access.AS400Text(8, 37).toBytes("24.00.00");
+            strictProjection[2] = projection.codecs().get(2).decoder().toObject(endOfDay);
+            decodedProjection[2] = decoder.toDataType("LIB", "M", "T", "TIME", 8, 0).toObject(endOfDay);
+            assertThat(onlineSchema.valueFromColumnData(strictProjection)).isEqualTo(legacyProjection.valueFromColumnData(decodedProjection));
+        }
+        finally {
+            TimeZone.setDefault(previous);
+        }
+    }
+
+    private static TableSchema legacySchema(As400BindingDefinition definition, As400ConnectorConfig config, TopicNamingStrategy<TableId> topics) {
+        var jdbc = mock(As400JdbcConnection.class);
+        when(jdbc.getRealDatabaseName()).thenReturn("TEST");
+        var context = new io.debezium.connector.common.CdcSourceTaskContext<>(config.getConfig(), config, config.getCustomMetricTags());
+        try (var legacy = new As400DatabaseSchema(config, jdbc, topics, config.schemaNameAdjuster(), new CustomConverterRegistry(List.of()), context)) {
+            legacy.forwardSchema(definition.outputTable());
+            return legacy.schemaFor(definition.schema().id());
+        }
+    }
+
     @Test
     void acquiredMixedColumnsUseRealDebeziumConversionWithoutLosingKeysNullsScaleOrOwnedBytes() throws Exception {
         var definition = new As400NativeBindingAcquisitionTest.Fixture().acquire().definitions().get(0);
@@ -32,7 +183,7 @@ class As400NativeTableSchemasTest {
         assertThat(value.getInt16("S")).isEqualTo((short) 12);
         assertThat(value.get("N")).isEqualTo(new BigDecimal("123.45"));
         assertThat(value.get("D")).isEqualTo(new BigDecimal("1234.567"));
-        assertThat(value.getString("C")).isEqualTo("A\u0000   ");
+        assertThat(value.getString("C")).isEqualTo("A?");
         assertThat(value.getString("V")).isEqualTo("Ä![]");
         assertThat(value.getInt64("L")).isEqualTo(9007199254740993L);
         assertThat(value.getFloat32("F")).isEqualTo(1.25f);
@@ -69,7 +220,7 @@ class As400NativeTableSchemasTest {
         var definition = new As400NativeBindingAcquisitionTest.Fixture().acquire().definitions().get(0);
         String value = key.equals("decimal.handling.mode") ? "double"
                 : key.equals("binary.handling.mode") ? "hex" : key.equals("message.key.columns") ? ".*:ID" : "unqualified";
-        var raw = Configuration.create().with("topic.prefix", "test").with("database.dbname", "AEQA").with(key, value).build();
+        var raw = Configuration.create().with("topic.prefix", "test").with("database.dbname", "TEST").with(key, value).build();
         var config = new As400ConnectorConfig(raw);
         assertThrows(IllegalArgumentException.class, () -> new As400NativeTableSchemas(List.of(definition), config, null));
     }
@@ -94,7 +245,7 @@ class As400NativeTableSchemasTest {
     }
 
     private static As400NativeTableSchemas schemas(As400BindingDefinition definition) {
-        var raw = Configuration.create().with("topic.prefix", "test").with("database.dbname", "AEQA").build();
+        var raw = Configuration.create().with("topic.prefix", "test").with("database.dbname", "TEST").build();
         var config = new As400ConnectorConfig(raw);
         return new As400NativeTableSchemas(List.of(definition), config, new AbstractTopicNamingStrategy<TableId>(raw.asProperties()) {
             @Override
