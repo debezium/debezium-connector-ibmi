@@ -122,7 +122,9 @@ final class As400ProspectiveHandoffReplay {
                         "Work follows a completed prior-schema cycle");
                 // This entire cycle is already processed by the exact legacy cut. Its
                 // old rows are neither decoded with new schemas nor replayed as new output.
-                As400SourceNormalizer.validateSource(header, entry.data(), 0, entry.position());
+                As400SourceNormalizer.validateSource(header, entry.data(), 0, entry.position(), (file, library) -> future.definitions().stream()
+                        .filter(d -> d.identity().physicalFile().equals(file) && d.identity().tableId().schema().equals(library))
+                        .findFirst().map(d -> d.binding(1024 * 1024)).orElse(null));
                 require(header.getJournalCode() == 'C' || header.getJournalCode() == 'R', "Unsupported prior-cycle operation");
             }
         }

@@ -32,6 +32,7 @@ import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
@@ -89,7 +90,7 @@ class As400OperatorTableEvidenceTest {
             cases.add(Arguments.of(1, column, null));
             cases.add(Arguments.of(1, column, column.equals("FORMAT_NAME") ? "*FIRST" : "UNKNOWN"));
         }
-        cases.add(Arguments.of(1, "CONTAINS_LOB", "YES"));
+        cases.add(Arguments.of(1, "CONTAINS_LOB", "UNKNOWN"));
         cases.add(Arguments.of(1, "RECORD_LENGTH", 0));
         cases.add(Arguments.of(1, "NUMBER_FIELDS", 8001));
         for (int row : List.of(2, 3)) {
@@ -116,13 +117,16 @@ class As400OperatorTableEvidenceTest {
     }
 
     @ParameterizedTest
-    @ValueSource(ints = { 1, 2, 32 })
-    void shouldRetainFileAndMemberBindingsInTheSystemOrBasicAspNamespace(int asp) throws Exception {
+    @CsvSource({ "1,false,DATA", "2,false,DATA", "32,false,DATA", "1,true,DATA", "1,false,SOURCE" })
+    void shouldRetainPhysicalIdentityAndLobCapabilityInTheSystemOrBasicAspNamespace(int asp, boolean lob, String fileType) throws Exception {
         var fixture = new Fixture();
         fixture.data.get(2).put("ASP_NUMBER", asp);
         fixture.data.get(3).put("ASP_NUMBER", asp);
+        fixture.data.get(1).put("CONTAINS_LOB", lob ? "YES" : "NO");
+        fixture.data.get(1).put("FILE_TYPE", fileType);
         var observed = fixture.collect().get(0);
         assertThat(observed.tableIdentity().member()).isEqualTo("A");
+        assertThat(observed.format().lob()).isEqualTo(lob);
         assertThat(observed.fileObject().identity()).isNotEqualTo(observed.memberObject().identity());
         fixture.closed();
     }
@@ -251,6 +255,18 @@ class As400OperatorTableEvidenceTest {
         }
     }
 
+    @Test
+    void shouldAcquireEveryMemberInBoundedExactObjectQueries() throws Exception {
+        var fixture = new BatchFixture();
+        fixture.memberCount = 20;
+        var observed = fixture.collect(List.of(REQUEST)).get(0);
+        assertThat(observed.memberObjects()).hasSize(20);
+        assertThat(observed.memberJournalIds().values()).doesNotHaveDuplicates();
+        assertThat(observed.member()).isEqualTo("A");
+        assertThat(fixture.objectBatches).containsExactly(16, 5);
+        fixture.closed();
+    }
+
     static class BatchFixture {
         final Connection connection = mock(Connection.class);
         final List<PreparedStatement> statements = new ArrayList<>();
@@ -260,6 +276,7 @@ class As400OperatorTableEvidenceTest {
         String fault = "";
         String faultQuery = "";
         int objectQueries;
+        int memberCount = 1;
 
         BatchFixture() throws Exception {
             var template = new Fixture().data;
@@ -279,7 +296,7 @@ class As400OperatorTableEvidenceTest {
                     if (catalog) {
                         int count = parameters.size() - 1;
                         assertThat(count).isBetween(1, 50);
-                        verify(statement).setMaxRows(count + 1);
+                        verify(statement).setMaxRows(count * (sql.contains("SYSPARTITIONSTAT") ? memberCount : 1) + 1);
                         catalogBatches.add(count);
                         for (int i = 0; i < count; i++) {
                             var value = new HashMap<>(template.get(sql.contains("SYSPARTITIONSTAT") ? 0 : 1));
@@ -288,7 +305,15 @@ class As400OperatorTableEvidenceTest {
                             value.put("SYSTEM_TABLE_NAME", parameters.get(i + 2));
                             value.put("TABLE_NAME", parameters.get(i + 2));
                             value.put("SYSTEM_TABLE_MEMBER", parameters.get(i + 2));
+                            value.put("NUMBER_MEMBERS", memberCount);
                             values.add(value);
+                            if (sql.contains("SYSPARTITIONSTAT")) {
+                                for (int member = 1; member < memberCount; member++) {
+                                    var extra = new HashMap<>(value);
+                                    extra.put("SYSTEM_TABLE_MEMBER", String.format(java.util.Locale.ROOT, "M%04d", member));
+                                    values.add(extra);
+                                }
+                            }
                         }
                         Collections.reverse(values); // Catalog row order is not a binding rule.
                     }
@@ -304,6 +329,9 @@ class As400OperatorTableEvidenceTest {
                             var value = new HashMap<>(template.get(parameters.get(i * 2 + 2).equals("*FILE") ? 2 : 3));
                             value.put("PATH_NAME", parameters.get(i * 2 + 1));
                             value.put("PATH_LENGTH", parameters.get(i * 2 + 1).length());
+                            long identity = Integer.toUnsignedLong(parameters.get(i * 2 + 1).hashCode()) + 1;
+                            value.put("OBJECT_JID", String.format(java.util.Locale.ROOT, "%020x", identity));
+                            value.put("FILE_IDENTIFIER_NUMBER", identity);
                             values.add(value);
                         }
                         Collections.reverse(values); // UNION result order is not a binding rule either.
@@ -396,7 +424,7 @@ class As400OperatorTableEvidenceTest {
             }
             when(connection.isReadOnly()).thenReturn(true);
             for (int query = 0; query < 3; query++) {
-                var values = query < 2 ? List.of(data.get(query)) : data.subList(2, 4);
+                var values = query < 2 ? List.of(data.get(1 - query)) : data.subList(2, 4);
                 ResultSet result = mock(ResultSet.class);
                 PreparedStatement statement = mock(PreparedStatement.class);
                 when(statement.executeQuery()).thenReturn(result);

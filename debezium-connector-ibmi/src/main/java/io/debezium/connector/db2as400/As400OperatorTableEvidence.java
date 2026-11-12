@@ -35,7 +35,7 @@ import io.debezium.relational.TableId;
  */
 final class As400OperatorTableEvidence {
     private static final int CATALOG_BATCH_SIZE = 50;
-    private static final int OBJECT_BATCH_TABLES = 8;
+    private static final int OBJECT_BATCH_SIZE = 16;
     static final String OBJECT_SQL = """
             SELECT CASE WHEN LENGTH(PATH_NAME) <= 55 THEN CAST(PATH_NAME AS VARCHAR(55) CCSID 1208) ELSE NULL END AS PATH_NAME,
                    LENGTH(PATH_NAME) AS PATH_LENGTH, OBJECT_TYPE, ASP_NUMBER, STORED_LOCAL,
@@ -77,24 +77,53 @@ final class As400OperatorTableEvidence {
         }
     }
 
-    record Format(String name, String level, int recordBytes, int fields, boolean varying) {
+    record Format(String name, String level, int recordBytes, int fields, boolean varying, int members, boolean lob) {
+        Format(String name, String level, int recordBytes, int fields, boolean varying) {
+            this(name, level, recordBytes, fields, varying, 1, false);
+        }
+
+        Format(String name, String level, int recordBytes, int fields, boolean varying, int members) {
+            this(name, level, recordBytes, fields, varying, members, false);
+        }
+
         Format {
             if (name == null || !name.matches("[A-Z0-9_#$@]{1,10}") || level == null || !level.matches("[0-9A-F]{13}")
                     || recordBytes < 1 || recordBytes > 16 * 1024 * 1024 || fields < 1
-                    || fields > io.debezium.ibmi.db2.journal.retrieve.CompleteRowEntryDecoder.MAX_COLUMNS) {
+                    || fields > io.debezium.ibmi.db2.journal.retrieve.CompleteRowEntryDecoder.MAX_COLUMNS || members < 1 || members > 32767) {
                 throw new IllegalArgumentException("Missing or unsupported physical format");
             }
         }
     }
 
-    record Observation(Request request, TableId table, String member, NativeObject fileObject, NativeObject memberObject, Format format) {
+    record Observation(Request request, TableId table, String member, NativeObject fileObject, NativeObject memberObject, Format format,
+            Map<String, NativeObject> memberObjects) {
+        Observation(Request request, TableId table, String member, NativeObject fileObject, NativeObject memberObject, Format format) {
+            this(request, table, member, fileObject, memberObject, format, Map.of(member, memberObject));
+        }
+
         Observation {
             Objects.requireNonNull(request);
             Objects.requireNonNull(table);
             Objects.requireNonNull(format);
-            if (fileObject.jid().equals(memberObject.jid()) || fileObject.identity().equals(memberObject.identity())) {
-                throw new IllegalArgumentException("File and member must be distinct native objects");
+            memberObjects = Collections.unmodifiableMap(new java.util.TreeMap<>(memberObjects));
+            if (memberObjects.size() != format.members() || !memberObject.equals(memberObjects.get(member))) {
+                throw new IllegalArgumentException("Complete native member observations required");
             }
+            var jids = new java.util.HashSet<String>();
+            var identities = new java.util.HashSet<Identity>();
+            jids.add(fileObject.jid());
+            identities.add(fileObject.identity());
+            for (var entry : memberObjects.entrySet()) {
+                var object = entry.getValue();
+                if (!entry.getKey().matches("[A-Z0-9_#$@]{1,10}") || object.target().kind() != Kind.MEMBER
+                        || !jids.add(object.jid()) || !identities.add(object.identity())) {
+                    throw new IllegalArgumentException("File and members must be distinct exact native objects");
+                }
+            }
+        }
+
+        Map<String, String> memberJournalIds() {
+            return memberObjects.entrySet().stream().collect(Collectors.toMap(Map.Entry::getKey, entry -> entry.getValue().jid()));
         }
 
         TableIdentity tableIdentity() {
@@ -136,23 +165,44 @@ final class As400OperatorTableEvidence {
             // Catalog views otherwise repeat expensive native work per file. These
             // are fresh bounded reads, not a metadata cache; callers still compare
             // the complete observations before/after acquisition and the boundary.
-            var members = catalog(connection, MEMBER_SQL, requests, As400OperatorTableEvidence::member);
-            var formats = catalog(connection, FORMAT_SQL, requests, As400OperatorTableEvidence::format);
-            for (int start = 0; start < requests.size(); start += OBJECT_BATCH_TABLES) {
-                var batch = requests.subList(start, Math.min(start + OBJECT_BATCH_TABLES, requests.size()));
-                var targets = new LinkedHashMap<Target, Request>();
-                for (Request request : batch) {
-                    String path = "/QSYS.LIB/" + request.library() + ".LIB/" + request.file() + ".FILE";
-                    targets.put(new Target(path, Kind.FILE), request);
-                    targets.put(new Target(path + "/" + members.get(request).member() + ".MBR", Kind.MEMBER), request);
+            var single = requests.stream().collect(Collectors.toMap(request -> request, request -> 1));
+            var formats = catalog(connection, FORMAT_SQL, requests, single, As400OperatorTableEvidence::format);
+            var counts = requests.stream().collect(Collectors.toMap(request -> request, request -> formats.get(request).get(0).members()));
+            var members = catalog(connection, MEMBER_SQL, requests, counts, As400OperatorTableEvidence::member);
+            var targets = new LinkedHashMap<Target, Request>();
+            for (Request request : requests) {
+                String path = "/QSYS.LIB/" + request.library() + ".LIB/" + request.file() + ".FILE";
+                targets.put(new Target(path, Kind.FILE), request);
+                var observed = members.get(request);
+                if (observed.stream().map(Member::member).distinct().count() != observed.size()
+                        || observed.stream().map(Member::table).distinct().count() != 1) {
+                    throw new As400NativeEvidenceException("Duplicate members or inconsistent SQL table identity");
                 }
-                var objects = objects(connection, targets);
-                for (Request request : batch) {
-                    String member = members.get(request).member();
-                    String path = "/QSYS.LIB/" + request.library() + ".LIB/" + request.file() + ".FILE";
-                    result.add(new Observation(request, new TableId(null, request.library(), members.get(request).table()), member,
-                            objects.get(path), objects.get(path + "/" + member + ".MBR"), formats.get(request)));
+                observed.sort(java.util.Comparator.comparing(Member::member));
+                for (var member : observed) {
+                    targets.put(new Target(path + "/" + member.member() + ".MBR", Kind.MEMBER), request);
                 }
+            }
+            var objects = new LinkedHashMap<String, NativeObject>();
+            var batch = new LinkedHashMap<Target, Request>();
+            for (var target : targets.entrySet()) {
+                batch.put(target.getKey(), target.getValue());
+                if (batch.size() == OBJECT_BATCH_SIZE) {
+                    objects.putAll(objects(connection, batch));
+                    batch.clear();
+                }
+            }
+            if (!batch.isEmpty()) {
+                objects.putAll(objects(connection, batch));
+            }
+            for (Request request : requests) {
+                var observed = members.get(request);
+                var primary = observed.get(0);
+                String path = "/QSYS.LIB/" + request.library() + ".LIB/" + request.file() + ".FILE";
+                Map<String, NativeObject> memberObjects = new java.util.TreeMap<>();
+                observed.forEach(member -> memberObjects.put(member.member(), objects.get(path + "/" + member.member() + ".MBR")));
+                result.add(new Observation(request, new TableId(null, request.library(), primary.table()), primary.member(),
+                        objects.get(path), memberObjects.get(primary.member()), formats.get(request).get(0), memberObjects));
             }
             check(connection);
             return List.copyOf(result);
@@ -162,8 +212,9 @@ final class As400OperatorTableEvidence {
         }
     }
 
-    private <T> Map<Request, T> catalog(Connection connection, String sql, List<Request> requests, CatalogDecode<T> decode) throws SQLException {
-        var result = new LinkedHashMap<Request, T>();
+    private <T> Map<Request, List<T>> catalog(Connection connection, String sql, List<Request> requests, Map<Request, Integer> counts, CatalogDecode<T> decode)
+            throws SQLException {
+        var result = new LinkedHashMap<Request, List<T>>();
         var libraries = requests.stream().collect(Collectors.groupingBy(Request::library, LinkedHashMap::new, Collectors.toList()));
         for (var library : libraries.values()) {
             for (int start = 0; start < library.size(); start += CATALOG_BATCH_SIZE) {
@@ -180,7 +231,12 @@ final class As400OperatorTableEvidence {
                 check(connection);
                 try (var statement = connection.prepareStatement(query)) {
                     statement.setQueryTimeout(limits.queryTimeoutSeconds());
-                    statement.setMaxRows(batch.size() + 1);
+                    int expectedRows = 0;
+                    for (var request : batch) {
+                        expectedRows = Math.addExact(expectedRows, counts.get(request));
+                    }
+                    statement.setMaxRows(Math.addExact(expectedRows, 1));
+                    statement.setFetchSize(Math.min(128, expectedRows + 1));
                     statement.setString(1, batch.get(0).library());
                     for (int i = 0; i < batch.size(); i++) {
                         statement.setString(i + 2, batch.get(i).file());
@@ -194,18 +250,18 @@ final class As400OperatorTableEvidence {
                             check(connection);
                             warning(rows.getWarnings());
                             exact(rows, "SYSTEM_TABLE_SCHEMA", batch.get(0).library());
-                            var request = expected.remove(trim(rows, "SYSTEM_TABLE_NAME"));
-                            if (request == null || result.containsKey(request)) {
+                            var request = expected.get(trim(rows, "SYSTEM_TABLE_NAME"));
+                            if (request == null || result.getOrDefault(request, List.of()).size() >= counts.get(request)) {
                                 throw new As400NativeEvidenceException("Duplicate or foreign native catalog observation");
                             }
-                            result.put(request, decode.read(rows, request));
+                            result.computeIfAbsent(request, ignored -> new ArrayList<>()).add(decode.read(rows, request));
                             warning(rows.getWarnings());
                         }
                         warning(rows.getWarnings());
                     }
                     warning(statement.getWarnings());
                     check(connection);
-                    if (!expected.isEmpty()) {
+                    if (batch.stream().anyMatch(request -> result.getOrDefault(request, List.of()).size() != counts.get(request))) {
                         throw new As400NativeEvidenceException("Required native catalog observation is absent");
                     }
                 }
@@ -227,24 +283,32 @@ final class As400OperatorTableEvidence {
         }
         String value = trim(row, "SYSTEM_TABLE_MEMBER");
         if (!value.matches("[A-Z0-9_#$@]{1,10}")) {
-            throw new As400NativeEvidenceException("Invalid single-member name");
+            throw new As400NativeEvidenceException("Invalid member name");
         }
         return new Member(value, table);
     }
 
     private static Format format(ResultSet row, Request request) throws SQLException {
         exact(row, "NATIVE_TYPE", "PHYSICAL");
-        exact(row, "FILE_TYPE", "DATA");
-        exact(row, "CONTAINS_LOB", "NO");
-        if (!number(row, "NUMBER_MEMBERS").equals(BigInteger.ONE) || !number(row, "NUMBER_RECORD_FORMATS").equals(BigInteger.ONE)) {
-            throw new As400NativeEvidenceException("Exactly one member and record format required");
+        // SYSFILES distinguishes data and source physical files. Both have a
+        // native record format; complete catalog/image validation still applies.
+        if (!List.of("DATA", "SOURCE").contains(trim(row, "FILE_TYPE"))) {
+            throw new As400NativeEvidenceException("Unknown physical file type");
+        }
+        String lob = trim(row, "CONTAINS_LOB");
+        if (!List.of("YES", "NO").contains(lob)) {
+            throw new As400NativeEvidenceException("Unknown LOB layout");
+        }
+        int members = number(row, "NUMBER_MEMBERS").intValueExact();
+        if (members < 1 || members > 32767 || !number(row, "NUMBER_RECORD_FORMATS").equals(BigInteger.ONE)) {
+            throw new As400NativeEvidenceException("Complete member count and exactly one record format required");
         }
         String varying = row.getString("CONTAINS_VARYING_LENGTH");
         if (!"YES".equals(varying) && !"NO".equals(varying)) {
             throw new As400NativeEvidenceException("Unknown varying-length layout");
         }
         return new Format(trim(row, "FORMAT_NAME"), trim(row, "FORMAT_LEVEL_ID"), number(row, "RECORD_LENGTH").intValueExact(),
-                number(row, "NUMBER_FIELDS").intValueExact(), varying.equals("YES"));
+                number(row, "NUMBER_FIELDS").intValueExact(), varying.equals("YES"), members, lob.equals("YES"));
     }
 
     private static NativeObject object(ResultSet row, Request request, Target target) throws SQLException {

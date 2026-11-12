@@ -358,8 +358,13 @@ final class As400OnlineCensusRecovery {
         }
 
         Output(List<As400BindingDefinition> definitions, boolean transactionMetadata) {
+            this(definitions, transactionMetadata, ".*");
+        }
+
+        Output(List<As400BindingDefinition> definitions, boolean transactionMetadata, String included) {
             var raw = Configuration.create().with("topic.prefix", "offline").with("database.dbname", "OFFLINE")
                     .with("database.schema", definitions.get(0).schema().id().schema()).with("skipped.operations", "none")
+                    .with("table.include.list", included)
                     .with("heartbeat.interval.ms", "3600000").with("provide.transaction.metadata", transactionMetadata)
                     .with("event.converting.failure.handling.mode", "fail").build();
             var taskContext = preStart(raw);

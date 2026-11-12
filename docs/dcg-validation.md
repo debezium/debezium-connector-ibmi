@@ -54,7 +54,8 @@ identifies both artifacts and the narrower class-level comparison.
 
 The [performance comparison](dcg-performance-comparison.md) preserves the original
 failed restart results rather than dropping them from the baseline. Measurements
-showed no material slowdown in the exercised workload; they do not establish
+showed no material delivery-delay slowdown in the exercised workload; CPU costs
+and matched-dependency comparisons are recorded below. They do not establish
 statistical equivalence, saturation capacity, many-table performance or multi-day
 leak freedom. Private raw captures and JVM profiles are not repository fixtures
 and must not be published without inspection/redaction.
@@ -62,7 +63,7 @@ and must not be published without inspection/redaction.
 ## Limits and release checks
 
 - Transactional capture remains off by default and qualified only for the
-  documented native layouts, journal/receiver settings and Connect profile.
+  documented native layouts, journal/receiver settings and deployment profiles.
   Unsupported schema changes, missing history, ambiguous identity and unresolved
   transaction/savepoint semantics fail closed.
 - Retention is operator-managed. The connector does not prevent an operator from
@@ -1192,3 +1193,277 @@ Reproduce with `tools/dcg-sustained-probe.py NEW_DIRECTORY DCNCdddd
 `--buffer-storage memory` or `disk` for the enabled profiles. Use a different
 fresh directory and owned library for every run. Preserve the original plugin
 and its matching dependencies when comparing against the baseline.
+
+
+## Member and mixed-journal compatibility — 2026-11-12
+
+The public online path now preserves the original connector's multi-member row
+behavior. Complete file/member bindings are acquired from native metadata, held
+in immutable history and selected by the journal member identity. Output still
+uses the original table topic and keys, and snapshots retain the original
+first-member behavior. This does not claim member-aware output or snapshots.
+
+Two owned mixed-resource fixtures passed with the ordinary packaged plugin:
+ordinary source offsets with disk working storage (10 checks), and source
+transactions with memory working storage (11 checks). Each started with two
+members, activated from real legacy offsets, created a third member while
+streaming, and recovered after worker replacement without another snapshot or
+history append. An index existed before startup; another was created and dropped
+while streaming. Journaled data areas, a data queue and access paths coexisted
+with captured physical files. Access-path start/end did not become row changes
+or relax checks on row journaling.
+
+The final memory run also committed primary-key updates to three members in one
+transaction. All three rows had RRN 1. Each produced its own correct before-image,
+delete key and create key. An unrelated member continued while another table's
+clear was open. The clear and reload appeared after commit. A subsequent
+`CLRPFM` of only one captured member stopped with no table-wide `op=t` and no
+completed-output advancement past the clear. Data topics in this probe have
+three partitions; these assertions do not establish global consumer ordering.
+The separate single-partition ordering tests remain the ordering evidence.
+
+The disk run used plugin ZIP
+`f8c800e37d8680bd334f4e8ce1c1caf6b5b80a186cda6c5c405dcd8068b3973b`.
+The final memory run used
+`e1bab9b952c1729b7e26e408b60f40f15032b8ba3e98af23b00218f88a250db1`.
+All owned libraries, jobs and Kafka deployments were cleaned up and checked.
+Run `tools/dcg-member-compatibility-probe.py NEW_DIRECTORY DCNCdddd eos` or
+`source-offsets` with the contributor-test prerequisites.
+
+Local captured-fixture tests cover complete and interrupted F/JM–D/MA–F/MC
+member association, wrong file/member identities, missing history and replay.
+A controlled interleaving places an existing member's row between F/JM and D/MA:
+its completed W advances, while F pins the association and its history is already
+durable. Fresh runtimes recover using that history in both memory and disk modes.
+An interrupted output callback also reuses history without another native refresh.
+This interleaving is deliberately controlled; it is not presented as a captured
+native crash. Logical-file fixtures preserve IBM's file-type flag while replacing
+private names/identities and removing opaque apply data. They are decoder evidence,
+not startup proof. A contradictory physical clear cannot be ignored as logical
+metadata, and pointer-backed logical creation releases its native handle.
+
+Full Maven verification passed 4,515 Java tests (250 parser, 4,265 connector).
+All 152 Python harness tests, plugin assembly and formatter/import validation
+passed. F/CR PR #114's branch was not changed.
+
+### Repeated performance comparison after member support
+
+All four profiles again delivered exactly 12,300 independently paced row changes,
+including mixed values and update before-images, after two warm-up rounds.
+WARN handling, inherited worker defaults, a 60-second measurement interval and
+approximately 201 offered operations/s were unchanged. Native and local-runtime
+cleanup passed in every profile.
+
+| Profile | Offered operations/s | Median delay | p95 delay | p99 delay | CPU ms/operation | Peak worker RSS |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Original | 201.28 | 5.219 s | 5.295 s | 5.336 s | 0.848 | 455.6 MiB |
+| New, feature disabled | 201.30 | 5.216 s | 5.284 s | 5.318 s | 0.858 | 465.4 MiB |
+| Enabled, memory buffer | 201.25 | 2.992 s | 3.993 s | 4.113 s | 0.899 | 452.5 MiB |
+| Enabled, disk buffer | 201.24 | 2.972 s | 4.016 s | 4.104 s | 1.059 | 445.4 MiB |
+
+Whole-worker CPU was about 1.2%, 6.0% and 24.8% above the original for disabled,
+memory and disk profiles. Delay stayed similar with the feature disabled and
+was lower with either enabled profile at this offered load. These are bounded
+comparisons, not saturation capacity, statistical equivalence, large-catalog
+measurements or a long-duration soak. Disk storage's additional CPU cost is an
+explicit tradeoff; this workload does not establish memory savings at scale.
+
+The timed candidate ZIP is
+`152f9a2099d470ddfddef0272a54d57af0978cf663cf457b7615dd359e0c2395`;
+all three candidate runs used that same immutable distribution. The final member
+restart fix changes only `As400SchemaChange.class` in production bytecode. That
+fix is exercised by the final memory/native and local restart tests above, not
+by this timed binary. The timed workload does not create members. The original
+ZIP and reproduction commands are the same as in the preceding comparison.
+
+### Excluded native LOB/source-file coexistence — 2026-11-12
+
+The original `2e19ad27` plugin accepted selected ordinary-table CDC while an
+excluded CLOB table and a journaled source physical file received insert/update/
+delete operations. The successful control used 6 KB CLOBs so the independent SQL
+journal audit remained within its existing 16 KB bound. A preceding 60 KB control
+also produced the selected rows, but its audit rejected a truncated SQL payload;
+that overall run is retained as failed, not relabeled successful.
+
+The candidate public-plugin runs used 60 KB, NULL and empty CLOB values, acquired
+native identity-only LOB bindings, real legacy offsets and automatic activation.
+Ordinary source offsets with disk buffering and Kafka source transactions with
+memory buffering each passed eight checks. They cover mixed-table commit and
+rollback, unrelated output while a transaction/clear is open, worker replacement
+with durable F/W and unchanged binding history, selected truncate/reload, no
+resnapshot and no excluded data topic. The final source-transaction run also
+includes insert/update/delete on a journaled source physical file. Both fixture
+libraries, native sessions/inquiries and local Kafka resources were cleaned up.
+The source-file control is coexistence evidence, not an exhaustive source-file
+value-conversion qualification.
+
+| Run | Plugin ZIP SHA-256 | Result |
+| --- | --- | --- |
+| Original excluded CLOB/source-file control | `da0cbb3ab5228fbe676520e905b88f36158f4adc0a73a856bd18b4583908339a` | Passed, including bounded independent raw audit and cleanup |
+| Candidate ordinary source offsets, disk | `d253280dddc1df4b548267790490c720c6374c209871594e92d3ce4c05cbe1f6` | Eight checks passed; cleanup passed |
+| Candidate source transactions, memory, source-file coexistence | `f04d01a414bfbb93c79d1755b73e31d4deb065dcd1fe16d395ccae13df14c724` | Eight checks passed; cleanup passed |
+
+A first candidate run failed safely at its first excluded pointer-backed row:
+continuous output selection had discarded the retained LOB capability. Completed
+output did not pass that row; broker evidence and cleanup were retained. The fix
+preserves both LOB capability and the complete member map when creating an
+excluded binding. `As400ExcludedLobTest` now exercises the real continuous runtime
+and fresh immutable history in addition to memory/disk coordinator replay and
+interrupted delivery. It rejects captured/unqualified pointer rows, wrong native
+member identity, minimized images, defaulted null indicators and incomplete or
+changed physical formats before output/checkpoint advancement.
+
+Two owned raw captures established native CLOB descriptor behavior with default
+allocation and `ALLOCATE(1024)`, including NULL/empty values. The sanitized fixture
+retains native thread IDs, flags, lengths, null maps, operation order and distinct
+producer identities; process-local addresses, private names/JIDs and opaque clear
+apply bytes were removed. It is replay evidence, **not startup proof**.
+[IBM's documented LOB journal layout](https://www.ibm.com/docs/en/i/7.5.0?topic=objects-journal-entry-layout-lob-columns)
+places external data behind pointers. The connector does not follow those values.
+Recovery comparison pins operation/source/length/null metadata, explicitly not an
+external-value checksum. Only exact verified excluded bindings may consume it.
+The raw reader releases every returned handle in its retrieving job, including
+budget-deferred entries; release failure cancels that job before progress.
+
+Reproduce with an explicit test configuration and a fresh isolated library:
+
+```sh
+IBMI_TEST_CONFIG=/path/to/ibmi-test.json python tools/dcg-excluded-lob-probe.py NEW_DIRECTORY DCNCdddd source-offsets
+# Use another fresh directory/library for the stricter Kafka contract:
+IBMI_TEST_CONFIG=/path/to/ibmi-test.json python tools/dcg-excluded-lob-probe.py NEW_DIRECTORY DCNCdddd eos
+```
+
+Final local verification passed **4,536 Java tests** (256 parser, 4,280 connector),
+152 Python harness tests, Maven verify/assembly and formatter/import validation.
+The new native entry point also passed Python compilation. Captured LOB/XML value
+support is not claimed: the original CLOB decoder was unimplemented, and its XML
+row decoder returned empty text rather than the document. General historical DDL,
+member-aware topics/keys/snapshots, universal deployment qualification and
+maximum-capacity claims are outside this compatibility evidence.
+
+### Final compatibility performance after member and LOB fixes
+
+All four final runs used separate fresh native libraries, the same mixed-column
+workload, WARN conversion handling, inherited worker defaults, two warm-up rounds
+and 60 seconds of independent paced writes. Each processed 12,300 measured
+changes at approximately 201 operations/second. All seven checks per profile
+passed: exact keys/values/before-images, complete sustained output, no late
+duplicates and resource samples. Native fixtures, sessions and local Kafka
+resources were cleaned up. No other test workload from this thread ran during
+these timed intervals.
+
+| Profile | Median delay | p95 delay | p99 delay | Worker CPU ms/operation | Peak worker RSS |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Original | 5.214 s | 5.296 s | 5.332 s | 0.838 | 418.8 MiB |
+| Candidate, feature disabled | 5.219 s | 5.323 s | 5.390 s | 0.916 | 440.5 MiB |
+| Candidate, memory buffer | 2.975 s | 4.008 s | 4.133 s | 0.918 | 450.8 MiB |
+| Candidate, disk buffer | 3.017 s | 4.045 s | 4.106 s | 1.029 | 443.9 MiB |
+
+The original ZIP is `da0cbb3ab5228fbe676520e905b88f36158f4adc0a73a856bd18b4583908339a`; all three
+candidate profiles use `f04d01a414bfbb93c79d1755b73e31d4deb065dcd1fe16d395ccae13df14c724`. The candidate
+production sources match the final successful native source-transaction run.
+
+Disabled median delay was within 0.1% of the original; whole-worker CPU cost was
+9.3% higher. Memory and disk CPU costs were 9.6% and 22.8% higher,
+respectively. Earlier candidate runs in this report remain separate evidence and
+had smaller disabled-path CPU differences. This is one run per final profile,
+not a statistical equivalence result. RSS includes the whole worker, and this
+small workload is not evidence of disk-spill memory savings. Latency is host SQL
+submission to independent `read_committed` observation, not database commit
+latency. Maximum throughput, large-catalog capacity and multi-day behavior were
+not established by these measurements.
+
+Use `tools/dcg-sustained-probe.py NEW_DIRECTORY DCNCdddd --distribution PLUGIN.zip
+--label LABEL --mode legacy|transactional --buffer-storage memory|disk --rows 250
+--seconds 60 --failure-handling warn --worker-defaults` with a fresh directory and
+library for each profile. Set `IBMI_TEST_CONFIG` and run with the project's build
+JDK. The [comparison chart](dcg-compatibility-comparison.md) uses these final
+measurements; the preceding results and failures are retained for traceability.
+
+### Advisor correction: excluded LOB rows during schema observation
+
+Independent Advisor review accessed the actual repository files and identified
+one remaining interaction: schema refresh validated unrelated rows without the
+retained binding resolver. A valid excluded pointer-backed row arriving during
+the metadata-observation interval therefore rejected an otherwise supported
+ALTER and repeated the failure on restart.
+
+Both native schema-qualification passes now receive the verified bindings from
+the active schema timeline. This allows only the already qualified excluded LOB
+metadata; it does not promote current catalog guesses or permit captured pointer
+values. New memory/disk tests run the continuous runtime through schema history
+and a fresh restart. Missing bindings, captured pointers, changed member identity,
+minimized/defaulted images and incomplete descriptors still reject before the
+new schema can be accepted.
+
+The corrected distribution is
+`2165299640c663344283580c5cf9ed5c9e91d08fed45b0231c280d515f213744`.
+Maven verification passed **4,544 Java tests** (256 parser, 4,288 connector),
+followed by assembly and formatter/import checks. The existing 152 Python
+harness checks remain passing; the extended native entry point also compiles.
+
+The extended packaged-plugin run passed ten checks with ordinary source offsets
+and disk buffering in a fresh isolated library. It retained the preceding mixed
+commit/rollback, clear and replacement assertions, then stopped the reader while
+fixture writers performed a captured-table ALTER, an excluded CLOB insert and a
+new-schema insert. Independent journal evidence verified that order. On resume,
+the real task qualified the entire interval, emitted the new row and durably
+advanced W. A killed/replaced worker reused unchanged schema history and emitted
+only the next new row. Native fixture, connection/inquiry and local Kafka cleanup
+passed. All production sources matched the archived test input.
+
+The preceding attempt passed its first eight checks but IBM i cancelled the
+fixture's ALTER because it lacked the data-loss acknowledgement. That failed run
+and its successful cleanup are retained. The harness now uses the same dedicated
+job-scoped QAQQINI override as the existing schema probe, restores it before close,
+and never changes a shared reply list or QAQQINI table.
+
+The review was focused rather than exhaustive. The correction was verified
+locally and natively after the finding; there was no second independent review.
+The performance candidate above predates only this schema-qualification/binding
+plumbing correction. Its workload does not perform ALTER; it must not be described
+as a timed run of the corrected binary.
+
+### Matched-dependency performance comparison
+
+Final artifact inspection found that the original benchmark package and the
+candidate contained different Debezium core snapshots. The earlier results above
+remain valid package measurements, but their deltas cannot isolate connector
+changes. The unchanged original source at `2e19ad27` was rebuilt using the same
+resolved dependencies as the candidate, without installing or changing source.
+SHA-256 comparison confirms all seven shared third-party/core jars are identical.
+The candidate additionally includes the required history and H2 working-storage
+libraries; those costs remain part of its measurement.
+
+The matched original passed a new isolated native run with the same WARN setting,
+worker defaults, two warm-up rounds and 12,300 changes at approximately 201
+operations/second. Every key, mixed value and before-image matched, there were no
+late duplicates, and fixture/session/Kafka cleanup passed. The chart now compares
+that matched baseline with the three candidate runs above. No other test workload
+from this thread ran during any measured interval.
+
+| Profile | Median delay | p95 delay | p99 delay | Worker CPU ms/operation | Peak worker RSS |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Original, matching shared dependencies | 5.227 s | 5.316 s | 5.376 s | 0.849 | 459.5 MiB |
+| Candidate, feature disabled | 5.219 s | 5.323 s | 5.390 s | 0.916 | 440.5 MiB |
+| Candidate, memory buffer | 2.975 s | 4.008 s | 4.133 s | 0.918 | 450.8 MiB |
+| Candidate, disk buffer | 3.017 s | 4.045 s | 4.106 s | 1.029 | 443.9 MiB |
+
+Disabled median delay differed by about 0.1%; worker CPU was 7.8% higher. Enabled
+memory and disk used 8.1% and 21.1% more CPU than the original, respectively, with
+lower observed delay at this offered load. This does not establish equal CPU
+cost, maximum throughput, large-catalog capacity or statistical equivalence.
+RSS includes the whole worker; this workload does not isolate memory savings
+from spilling large transactions.
+
+The matched original ZIP is
+`087582d28edf821060153f00b533deb916d78b3ec4681841b9c4480898e4f42b`;
+the timed candidate remains
+`f04d01a414bfbb93c79d1755b73e31d4deb065dcd1fe16d395ccae13df14c724`.
+The later corrected ZIP `2165299640c663344283580c5cf9ed5c9e91d08fed45b0231c280d515f213744`
+is verified by the schema/LOB/restart tests above, not by these timings. Only
+schema qualification and its binding-resolver plumbing changed; the timed
+workload contains no ALTER operation. Reproduction uses the same sustained
+runner command above, with a fresh directory/library and an explicitly selected
+immutable distribution for each run. Compare shared dependency hashes as well
+as source revisions before interpreting future results.

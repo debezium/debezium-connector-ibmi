@@ -90,3 +90,29 @@ configuration and cleanup contract. It adds DATE, TIME and TIMESTAMP(0/3/6/9),
 nulls, pre-epoch values, end-of-day TIME, temporal clear/reload commit and rollback,
 and replacement while that clear is open. It preserves the packaged smoke
 assertions. See [validation scope](dcg-validation.md).
+
+`tools/dcg-member-compatibility-probe.py NEW_EVIDENCE_DIRECTORY DCNCdddd eos`
+uses the ordinary packaged connector to exercise legacy rows from two members,
+online activation, a newly added member, index creation/deletion, unrelated-table
+progress during a clear, replacement and safe rejection of a member-only clear.
+The journal also contains a data area, data queue and journaled access paths.
+Use `source-offsets` instead of `eos` to exercise ordinary offsets with disk
+working storage; the EOS case uses memory. Both retain existing table keys and
+topics. Use a distinct absent library and evidence directory for each invocation,
+with the same explicit credentials, local Kafka prerequisites and cleanup checks
+as the native runner above.
+
+For excluded large-object coexistence, use
+`python tools/dcg-excluded-lob-probe.py NEW_DIRECTORY DCNCdddd source-offsets`
+(or `eos`). The fixture owns an excluded CLOB table and captured ordinary tables.
+It checks legacy-to-native activation, 60 KB/NULL/empty values, mixed commit and
+rollback, replacement while a transaction is open, unrelated progress, and
+captured truncate/reload. It also places an excluded LOB row in a captured
+table's observed ALTER interval and restarts from the resulting schema history.
+The DDL acknowledgement override belongs only to the fixture's dedicated job
+and is restored before that session closes. It uses the ordinary packaged plugin;
+external LOB values are never decoded by the candidate. This does not qualify LOB value
+capture. Local `As400ExcludedLobTest` replays sanitized native pointer descriptors
+and controls, including interrupted delivery and invalid binding/row metadata;
+`RawJournalPageTest` checks handle release on the retrieving job and cancellation
+before progress when release fails.

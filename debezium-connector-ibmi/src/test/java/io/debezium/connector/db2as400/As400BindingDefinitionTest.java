@@ -91,6 +91,28 @@ class As400BindingDefinitionTest {
         assertThrows(IllegalArgumentException.class, () -> new As400BindingDefinition(fixed, varying.schema(), varying.codecs()));
     }
 
+    @Test
+    void shouldRecoverEveryMemberWithoutChangingTheOutputSchemaOrSingleMemberEncoding() throws Exception {
+        var single = definition(codecs().findFirst().orElseThrow(), false);
+        String original = As400BindingEncoding.encode(List.of(single), false);
+        assertThat(single.storedTable().attributeWithName("ibmi.binding.version").value()).isEqualTo("1");
+        var members = new java.util.HashMap<>(single.members());
+        members.put("SECOND", "00000000000000000003");
+        var multi = new As400BindingDefinition(single.identity(), single.schema(), single.codecs(), members);
+        members.clear();
+        var recovered = As400BindingEncoding.decode(As400BindingEncoding.encode(List.of(multi), false)).get(0);
+        assertThat(recovered).isEqualTo(multi);
+        assertThat(recovered.outputTable()).isEqualTo(single.outputTable());
+        assertThat(recovered.binding(1024).forMember("SECOND").identity()).isEqualTo(multi.memberIdentity("SECOND"));
+        assertThat(recovered.memberIdentity("SECOND").memberJournalId()).isEqualTo("00000000000000000003");
+        assertThat(As400BindingEncoding.encode(As400BindingEncoding.decode(original), false)).isEqualTo(original);
+        assertThrows(IllegalArgumentException.class, () -> recovered.binding(1024).forMember("UNKNOWN"));
+        var incomplete = multi.storedTable().edit().removeAttribute("ibmi.binding.members.SECOND").create();
+        assertThrows(IllegalArgumentException.class, () -> As400BindingDefinition.restore(incomplete));
+        assertThrows(IllegalArgumentException.class, () -> new As400BindingDefinition(single.identity(), single.schema(), single.codecs(),
+                java.util.Map.of(single.identity().member(), single.identity().memberJournalId(), "SECOND", single.identity().memberJournalId())));
+    }
+
     private static As400BindingDefinition definition(Example example, boolean nullable) {
         Codec codec = example.codec();
         var id = new TableId(null, "LIB", "T");

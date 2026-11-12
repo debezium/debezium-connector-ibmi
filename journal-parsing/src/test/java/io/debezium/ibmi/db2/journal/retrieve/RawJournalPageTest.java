@@ -402,7 +402,11 @@ class RawJournalPageTest {
     }
 
     private static byte[] creation(long sequence) throws Exception {
-        try (var stream = RawJournalPageTest.class.getResourceAsStream("/file-create-pointer.hex")) {
+        return pointer("file-create-pointer", sequence);
+    }
+
+    private static byte[] pointer(String name, long sequence) throws Exception {
+        try (var stream = RawJournalPageTest.class.getResourceAsStream("/" + name + ".hex")) {
             var entry = HexFormat.of().parseHex(new String(stream.readAllBytes(), StandardCharsets.UTF_8).lines()
                     .filter(line -> !line.startsWith("#")).reduce("", String::concat));
             ByteBuffer.wrap(entry).putLong(24, sequence);
@@ -410,17 +414,33 @@ class RawJournalPageTest {
         }
     }
 
-    @Test
-    void shouldReleaseEveryCreationHandleIncludingEntriesDeferredByThePageBudget() throws Exception {
-        var first = creation(75);
-        var second = creation(76);
+    @ParameterizedTest
+    @ValueSource(strings = { "file-create-pointer", "excluded-lob-pointer" })
+    void shouldReleaseEveryHandleIncludingEntriesDeferredByThePageBudget(String kind) throws Exception {
+        var first = pointer(kind, 75);
+        var second = pointer(kind, 76);
         ByteBuffer.wrap(second).putInt(72, 14);
         var released = new ArrayList<Long>();
         var result = RawJournalPage.decode(page(List.of(first, second)), pos(75), pos(100), 1, released::add);
         assertEquals(List.of(13L, 14L), released);
         assertEquals(1, result.entries().size());
         assertEquals(pos(76), result.continuation().orElseThrow());
-        assertEquals("CT", result.entries().get(0).header().getEntryType());
+        assertEquals(kind.equals("file-create-pointer") ? "CT" : "PT", result.entries().get(0).header().getEntryType());
+    }
+
+    @Test
+    void shouldReleaseLogicalCreationHandlesOnlyWhenTheNativeFlagAndAttributeAgree() throws Exception {
+        var entry = creation(75);
+        var header = new io.debezium.ibmi.db2.journal.retrieve.rjne0200.EntryHeaderDecoder(37).decode(entry, 0);
+        int attribute = header.getEntrySpecificDataOffset() + 16 + 124;
+        entry[218] |= 0x04;
+        var released = new ArrayList<Long>();
+        assertThrows(RuntimeException.class, () -> RawJournalPage.decode(page(List.of(entry)), pos(75), pos(100), 1, released::add));
+        assertTrue(released.isEmpty());
+        text(entry, attribute, 10, "LF");
+        var result = RawJournalPage.decode(page(List.of(entry)), pos(75), pos(100), 1, released::add);
+        assertEquals(List.of(13L), released);
+        assertTrue(result.entries().get(0).header().getControlInfo().logicalFile());
     }
 
     @ParameterizedTest
@@ -457,8 +477,11 @@ class RawJournalPageTest {
     }
 
     @ParameterizedTest
-    @ValueSource(strings = { "success", "release-failed", "error-structure", "different-job", "stop-during-release-setup" })
-    void shouldReleaseCreationPointersOnTheRetrievingJobOrCancelWithoutProgress(String scenario) throws Exception {
+    @CsvSource({ "file-create-pointer,success", "file-create-pointer,release-failed", "file-create-pointer,error-structure",
+            "file-create-pointer,different-job", "file-create-pointer,stop-during-release-setup",
+            "excluded-lob-pointer,success", "excluded-lob-pointer,release-failed", "excluded-lob-pointer,error-structure",
+            "excluded-lob-pointer,different-job", "excluded-lob-pointer,stop-during-release-setup" })
+    void shouldReleasePointersOnTheRetrievingJobOrCancelWithoutProgress(String kind, String scenario) throws Exception {
         AS400 transport = mock(AS400.class);
         Job captured = mock(Job.class);
         when(captured.getCodedCharacterSetID()).thenReturn(37);
@@ -470,7 +493,7 @@ class RawJournalPageTest {
         var lifecycle = new JournalReadLifecycle();
         var reader = new RetrieveJournal(new RetrieveConfigBuilder().withAs400(() -> transport)
                 .withJournalInfo(new JournalInfo("JRN", "LIB", false)).build(), mock(JournalInfoRetrieval.class), lifecycle);
-        var response = page(List.of(creation(75)));
+        var response = page(List.of(pointer(kind, 75)));
         var requests = new ArrayList<ProgramParameter[]>();
         try (var connections = mockConstruction(AS400.class);
                 var jobs = mockConstruction(Job.class);

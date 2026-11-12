@@ -18,12 +18,14 @@ import com.ibm.as400.access.AS400Text;
 
 import io.debezium.ibmi.db2.journal.retrieve.FileCreationEntryDecoder;
 import io.debezium.ibmi.db2.journal.retrieve.JournalPosition;
+import io.debezium.ibmi.db2.journal.retrieve.PointerRowEntryDecoder;
 import io.debezium.ibmi.db2.journal.retrieve.RawJournalPage;
 import io.debezium.ibmi.db2.journal.retrieve.rjne0200.EntryHeader;
 import io.debezium.ibmi.db2.journal.retrieve.rjne0200.EntryHeaderDecoder;
 
 /**
- * Content comparison for the bounded SYSBAS, inline, *VARLEN profile.
+ * Content comparison for the bounded SYSBAS, *VARLEN profile. Pointer-backed
+ * creation and excluded-row records compare metadata only, never external data.
  * Raw copies/checksums stay unchanged. Compare documented RJNE0200 sections;
  * receiver information is inherited within an API response, and offsets/padding
  * describe transport placement rather than a changed journal entry.
@@ -51,7 +53,9 @@ final class As400JournalRecordContent {
         var input = ByteBuffer.wrap(raw);
         boolean creation = header.getJournalCode() == 'D' && header.getEntryType().equals("CT");
         byte[] creationMetadata = creation ? FileCreationEntryDecoder.metadata(header, raw, 0) : null;
-        require(input.getInt(0) == 0 && input.getInt(12) == 0 && input.getInt(16) == 0 && (header.getPointerHandle() == 0 || creation),
+        boolean pointerRow = header.getJournalCode() == 'R' && header.getPointerHandle() != 0;
+        byte[] pointerMetadata = pointerRow ? PointerRowEntryDecoder.metadata(header, raw, 0) : null;
+        require(input.getInt(0) == 0 && input.getInt(12) == 0 && input.getInt(16) == 0 && (header.getPointerHandle() == 0 || creation || pointerRow),
                 "Owned inline copy without XA/LUW required");
         require(header.getSequenceNumber().equals(position.offset()), "Entry position differs from native sequence");
         var spans = new ArrayList<Span>();
@@ -95,6 +99,12 @@ final class As400JournalRecordContent {
                 System.arraycopy(creationMetadata, 124, specific, 124, 10);
                 System.arraycopy(creationMetadata, 142, specific, 142, 2);
             }
+            else if (pointerRow) {
+                // These values can only be discarded by a verified excluded LOB
+                // binding. Compare operation/source/length/null metadata, never
+                // job-local addresses or pretend to checksum external values.
+                specific = pointerMetadata;
+            }
         }
         spans.sort(Comparator.comparingInt(Span::start));
         int end = 0;
@@ -108,15 +118,17 @@ final class As400JournalRecordContent {
         var bytes = new ByteArrayOutputStream();
         try (var out = new DataOutputStream(bytes)) {
             // Preserve the established comparison format used by retained evidence.
-            out.writeUTF(creation ? "ibmi-native-creation-metadata-v1" : "fixture-rjne0200-content-v1");
+            out.writeUTF(creation ? "ibmi-native-creation-metadata-v1" : pointerRow ? "ibmi-native-pointer-row-metadata-v1" : "fixture-rjne0200-content-v1");
             out.writeUTF(position.receiver().library());
             out.writeUTF(position.receiver().name());
             // Preserve every fixed source field, including reserved bytes, flags,
             // producer identity, timestamps, JIDs and nested level.
-            if (creation) {
+            if (creation || pointerRow) {
                 byte[] fixed = Arrays.copyOfRange(raw, 24, 236);
                 ByteBuffer.wrap(fixed).putInt(72 - 24, 0);
-                fixed[218 - 24] &= ~0x20;
+                if (creation) {
+                    fixed[218 - 24] &= ~0x20;
+                }
                 out.write(fixed);
             }
             else {

@@ -121,11 +121,15 @@ final class As400NativeBoundaryCollector {
             sample.verifyWindow(pendingBefore.directory(), pendingAfter.directory());
             var scope = scope();
             var bindings = acquisition.collect(scope.files());
+            require(bindings.observations().stream().mapToLong(o -> o.memberObjects().size()).sum() == scope.journaledMembers(),
+                    "Native member inventory differs from independent journal counts");
             require(scope.equals(scope()), "Journal membership changed during binding acquisition");
             var before = As400NativeJournalWindow.collectDirectory(journals, identities);
             As400NativeJournalWindow.requireStableDirectory(pendingAfter, before);
             var targets = bindings.observations().stream()
-                    .map(o -> new As400ShortBoundaryProgram.Target(o.request().library(), o.request().file(), o.member())).toList();
+                    .flatMap(o -> o.memberObjects().keySet().stream()
+                            .map(member -> new As400ShortBoundaryProgram.Target(o.request().library(), o.request().file(), member)))
+                    .toList();
             var program = new As400ShortBoundaryProgram(journal, targets, nonce, digest(bindings.definitions()));
             var completion = pulse.attempt(program);
             if (completion.isEmpty()) {

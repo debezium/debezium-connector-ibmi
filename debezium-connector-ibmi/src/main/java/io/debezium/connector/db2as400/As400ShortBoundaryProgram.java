@@ -49,9 +49,9 @@ record As400ShortBoundaryProgram(JournalReceiver journal, List<Target> targets, 
         name(journal.name());
         targets = List.copyOf(targets);
         require(!targets.isEmpty()
-                && targets.equals(targets.stream().sorted(Comparator.comparing(Target::library).thenComparing(Target::file)).toList())
-                && targets.stream().map(t -> t.library() + "/" + t.file()).distinct().count() == targets.size(),
-                "One ordered single-member scope required");
+                && targets.equals(targets.stream().sorted(Comparator.comparing(Target::library).thenComparing(Target::file).thenComparing(Target::member)).toList())
+                && targets.stream().distinct().count() == targets.size(),
+                "One ordered complete file/member scope required");
         require(nonce != null && nonce.matches("[A-F0-9]{32}") && scopeDigest != null && scopeDigest.matches("[A-F0-9]{64}"),
                 "Fresh attempt and complete scope digest required");
     }

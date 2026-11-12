@@ -648,7 +648,7 @@ final class As400BindingHistory {
         }
         Map<String, String> fingerprint = new TreeMap<>(fields);
         fingerprint.put("tables", encoded);
-        fingerprint.put("policy", policy.fingerprint(definitions.stream().map(As400BindingDefinition::identity).toList()));
+        fingerprint.put("policy", policy.fingerprint(definitions.stream().flatMap(d -> d.identities().stream()).toList()));
         fields.put("fingerprint", "v1:" + As400CaptureFingerprint.hash("ordinary-binding-history-v1", fingerprint));
         return new Manifest(Map.copyOf(fields), definitions, encoded);
     }
@@ -662,7 +662,7 @@ final class As400BindingHistory {
         for (var definition : definitions) {
             require(ids.add(definition.identity().tableId())
                     && physical.add(definition.identity().tableId().schema() + "/" + definition.identity().physicalFile()), "Duplicate binding");
-            require(journalIds.add(definition.identity().fileJournalId()) && journalIds.add(definition.identity().memberJournalId()),
+            require(journalIds.add(definition.identity().fileJournalId()) && definition.members().values().stream().allMatch(journalIds::add),
                     "Captured native journal identities must be distinct");
         }
         return definitions;
@@ -717,7 +717,7 @@ final class As400BindingHistory {
         fields.put("binding.encoding", "2");
         fields.put("bindings.count", Integer.toString(definitions.size()));
         fields.put("bindings.hash", tables);
-        var identities = definitions.stream().map(As400BindingDefinition::identity).toList();
+        var identities = definitions.stream().flatMap(d -> d.identities().stream()).toList();
         fields.put("policy.hash", version.equals("8") ? policy.selectableFingerprint(identities)
                 : version.equals("7") ? policy.recoveryFingerprint(identities) : policy.fingerprint(identities));
         fields.put("fingerprint", "v2:" + As400CaptureFingerprint.hash("ordinary-binding-history-v2", fields));

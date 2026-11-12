@@ -109,7 +109,7 @@ final class As400NativeHandoffHistory implements AutoCloseable {
                 "Native row history differs from complete boundary audit");
         String fingerprint = "v1:" + As400CaptureFingerprint.hash("online-handoff-candidate-v1", java.util.Map.of(
                 "bindings", As400NativeBoundaryCollector.digest(candidate.bindings().definitions()),
-                "policy", policy.fingerprint(candidate.bindings().definitions().stream().map(As400BindingDefinition::identity).toList()),
+                "policy", policy.fingerprint(candidate.bindings().definitions().stream().flatMap(d -> d.identities().stream()).toList()),
                 "journal", rows.journalToken(), "origin", from.offset().toString(), "receiver", rows.receiverTokens().get(from.receiver())));
         var evidence = new As400HandoffReplay.Evidence(entries, candidate.bindings().definitions(), controls.order(), rows.journalToken(), fingerprint,
                 from, from, controls.inventory().openAtLower().keySet(), policy.sourcePartition(), work);

@@ -622,7 +622,7 @@ class Experiment:
     def java_command(self, entrypoint, *arguments):
         cp = (ROOT / "debezium-connector-ibmi/target/connect-probe-classpath.txt").read_text().strip()
         cp = ":".join([str(ROOT / "debezium-connector-ibmi/target/test-classes"), str(ROOT / "debezium-connector-ibmi/target/classes"),
-                       str(ROOT / "journal-parsing/target/classes"), str(ROOT / "jt400/target/classes"), cp])
+                       str(ROOT / "journal-parsing/target/classes"), str(ROOT / "jt400-override-ccsid/target/classes"), cp])
         java = shutil.which("java")
         if not java:
             raise ValueError("Run through mise exec java@temurin-21")

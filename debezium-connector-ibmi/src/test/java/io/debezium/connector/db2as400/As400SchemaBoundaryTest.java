@@ -70,16 +70,45 @@ class As400SchemaBoundaryTest {
         final Configuration config;
         final As400Checkpoint initial;
         final As400SchemaChange change;
+        final As400BindingDefinition excludedLob;
+        final long observedThrough;
         int refreshes;
 
         SchemaFixture() throws Exception {
+            this(false);
+        }
+
+        SchemaFixture(boolean withExcludedLob) throws Exception {
             var json = fixture();
-            before = As400OnlineFenceEvidence.validateOffLock(json.path("before")).tables().definitions();
+            before = new ArrayList<>(As400OnlineFenceEvidence.validateOffLock(json.path("before")).tables().definitions());
             oldB = before.stream().filter(d -> d.identity().physicalFile().equals("B")).findFirst().orElseThrow();
             newB = As400OnlineFenceEvidence.validateOffLock(json.path("changed")).tables().definitions().stream()
                     .filter(d -> d.identity().physicalFile().equals("B")).findFirst().orElseThrow();
-            captured = entries(json).stream().map(entry -> new RawJournalPage.Entry(entry.position(), new EntryHeaderDecoder().decode(entry.bytes(), 0), entry.bytes()))
-                    .toList();
+            captured = new ArrayList<>(entries(json).stream()
+                    .map(entry -> new RawJournalPage.Entry(entry.position(), new EntryHeaderDecoder().decode(entry.bytes(), 0), entry.bytes())).toList());
+            observedThrough = withExcludedLob ? 62 : 61;
+            if (withExcludedLob) {
+                try (var input = getClass().getResourceAsStream("/native-transactions/excluded-lob.json")) {
+                    var lob = JSON.readTree(input);
+                    var identity = lob.path("excluded");
+                    var schema = oldB.identity().tableId().schema();
+                    excludedLob = As400BindingDefinition.excluded(new As400TransactionBuffer.TableIdentity(
+                            new io.debezium.relational.TableId(oldB.identity().tableId().catalog(), schema, "X"), "X", "X",
+                            identity.path("file_jid").asText(), identity.path("member_jid").asText(), identity.path("format").asText()), true);
+                    before.add(excludedLob);
+                    // Controlled interleaving: a captured native pointer row
+                    // arrives during metadata observation, after B's ALTER.
+                    // Do not include the original fixture's second ALTER cycle.
+                    captured.removeIf(entry -> entry.position().offset().longValueExact() > 61);
+                    byte[] raw = Base64.getDecoder().decode(lob.path("entries").get(0).path("raw").asText());
+                    java.nio.ByteBuffer.wrap(raw).putLong(24, observedThrough);
+                    new com.ibm.as400.access.AS400Text(10, 37).toBytes(schema, raw, 167);
+                    captured.add(new RawJournalPage.Entry(position(observedThrough), new EntryHeaderDecoder(37).decode(raw, 0), raw));
+                }
+            }
+            else {
+                excludedLob = null;
+            }
             var nativeWindow = As400OnlineNativeEvidence.restore(json.path("capture").path("native_identity_evidence"));
             journal = nativeWindow.journalToken();
             var ranges = new LinkedHashMap<JournalReceiver, As400JournalOrder.Range>();
@@ -97,7 +126,13 @@ class As400SchemaBoundaryTest {
                     Map.of("offset.event_sequence", "47", "offset.receiver", baseline.receiver().name(), "offset.receiver_library", baseline.receiver().library(),
                             "offset.processed", "true", "snapshot_completed", "true"));
             initial = As400Checkpoint.afterVerifiedBoundary(journal, selected.fingerprint(), baseline, order.incarnation(baseline));
-            change = As400SchemaChange.qualify(oldB, newB, range(52, 61), order, position(61));
+            change = As400SchemaChange.qualify(oldB, newB, range(52, observedThrough), order, position(61), bindings());
+        }
+
+        As400SourceNormalizer.TableResolver bindings() {
+            return (file, library) -> before.stream()
+                    .filter(definition -> definition.identity().physicalFile().equals(file) && definition.identity().tableId().schema().equals(library))
+                    .findFirst().orElseThrow().binding(65536);
         }
 
         JournalPosition position(long sequence) {
@@ -123,7 +158,7 @@ class As400SchemaBoundaryTest {
             java.nio.ByteBuffer.wrap(start).putLong(24, 49).putLong(40, 9999).putLong(64, 49);
             var values = new ArrayList<RawJournalPage.Entry>();
             values.add(new RawJournalPage.Entry(position(49), new EntryHeaderDecoder().decode(start, 0), start));
-            values.addAll(range(50, 61));
+            values.addAll(range(50, observedThrough));
             return values;
         }
 
@@ -135,15 +170,16 @@ class As400SchemaBoundaryTest {
                     var rows = withUnrelatedOpenTransaction().stream().filter(entry -> scan.isPresent()
                             ? order.compare(entry.position(), scan.orElseThrow().position()) > 0
                             : order.compare(entry.position(), checkpoint.replayFrom()) >= (checkpoint.replayInclusive() ? 0 : 1)).toList();
-                    return new As400OperatorCutReader.Cut(checkpoint, order, position(61), rows, List.of(), Optional.of(restored));
+                    return new As400OperatorCutReader.Cut(checkpoint, order, position(observedThrough), rows, List.of(), Optional.of(restored));
                 }
 
                 @Override
-                public As400SchemaChange schemaChange(As400BindingDefinition old, RawJournalPage.Entry opening) {
+                public As400SchemaChange schemaChange(As400BindingDefinition old, RawJournalPage.Entry opening, As400SourceNormalizer.TableResolver verifiedBindings)
+                        throws Exception {
                     refreshes++;
                     assertThat(old).isEqualTo(oldB);
                     assertThat(opening.position()).isEqualTo(position(52));
-                    return change;
+                    return As400SchemaChange.qualify(oldB, newB, range(52, observedThrough), order, position(61), verifiedBindings);
                 }
             };
             var limits = new As400ContinuousRuntime.Limits(new As400TransactionBuffer.Limits(16, 1000, 128, 1_000_000),
@@ -152,6 +188,59 @@ class As400SchemaBoundaryTest {
             return new As400ContinuousRuntime(checkpoint.toOffset(), restored, input, output.dispatcher, sink, policy.sourcePartition(), () -> {
             }, limits, output.schemas::refresh);
         }
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = { false, true })
+    void shouldRefreshAndRestartWhenVerifiedExcludedLobRowsArriveDuringMetadataObservation(boolean disk) throws Exception {
+        var f = new SchemaFixture(true);
+        var saved = f.initial;
+        for (int restart = 0; restart < 2; restart++) {
+            var history = f.recover(saved);
+            var records = new ArrayList<SourceRecord>();
+            try (var output = new As400OnlineCensusRecovery.Output(history.definitions(), false, ".*\\.B");
+                    var runtime = f.runtime(saved, history, output, records::add, disk)) {
+                var progress = runtime.poll(saved.toOffset());
+                var data = records.stream().filter(record -> record.value() instanceof Struct value && value.schema().field("op") != null).toList();
+                assertThat(data).hasSize(restart == 0 ? 1 : 0);
+                saved = As400Checkpoint.fromOffset(progress.checkpoint(), f.journal, f.initial.captureFingerprint());
+                assertThat(saved.completedThrough()).isEqualTo(f.position(62));
+            }
+        }
+        assertThat(f.refreshes).isEqualTo(1);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = { "missing-binding", "captured", "member-jid", "minimized", "defaulted", "truncated" })
+    void shouldRejectUnqualifiedInterleavedPointersBeforeAcceptingSchemaHistory(String fault) throws Exception {
+        var f = new SchemaFixture(true);
+        var records = new ArrayList<>(f.range(52, 62));
+        var original = records.remove(records.size() - 1);
+        byte[] raw = original.data();
+        switch (fault) {
+            case "member-jid" -> raw[206] ^= 1;
+            case "minimized" -> raw[218] |= 0x08;
+            case "defaulted" -> raw[original.header().getNullValueOffest() + 4] = (byte) 0xf9;
+            case "truncated" -> raw = java.util.Arrays.copyOf(raw, raw.length - 1);
+            default -> {
+            }
+        }
+        records.add(new RawJournalPage.Entry(original.position(), new EntryHeaderDecoder(37).decode(raw, 0), raw));
+        As400SourceNormalizer.TableResolver bindings = (file, library) -> {
+            var binding = f.bindings().resolve(file, library);
+            return fault.equals("captured") && file.equals("X")
+                    ? new As400SourceNormalizer.TableBinding(binding.identity(), f.oldB.binding(65536).decoder())
+                    : binding;
+        };
+        assertThatThrownBy(() -> {
+            if (fault.equals("missing-binding")) {
+                As400SchemaChange.qualify(f.oldB, f.newB, records, f.order, f.position(61));
+            }
+            else {
+                As400SchemaChange.qualify(f.oldB, f.newB, records, f.order, f.position(61), bindings);
+            }
+        }).isInstanceOf(Exception.class);
+        assertThat(f.recover(f.initial).definitions()).contains(f.oldB).doesNotContain(f.newB);
     }
 
     @ParameterizedTest

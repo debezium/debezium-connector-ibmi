@@ -121,7 +121,13 @@ with these online-specific differences:
   receiver still needed for replay. The setting cannot prevent manual history
   deletion. Older captured journal observations alone are not retention evidence.
 - The current online scope is one active local journal in the system/basic ASP namespace (numeric pools 1–32; live qualification used pool 1) with
-  single-member physical files. There is no fixed connector file-count ceiling:
+  physical files. Data and source files must pass the same identity and format
+  checks. Ordinary rows from multiple members retain the existing
+  shared table topic and key format; complete member identities are retained in
+  binding history. A captured member-only clear still rejects because it cannot
+  safely erase the combined table output. Logical files/indexes, data areas,
+  queues and access paths may share the journal; they are not row-capture tables.
+  There is no fixed connector file-count ceiling:
   independent native counts bound the temporary inventory and JDBC read, which
   must agree before and after discovery. Native allocation commands contain at
   most 50 files each. Larger scopes preload bounded command records into a
@@ -152,11 +158,16 @@ with these online-specific differences:
   allowing standard selection changes at restart. Excluded files retain native
   file/member identities, format shape and transaction effects without decoding
   output values. Unsupported or inaccessible excluded layouts remain identity-only.
-  They must still satisfy the single-member, complete-image and journal-identity
-  checks. Expanding capture selection cannot promote identity-only history into
-  a row schema. LOB/XML storage and unsupported physical layouts remain rejected,
-  including on excluded files; an identity-only binding still needs an unambiguous
-  complete journal image. Catalog reads use bounded batches without caching.
+  They must still satisfy the complete-member-inventory, complete-image and
+  journal-identity checks. Expanding capture selection cannot promote identity-only history into
+  a row schema. Excluded native LOB files retain a separate identity-only binding:
+  bounded pointer descriptors, null maps and transaction effects are validated,
+  but external values are never read or published. Every returned pointer handle
+  is released in the retrieving native job, including entries deferred to a later
+  page. Cleanup failure prevents progress and cancels that job. Captured LOB/XML
+  values remain unsupported; an excluded binding cannot become a captured schema
+  just by changing a filter. Minimized/defaulted or ambiguous row metadata still
+  rejects. Catalog reads use bounded batches without caching.
   Object-identity queries group at most 16 exact file/member paths; this bounds
   each SQL request, not the total file inventory. Missing, duplicate, foreign,
   mismatched or incomplete observations reject the whole acquisition. The full

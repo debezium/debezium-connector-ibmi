@@ -492,6 +492,39 @@ class As400TransactionBufferTest {
     }
 
     @ParameterizedTest
+    @CsvSource({ "false,false", "true,false", "false,true", "true,true" })
+    void shouldRetainEveryPendingMemberAndReleaseAllBindingsOnlyAfterTheirCyclesEnd(boolean disk, boolean changeWhilePending,
+                                                                                    @org.junit.jupiter.api.io.TempDir java.nio.file.Path directory)
+            throws Exception {
+        try (var store = disk ? new As400SpillStore(new As400SpillStore.Settings(directory, 1, 16, 8 * 1024 * 1024)) : null) {
+            buffer = new As400TransactionBuffer("LIB/JRN/incarnation1", new Limits(10, 100, 20, 1024), store);
+            var second = new TableIdentity(TABLE.tableId(), TABLE.physicalFile(), "SECOND", TABLE.fileJournalId(), "00000000000000000003", TABLE.recordFormat());
+            var changed = new TableIdentity(TABLE.tableId(), TABLE.physicalFile(), "SECOND", TABLE.fileJournalId(), "00000000000000000004", TABLE.recordFormat());
+            control("SC", A);
+            buffer.insert(source(next(), A), RECORD, bytes(1));
+            buffer.insert(source(next(), A), record(second, "JOB/THREAD", 1), bytes(2));
+            control("SC", B);
+            buffer.insert(source(next(), B), record(second, "JOB/THREAD", 2), bytes(3));
+            buffer.completeBatch(commit(B));
+            if (changeWhilePending) {
+                assertThrows(BufferException.class, () -> buffer.insert(source(next(), A), record(changed, "JOB/THREAD", 3), bytes(4)));
+                assertStopped();
+            }
+            else {
+                buffer.completeBatch(commit(A));
+                assertEmpty();
+                control("SC", A);
+                buffer.insert(source(next(), A), record(changed, "JOB/THREAD", 3), bytes(4));
+                var batch = commit(A);
+                assertThat(batch.changes()).singleElement().satisfies(change -> assertThat(change.table()).isEqualTo(changed));
+                buffer.completeBatch(batch);
+                assertEmpty();
+            }
+            buffer.close();
+        }
+    }
+
+    @ParameterizedTest
     @ValueSource(strings = { "BC", "EC" })
     void lifecycleControlsCannotResolveOrReleaseActiveCycles(String type) throws Exception {
         JournalPosition start = control("SC", A);

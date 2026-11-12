@@ -45,7 +45,9 @@ final class As400ContinuousRuntime implements AutoCloseable {
     interface Intervals {
         As400OperatorCutReader.Cut read(Map<String, ?> durable, Optional<RawJournalPage.Entry> scan) throws Exception;
 
-        default As400SchemaChange schemaChange(As400BindingDefinition before, RawJournalPage.Entry opening) throws Exception {
+        default As400SchemaChange schemaChange(As400BindingDefinition before, RawJournalPage.Entry opening,
+                                               As400SourceNormalizer.TableResolver verifiedBindings)
+                throws Exception {
             throw new IllegalArgumentException("This source has no qualified current-definition refresh");
         }
     }
@@ -246,7 +248,7 @@ final class As400ContinuousRuntime implements AutoCloseable {
             public As400SourceNormalizer.TableBinding resolve(String file, String library) throws Exception {
                 var binding = retained.resolve(file, library);
                 return dispatcher.needsValues(binding.identity().tableId()) ? binding
-                        : new As400SourceNormalizer.TableBinding(binding.identity(), null, false, true);
+                        : new As400SourceNormalizer.TableBinding(binding.identity(), null, false, true, binding.members(), binding.excludedLob());
             }
 
             @Override

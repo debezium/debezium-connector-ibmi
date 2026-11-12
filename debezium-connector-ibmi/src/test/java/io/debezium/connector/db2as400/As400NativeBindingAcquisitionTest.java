@@ -211,6 +211,26 @@ class As400NativeBindingAcquisitionTest {
     }
 
     @Test
+    void shouldRetainExcludedLobIdentityWithoutEnablingLobValueCapture() throws Exception {
+        var f = new Fixture();
+        var old = f.observation;
+        var shape = old.format();
+        var lob = new Observation(old.request(), old.table(), old.member(), old.fileObject(), old.memberObject(),
+                new Format(shape.name(), shape.level(), shape.recordBytes(), shape.fields(), shape.varying(), 1, true));
+        when(f.tables.collect(anyList())).thenReturn(List.of(lob));
+        assertThrows(SQLException.class, f::acquire);
+        var excluded = new As400NativeBindingAcquisition(() -> f.connection, f.tables, new Limits(4, 5), false, table -> false)
+                .collect(List.of(lob.request())).definitions().get(0);
+        assertThat(excluded.excluded()).isTrue();
+        assertThat(excluded.identity()).isEqualTo(lob.tableIdentity());
+        assertThat(excluded.schema().columns()).isEmpty();
+        var restored = As400BindingDefinition.restore(excluded.storedTable());
+        assertThat(restored).isEqualTo(excluded);
+        assertThat(restored.binding(65536).excludedLob()).isTrue();
+        verify(f.connection, never()).prepareStatement(anyString());
+    }
+
+    @Test
     void shouldRetainNativeIdentitiesWithoutAcquiringExcludedColumnLayouts() throws Exception {
         var f = new Fixture();
         f.columns.get(0).put("DATA_TYPE", "GRAPHIC");

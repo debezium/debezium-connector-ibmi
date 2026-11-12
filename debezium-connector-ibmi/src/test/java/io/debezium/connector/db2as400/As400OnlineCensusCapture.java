@@ -9,7 +9,6 @@ import java.math.BigInteger;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.Connection;
-import java.sql.DriverManager;
 import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.HexFormat;
@@ -383,7 +382,9 @@ public final class As400OnlineCensusCapture {
         jdbc.setProperty("socket timeout", "15000");
         jdbc.setProperty("thread used", "false");
         jdbc.setProperty("lazy close", "false");
-        Connection connection = DriverManager.getConnection("jdbc:as400://" + credentials.getProperty("database.hostname"), jdbc);
+        // Match the native runtime; DriverManager can select the legacy CCSID wrapper
+        // whose metadata descriptor omits fields required by native acquisition.
+        Connection connection = new com.ibm.as400.access.AS400JDBCDriver().connect("jdbc:as400://" + credentials.getProperty("database.hostname"), jdbc);
         try {
             connection.setTransactionIsolation(Connection.TRANSACTION_NONE);
             connection.setReadOnly(readOnly);

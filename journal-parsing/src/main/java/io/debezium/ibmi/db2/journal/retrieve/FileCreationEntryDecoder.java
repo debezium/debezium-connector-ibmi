@@ -30,12 +30,13 @@ public final class FileCreationEntryDecoder {
         require(file || header.getJournalCode() == 'F' && header.getEntryType().equals("MC"), "Expected native file/member creation");
         var control = header.getControlInfo();
         var info = header.getRecordInfo();
+        boolean logical = control.logicalFile();
         boolean pointers = header.getPointerHandle() != 0;
         require(!pointers || file, "Pointer-backed member creation is unqualified");
         require(header.getCommitCycle().signum() == 0 && control.nestedCommitLevel() == 0
                 && !control.hasTransactionIdentifier() && !control.hasLogicalUnitOfWork()
-                && control.flags() == (pointers ? 0x20 : 0) && control.indicatorFlag() == '0'
-                && info.objectNameIndicator() == '1' && info.objectType().equals(file ? "*FILE" : "*QDDS"),
+                && control.flags() == ((pointers ? 0x20 : 0) | (logical ? 0x04 : 0)) && control.indicatorFlag() == '0'
+                && info.objectNameIndicator() == '1' && info.objectType().equals(file || logical ? "*FILE" : "*QDDS"),
                 "Unsupported creation context or incomplete metadata");
         int at = Math.addExact(offset, header.getEntrySpecificDataOffset());
         int end = Math.addExact(offset, header.getEndOffset());
@@ -52,13 +53,14 @@ public final class FileCreationEntryDecoder {
         var name = new AS400Text(10, RawJournalPage.METADATA_CCSID);
         require(name.toObject(metadata, 0).toString().trim().equals(header.getFile())
                 && name.toObject(metadata, 10).toString().trim().equals(header.getLibrary())
-                && name.toObject(metadata, 20).toString().trim().equals(header.getMember())
+                && (logical && !file ? header.getMember().isEmpty() && !name.toObject(metadata, 20).toString().isBlank()
+                        : name.toObject(metadata, 20).toString().trim().equals(header.getMember()))
                 && new AS400Text(30, RawJournalPage.METADATA_CCSID).toObject(metadata, 30).toString().isBlank(),
                 "Creation payload identity differs from its header");
         require(new AS400Text(1, RawJournalPage.METADATA_CCSID).toObject(metadata, 108).equals("9")
-                && name.toObject(metadata, 124).toString().trim().equals("PF")
+                && name.toObject(metadata, 124).toString().trim().equals(logical ? "LF" : "PF")
                 && (!file || new AS400Text(1, RawJournalPage.METADATA_CCSID).toObject(metadata, 142).equals("0")),
-                "Creation is not an ordinary logged physical file/member");
+                "Creation does not match its native file type or logging profile");
         require(!pointers || ByteBuffer.wrap(metadata).getInt(72) > 0, "Pointer-backed creation has no apply image length");
         return metadata;
     }
