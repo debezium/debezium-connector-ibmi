@@ -448,6 +448,54 @@ class As400SourceNormalizerTest {
         fails(input);
     }
 
+    @ParameterizedTest
+    @ValueSource(longs = { 0, 10 })
+    void shouldPairInterleavedUpdatesByMemberWithoutChangingTheTableIdentity(long cycle) throws Exception {
+        var binding = new TableBinding(table, decoder, false, false, java.util.Map.of(table.member(), table.memberJournalId(), "SECOND", "00000000000000000003"));
+        var autocommit = new As400AutocommitBuffer("LIB/JRN/incarnation", new Limits(10, 100, 20, 4096), buffer::usage);
+        normalizer = new As400SourceNormalizer(buffer, (file, library) -> binding, 1024, (source, control) -> SavepointRollback.UNRESOLVED, autocommit);
+        if (cycle != 0) {
+            accept(entry('C', "SC", cycle, new byte[0]));
+        }
+        accept(row("UB", cycle, 1));
+        accept(inMember(row("UB", cycle, 20), "SECOND", "00000000000000000003"));
+        var changes = new java.util.ArrayList<Change>();
+        for (var input : java.util.List.of(inMember(row("UP", cycle, 21), "SECOND", "00000000000000000003"), row("UP", cycle, 2))) {
+            accept(input).ifPresent(batch -> {
+                changes.addAll(batch.changes());
+                autocommit.complete(batch);
+            });
+        }
+        if (cycle != 0) {
+            var batch = accept(entry('C', "CM", cycle, new byte[0])).orElseThrow();
+            changes.addAll(batch.changes());
+            buffer.completeBatch(batch);
+        }
+        assertThat(changes).hasSize(2).allSatisfy(change -> {
+            assertThat(change.operation()).isEqualTo(Operation.UPDATE);
+            assertThat(change.table().tableId()).isEqualTo(table.tableId());
+        });
+        assertThat(changes).extracting(change -> change.before().values()[0]).containsExactly(20, 1);
+        assertThat(changes).extracting(change -> change.after().values()[0]).containsExactly(21, 2);
+        assertThat(changes).extracting(change -> change.table().member()).containsExactly("SECOND", "TEST");
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = { "wrong-jid", "unknown-member", "clear" })
+    void shouldRejectUnboundMembersAndWholeTableClearsForAMultiMemberFile(String fault) throws Exception {
+        var binding = new TableBinding(table, decoder, false, false, java.util.Map.of(table.member(), table.memberJournalId(), "SECOND", "00000000000000000003"));
+        normalizer = new As400SourceNormalizer(buffer, (file, library) -> binding, 1024);
+        accept(entry('C', "SC", 10, new byte[0]));
+        Entry input = fault.equals("clear") ? clear('8') : inMember(row("PT", 10, 1), fault.equals("unknown-member") ? "UNKNOWN" : "SECOND", table.memberJournalId());
+        fails(input);
+    }
+
+    private Entry inMember(Entry entry, String member, String jid) {
+        text(entry.bytes(), 177, 10, member);
+        System.arraycopy(HexFormat.of().parseHex(jid), 0, entry.bytes(), OFFSET + 197, 10);
+        return entry;
+    }
+
     private void fails(Entry entry) throws Exception {
         assertThrows(NormalizationException.class, () -> accept(entry));
         assertThrows(As400TransactionBuffer.BufferException.class, buffer::pendingBatch);

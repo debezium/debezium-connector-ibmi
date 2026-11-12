@@ -60,6 +60,24 @@ class As400BindingHistoryTest {
     }
 
     @Test
+    void shouldRecoverEveryMemberAndRejectChangedSecondaryMemberHistory() throws Exception {
+        var fixture = new Fixture(directory);
+        var definition = fixture.definitions.get(0);
+        var members = new java.util.TreeMap<>(definition.members());
+        members.put("SECOND", "00000000000000000009");
+        fixture.definitions.set(0, new As400BindingDefinition(definition.identity(), definition.schema(), definition.codecs(), members));
+        var saved = fixture.initialize();
+        var recovered = new Fixture(directory).history().recover(saved, fixture.journalIdentity, Fixture.POLICY);
+        var binding = recovered.resolver(1024).resolve(definition.identity().physicalFile(), definition.identity().tableId().schema(), "SECOND");
+        assertThat(binding.identity().member()).isEqualTo("SECOND");
+        assertThat(binding.identity().tableId()).isEqualTo(definition.identity().tableId());
+        assertThat(binding.identity().memberJournalId()).isEqualTo("00000000000000000009");
+        var original = Files.readString(fixture.file);
+        Files.writeString(fixture.file, original.replace("00000000000000000009", "0000000000000000000a"));
+        assertThrows(Exception.class, () -> new Fixture(directory).history().recover(saved, fixture.journalIdentity, Fixture.POLICY));
+    }
+
+    @Test
     void freshHistoryAndReaderInstancesPublishOtherTableBeforeNativeClearTerminal() throws Exception {
         Fixture f = new Fixture(directory);
         Map<String, String> saved = f.initialize();

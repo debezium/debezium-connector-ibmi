@@ -24,7 +24,7 @@ final class As400SchemaTimeline implements As400SourceNormalizer.TableResolver {
     }
 
     interface Refresh {
-        As400SchemaChange collect(As400BindingDefinition before, RawJournalPage.Entry opening) throws Exception;
+        As400SchemaChange collect(As400BindingDefinition before, RawJournalPage.Entry opening, As400SourceNormalizer.TableResolver verifiedBindings) throws Exception;
     }
 
     private static final class Pending {
@@ -80,8 +80,9 @@ final class As400SchemaTimeline implements As400SourceNormalizer.TableResolver {
 
     void before(RawJournalPage.Entry entry) throws Exception {
         creationRecord = null;
-        if (As400SchemaChange.isOpening(entry)) {
-            String key = entry.header().getLibrary() + "/" + entry.header().getFile();
+        String key = entry.header().getLibrary() + "/" + entry.header().getFile();
+        boolean addingMember = !pending.containsKey(key) && As400MemberCreation.opening(definitions.get(key), entry);
+        if (As400SchemaChange.isOpening(entry) || addingMember) {
             require(!pending.containsKey(key), "Overlapping schema changes for one table");
             var before = definitions.get(key);
             boolean creation = entry.header().getJournalCode() == 'D';
@@ -91,7 +92,7 @@ final class As400SchemaTimeline implements As400SourceNormalizer.TableResolver {
             if (saved == null) {
                 require(order.compare(entry.position(), loaded.completedThrough()) > 0,
                         "Schema history is missing from an already completed prefix");
-                change = refresh.collect(before, entry);
+                change = refresh.collect(before, entry, this);
             }
             else {
                 change = saved.change();
@@ -99,7 +100,7 @@ final class As400SchemaTimeline implements As400SourceNormalizer.TableResolver {
             require(Objects.equals(change.before(), before) && change.start().equals(entry.position()), "Schema refresh does not extend the active definition");
             change.verifyRecord(entry, order);
             pending.put(key, new Pending(change));
-            if (change.before() == null) {
+            if (change.creationLifecycle()) {
                 creationDependencies.put(change.start(), change.commit());
             }
         }
@@ -108,11 +109,11 @@ final class As400SchemaTimeline implements As400SourceNormalizer.TableResolver {
             var value = iterator.next();
             if (value.change.records().stream().anyMatch(mark -> mark.position().equals(entry.position()))) {
                 value.change.verifyRecord(entry, order);
-                if (value.change.before() == null) {
+                if (value.change.creationLifecycle()) {
                     creationRecord = entry.position();
                 }
             }
-            if (value.change.before() == null && value.change.change().equals(entry.position())) {
+            if (value.change.creationLifecycle() && value.change.change().equals(entry.position())) {
                 apply(value, entry.position());
             }
             if (value.change.commit().equals(entry.position())) {

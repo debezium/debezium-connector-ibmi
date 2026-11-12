@@ -28,7 +28,8 @@ final class As400FileCreation {
         require(!entries.isEmpty(), "Creation requires its complete observed journal interval");
         var opening = entries.get(0);
         var first = new EntryHeaderDecoder(RawJournalPage.METADATA_CCSID).decode(opening.data(), 0);
-        require(first.getJournalCode() == 'D' && first.getEntryType().equals("CT"), "Creation requires D/CT");
+        require(first.getJournalCode() == 'D' && first.getEntryType().equals("CT") && !first.getControlInfo().logicalFile(),
+                "Physical-file creation requires a physical D/CT");
         FileCreationEntryDecoder.metadata(first, opening.data(), 0);
         String fileJid = first.getRecordInfo().objectJournalId();
         require(As400TransactionBuffer.TableIdentity.validJournalId(fileJid), "Creation lacks its physical-file identity");

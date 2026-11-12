@@ -38,6 +38,7 @@ final class As400TransactionBuffer implements AutoCloseable {
     private final Limits limits;
     private final Map<BigInteger, Cycle> cycles;
     private final Map<TableId, TableUse> tableUses;
+    private final Map<String, TableUse> memberUses;
     private final Map<TableId, BigInteger> clearOwners;
     private final As400SpillStore spill;
     private JournalPosition lastPosition;
@@ -73,12 +74,12 @@ final class As400TransactionBuffer implements AutoCloseable {
                             cycle.compensating = in.readBoolean();
                             return cycle;
                         }));
-        tableUses = spill == null ? new LinkedHashMap<>()
-                : spill.map("transaction-tables", As400SpillCodec.TABLE_ID,
-                        As400SpillCodec.codec((out, use) -> {
-                            As400SpillCodec.table(out, use.identity());
-                            out.writeInt(use.cycles());
-                        }, in -> new TableUse(As400SpillCodec.table(in), in.readInt())));
+        var tableUseCodec = As400SpillCodec.<TableUse> codec((out, use) -> {
+            As400SpillCodec.table(out, use.identity());
+            out.writeInt(use.cycles());
+        }, in -> new TableUse(As400SpillCodec.table(in), in.readInt()));
+        tableUses = spill == null ? new LinkedHashMap<>() : spill.map("transaction-tables", As400SpillCodec.TABLE_ID, tableUseCodec);
+        memberUses = spill == null ? new LinkedHashMap<>() : spill.map("transaction-members", As400SpillCodec.STRING, tableUseCodec);
         clearOwners = spill == null ? new LinkedHashMap<>() : spill.map("transaction-clears", As400SpillCodec.TABLE_ID, As400SpillCodec.INTEGER);
     }
 
@@ -350,13 +351,19 @@ final class As400TransactionBuffer implements AutoCloseable {
         }
         requireNoConflictingClear(commitCycle, table);
         TableUse use = tableUses.get(table.tableId());
-        if (use != null && !use.identity().equals(table)) {
+        if (use != null && !use.identity().compatibleBinding(table)) {
             throw fail("Captured object/member/record format changed while a cycle was pending");
         }
-        if (!cycle.tables.containsKey(table.tableId())) {
+        String member = memberKey(table);
+        TableUse memberUse = memberUses.get(member);
+        if (memberUse != null && !memberUse.identity().equals(table)) {
+            throw fail("Captured member changed while a cycle was pending");
+        }
+        if (!cycle.tables.containsKey(member)) {
             reserve(cycle, 0, 1);
-            cycle.tables.put(table.tableId(), table);
-            tableUses.put(table.tableId(), new TableUse(table, use == null ? 1 : Math.addExact(use.cycles(), 1)));
+            cycle.tables.put(member, table);
+            tableUses.put(table.tableId(), new TableUse(use == null ? table : use.identity(), use == null ? 1 : Math.addExact(use.cycles(), 1)));
+            memberUses.put(member, new TableUse(table, memberUse == null ? 1 : Math.addExact(memberUse.cycles(), 1)));
         }
         return cycle;
     }
@@ -457,18 +464,28 @@ final class As400TransactionBuffer implements AutoCloseable {
         cycle.entries -= entries;
     }
 
+    private static String memberKey(TableIdentity table) {
+        String id = table.tableId().toDoubleQuotedString();
+        return id.length() + ":" + id + table.member();
+    }
+
+    private static <K> void releaseUse(Map<K, TableUse> uses, K key) {
+        TableUse use = uses.get(key);
+        if (use.cycles() == 1) {
+            uses.remove(key);
+        }
+        else {
+            uses.put(key, new TableUse(use.identity(), use.cycles() - 1));
+        }
+    }
+
     private void removeCycle(Cycle cycle) {
         release(cycle, cycle.bytes, cycle.entries);
         savepoints -= cycle.savepoints.size();
         releaseClears(cycle);
-        for (TableId table : cycle.tables.keySet()) {
-            TableUse use = tableUses.get(table);
-            if (use.cycles() == 1) {
-                tableUses.remove(table);
-            }
-            else {
-                tableUses.put(table, new TableUse(use.identity(), use.cycles() - 1));
-            }
+        for (TableIdentity table : cycle.tables.values()) {
+            releaseUse(tableUses, table.tableId());
+            releaseUse(memberUses, memberKey(table));
         }
         if (spill != null) {
             cycle.changes.clear();
@@ -506,6 +523,7 @@ final class As400TransactionBuffer implements AutoCloseable {
         if (spill == null) {
             cycles.clear();
             tableUses.clear();
+            memberUses.clear();
             clearOwners.clear();
         }
         pendingBatch = null;
@@ -555,6 +573,14 @@ final class As400TransactionBuffer implements AutoCloseable {
                 throw new IllegalArgumentException("Distinct, complete file and member journal identifiers are required");
             }
             recordFormat = identifier(recordFormat, 128);
+        }
+
+        // The native resolver validates each exact member JID against one
+        // immutable complete file binding. Different members share its schema,
+        // but retain separate RecordIdentity values for before-image pairing.
+        boolean compatibleBinding(TableIdentity other) {
+            return tableId.equals(other.tableId) && physicalFile.equals(other.physicalFile) && fileJournalId.equals(other.fileJournalId)
+                    && recordFormat.equals(other.recordFormat) && (member.equals(other.member) == memberJournalId.equals(other.memberJournalId));
         }
 
         static boolean validJournalId(String value) {
@@ -643,7 +669,7 @@ final class As400TransactionBuffer implements AutoCloseable {
         private final TransactionId id;
         private final List<Change> changes;
         private final Map<RecordIdentity, Image> before;
-        private final Map<TableId, TableIdentity> tables;
+        private final Map<String, TableIdentity> tables;
         private final Set<TableId> clearedTables;
         private final Map<BigInteger, Integer> savepoints;
         private long bytes;
@@ -659,7 +685,7 @@ final class As400TransactionBuffer implements AutoCloseable {
             String prefix = "cycle/" + id.commitCycle();
             changes = spill == null ? new ArrayList<>() : spill.list(prefix + "/changes", As400SpillCodec.CHANGE);
             before = spill == null ? new LinkedHashMap<>() : spill.map(prefix + "/before", As400SpillCodec.RECORD, As400SpillCodec.IMAGE);
-            tables = spill == null ? new LinkedHashMap<>() : spill.map(prefix + "/tables", As400SpillCodec.TABLE_ID, As400SpillCodec.TABLE);
+            tables = spill == null ? new LinkedHashMap<>() : spill.map(prefix + "/tables", As400SpillCodec.STRING, As400SpillCodec.TABLE);
             clearedTables = spill == null ? new HashSet<>() : spill.set(prefix + "/clears", As400SpillCodec.TABLE_ID);
             savepoints = spill == null ? new LinkedHashMap<>() : spill.map(prefix + "/savepoints", As400SpillCodec.INTEGER, As400SpillCodec.INT);
         }

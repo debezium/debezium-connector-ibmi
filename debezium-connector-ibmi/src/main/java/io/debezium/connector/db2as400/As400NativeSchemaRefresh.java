@@ -30,7 +30,7 @@ final class As400NativeSchemaRefresh {
         this.catalog = catalog;
     }
 
-    As400SchemaChange collect(As400BindingDefinition before, RawJournalPage.Entry opening) throws Exception {
+    As400SchemaChange collect(As400BindingDefinition before, RawJournalPage.Entry opening, As400SourceNormalizer.TableResolver verifiedBindings) throws Exception {
         check.run();
         var first = sample(opening.position());
         var firstTail = tail(first);
@@ -41,17 +41,24 @@ final class As400NativeSchemaRefresh {
             var afterRead = sample(opening.position());
             var window = new As400NativeJournalWindow.Window(opening.position(), firstTail, first, afterRead);
             require(window.journalToken().equals(journalIdentity), "Schema refresh journal identity changed");
-            As400SchemaChange.qualify(before, before, captured.seal(), order(window), firstTail);
+            var entries = captured.seal();
+            if (As400MemberCreation.opening(before, opening)) {
+                // The complete native association adds one member to the retained
+                // file format; no current-catalog schema substitution is needed.
+                return As400MemberCreation.qualify(before, entries, order(window));
+            }
+            As400SchemaChange.qualify(before, before, entries, order(window), firstTail, verifiedBindings);
         }
         check.run();
         var request = new As400OperatorTableEvidence.Request(journal, opening.header().getLibrary(), opening.header().getFile());
         var acquired = io.acquisition.collect(List.of(request)).definitions().get(0);
         // Native metadata uses physical/SQL names without a JDBC catalog. Keep
         // the same catalog identity the ordinary connector already publishes.
-        var identity = acquired.identity();
+        var identity = before == null ? acquired.identity() : acquired.memberIdentity(before.identity().member());
         var table = new TableId(before == null ? catalog : before.schema().id().catalog(), acquired.schema().id().schema(), acquired.schema().id().table());
         var after = new As400BindingDefinition(new As400TransactionBuffer.TableIdentity(table, identity.physicalFile(), identity.member(),
-                identity.fileJournalId(), identity.memberJournalId(), identity.recordFormat()), acquired.schema().edit().tableId(table).create(), acquired.codecs());
+                identity.fileJournalId(), identity.memberJournalId(), identity.recordFormat()), acquired.schema().edit().tableId(table).create(), acquired.codecs(),
+                acquired.members());
         var last = sample(opening.position());
         // Verify that the history observed before metadata acquisition still
         // exists. Endpoint equality alone cannot establish a schema epoch.
@@ -62,7 +69,7 @@ final class As400NativeSchemaRefresh {
             var rechecked = sample(opening.position());
             var window = new As400NativeJournalWindow.Window(opening.position(), through, last, rechecked);
             require(window.journalToken().equals(journalIdentity), "Schema refresh journal identity changed");
-            return As400SchemaChange.qualify(before, after, captured.seal(), order(window), firstTail);
+            return As400SchemaChange.qualify(before, after, captured.seal(), order(window), firstTail, verifiedBindings);
         }
     }
 

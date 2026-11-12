@@ -34,7 +34,8 @@ import io.debezium.ibmi.db2.journal.retrieve.rjne0200.EntryHeaderDecoder;
  * The ordinary profile requires verified receiver order; ambiguous producers fail closed.
  */
 final class As400JournalLifecycle implements AutoCloseable {
-    private static final Set<String> ADMINISTRATIVE_ENTRIES = Set.of("F/OP", "F/CL", "F/MS", "D/DH", "F/SS", "D/DW", "D/GT", "R/IL", "F/RG", "F/RM");
+    private static final Set<String> ADMINISTRATIVE_ENTRIES = Set.of("F/OP", "F/CL", "F/MS", "D/DH", "F/SS", "D/DW", "D/GT", "D/LF", "R/IL", "F/RG", "F/RM",
+            "F/JP", "F/EP");
 
     record Limits(int entries, long bytes, int cycles, int markers, int clears, int dependencies) {
         Limits {
@@ -185,7 +186,7 @@ final class As400JournalLifecycle implements AutoCloseable {
         bindingCodec = As400SpillCodec.codec((out, binding) -> As400SpillCodec.table(out, binding.identity()), in -> {
             var identity = As400SpillCodec.table(in);
             try {
-                var binding = tables.resolve(identity.physicalFile(), identity.tableId().schema());
+                var binding = tables.resolve(identity.physicalFile(), identity.tableId().schema(), identity.member());
                 require(binding.identity().equals(identity), "Spilled lifecycle binding no longer matches validated history");
                 return binding;
             }
@@ -301,6 +302,9 @@ final class As400JournalLifecycle implements AutoCloseable {
 
     private boolean classify(Entry entry) throws Exception {
         var h = entry.header();
+        if (ordinary && As400LogicalFileRecords.accept(entry)) {
+            return false;
+        }
         if (ordinary && tables.creationLifecycle(new RawJournalPage.Entry(entry.position(), h, entry.bytes()))) {
             return false;
         }
@@ -380,7 +384,7 @@ final class As400JournalLifecycle implements AutoCloseable {
             for (Marker candidate : cycle.markers.values()) {
                 marker = candidate;
             }
-            TableBinding table = tables.resolve(h.getFile(), h.getLibrary());
+            TableBinding table = tables.resolve(h.getFile(), h.getLibrary(), h.getMember());
             auxiliary(entry, table, 0);
             String subtype = new AS400Text(1, RawJournalPage.METADATA_CCSID).toObject(payload(entry)).toString();
             require(subtype.equals("3") || subtype.equals("8") || subtype.equals("0") && tables.allowsSchemaChange(entry.position()),
@@ -392,7 +396,7 @@ final class As400JournalLifecycle implements AutoCloseable {
             require(h.getJournalCode() == 'C' || h.getJournalCode() == 'R'
                     || (ordinary && h.getCommitCycle().signum() == 0 && entry.type().equals("F/CR")), "Unmatched native lifecycle operation: " + entry.type());
         }
-        As400SourceNormalizer.validateSource(h, entry.bytes(), 0, entry.position());
+        As400SourceNormalizer.validateSource(h, entry.bytes(), 0, entry.position(), tables);
         Cycle cycle = cycles.get(h.getCommitCycle());
         // Ordinary completed orphan suffixes remain the coordinator's responsibility.
         // A lifecycle suffix without SC cannot borrow a producer/identity from the future.
@@ -463,7 +467,7 @@ final class As400JournalLifecycle implements AutoCloseable {
         require(h.getCommitCycle().signum() == 0 && control.nestedCommitLevel() == 0 && control.flags() == 0
                 && control.indicatorFlag() == '0' && h.getRecordInfo().recordNumber().signum() == 0,
                 "Unsupported statistics record metadata");
-        TableBinding table = tables.resolve(h.getFile(), h.getLibrary());
+        TableBinding table = tables.resolve(h.getFile(), h.getLibrary(), h.getMember());
         identity(h, table);
         byte[] data = payload(entry);
         require(data.length >= 109, "Incomplete statistics request");
@@ -495,7 +499,18 @@ final class As400JournalLifecycle implements AutoCloseable {
         require(h.getCommitCycle().signum() == 0 && control.nestedCommitLevel() == 0 && control.flags() == 0
                 && control.indicatorFlag() == '0' && h.getRecordInfo().recordNumber().signum() == 0,
                 "Unsupported administrative record metadata");
-        TableBinding binding = tables.resolve(h.getFile(), h.getLibrary());
+        if (entry.type().equals("F/JP") || entry.type().equals("F/EP")) {
+            // *QDDSI identifies an access path, not a *QDDS data member. These
+            // commands cannot start/end row journaling or establish a row binding.
+            var object = h.getRecordInfo();
+            require(object.objectType().equals("*QDDSI") && object.objectNameIndicator() == '1'
+                    && As400TransactionBuffer.TableIdentity.validJournalId(object.objectJournalId())
+                    && h.getFile().matches("[A-Z0-9_#$@]{1,10}") && h.getLibrary().matches("[A-Z0-9_#$@]{1,10}")
+                    && h.getMember().matches("[A-Z0-9_#$@]{1,10}") && payload(entry).length == 0,
+                    "Unqualified access-path journaling metadata");
+            return true;
+        }
+        TableBinding binding = tables.resolve(h.getFile(), h.getLibrary(), h.getMember());
         identity(h, binding);
         byte[] data = payload(entry);
         int minimum = switch (entry.type()) {
@@ -504,12 +519,22 @@ final class As400JournalLifecycle implements AutoCloseable {
             case "F/OP" -> 41;
             case "F/CL" -> 30;
             case "D/GT" -> 60;
+            case "D/LF" -> 30;
             case "F/SS", "D/DW" -> 64; // Start of save-while-active, not restore.
             case "R/IL" -> 8; // Internal record-limit data; never a row image.
             default -> 160; // Native save history layout, not save-with-storage-freed.
         };
         require(data.length >= minimum, "Incomplete administrative record");
         require(!entry.type().equals("R/IL") || data.length == 8, "Unqualified record-limit layout");
+        if (entry.type().equals("D/LF")) {
+            var name = new AS400Text(10, RawJournalPage.METADATA_CCSID);
+            String jid = java.util.HexFormat.of().formatHex(data, 20, 30);
+            require(data.length == 30 && name.toObject(data, 0).toString().trim().matches("[A-Z0-9_#$@]{1,10}")
+                    && name.toObject(data, 10).toString().trim().matches("[A-Z0-9_#$@]{1,10}")
+                    && As400TransactionBuffer.TableIdentity.validJournalId(jid)
+                    && !jid.equals(binding.identity().fileJournalId()) && !binding.members().containsValue(jid),
+                    "Invalid logical-file association");
+        }
         if (entry.type().equals("F/RG") || entry.type().equals("F/RM")) {
             // Classic reorganization moves physical record numbers, not logical
             // rows. It cannot be ignored when the emitted key is an RRN.

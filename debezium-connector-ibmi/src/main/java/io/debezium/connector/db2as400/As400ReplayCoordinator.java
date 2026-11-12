@@ -219,7 +219,7 @@ final class As400ReplayCoordinator implements AutoCloseable {
         if (replaying && order.compare(position, completed) > 0) {
             throw new IllegalArgumentException("Completed boundary was not found during replay");
         }
-        As400SourceMetadata source = As400SourceNormalizer.validateSource(header, data, offset, position);
+        As400SourceMetadata source = As400SourceNormalizer.validateSource(header, data, offset, position, tables);
         Control control = header.getJournalCode() == 'C' ? controls.decode(header, data, offset) : null;
         BigInteger cycle = source.commitCycle();
         boolean start = control != null && control.kind() == Kind.START;

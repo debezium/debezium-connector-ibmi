@@ -103,10 +103,13 @@ final class As400ShortBoundaryAudit {
         require(program.journal().equals(window.before().directory().journal()) && from.receiver().equals(through.receiver()),
                 "Foreign journal or receiver rotation during short boundary");
         require(entries.size() >= 4, "Complete all-code audit required");
-        var targets = definitions.stream().map(d -> new As400ShortBoundaryProgram.Target(d.identity().tableId().schema(),
-                d.identity().physicalFile(), d.identity().member())).toList();
+        var targets = definitions.stream().flatMap(d -> d.members().keySet().stream()
+                .map(member -> new As400ShortBoundaryProgram.Target(d.identity().tableId().schema(), d.identity().physicalFile(), member))).toList();
         require(targets.equals(program.targets()), "Program scope differs from acquired native bindings");
         var payloads = List.of("DCGB1 " + program.nonce() + " A", program.payload(), "DCGB1 " + program.nonce() + " Z " + program.scopeDigest());
+        As400SourceNormalizer.TableResolver tables = (file, library) -> definitions.stream()
+                .filter(d -> d.identity().physicalFile().equals(file) && d.identity().tableId().schema().equals(library))
+                .findFirst().map(d -> d.binding(1024 * 1024)).orElse(null);
         var markers = new ArrayList<JournalPosition>();
         BigInteger expected = from.offset();
         for (var entry : entries) {
@@ -118,11 +121,8 @@ final class As400ShortBoundaryAudit {
                 continue; // The already-existing inclusive API anchor is outside (from,through].
             }
             var header = new EntryHeaderDecoder(RawJournalPage.METADATA_CCSID).decode(bytes, 0);
-            var source = As400SourceNormalizer.validateSource(header, bytes, 0, entry.position());
-            if (As400JournalLifecycle.administrative(new As400JournalLifecycle.Entry(header, bytes, entry.position()),
-                    (file, library) -> definitions.stream()
-                            .filter(d -> d.identity().physicalFile().equals(file) && d.identity().tableId().schema().equals(library))
-                            .findFirst().map(d -> d.binding(1024 * 1024)).orElse(null))) {
+            var source = As400SourceNormalizer.validateSource(header, bytes, 0, entry.position(), tables);
+            if (As400JournalLifecycle.administrative(new As400JournalLifecycle.Entry(header, bytes, entry.position()), tables)) {
                 require(!markers.isEmpty() && markers.size() < 3, "Administrative work is outside A/Z audit bracket");
                 continue;
             }
@@ -141,10 +141,10 @@ final class As400ShortBoundaryAudit {
                     var definition = definitions.stream()
                             .filter(d -> d.identity().physicalFile().equals(header.getFile()) && d.identity().tableId().schema().equals(header.getLibrary()))
                             .findFirst().orElseThrow(() -> new IllegalArgumentException("Concurrent row has unknown native binding"));
+                    var binding = definition.binding(1024 * 1024).forMember(header.getMember());
                     require(info.objectType().equals("*QDDS") && info.objectNameIndicator() == '1'
-                            && info.objectJournalId().equals(definition.identity().memberJournalId()) && header.getMember().equals(definition.identity().member())
+                            && info.objectJournalId().equals(binding.identity().memberJournalId())
                             && info.recordNumber().signum() > 0, "Concurrent row has different member identity");
-                    var binding = definition.binding(1024 * 1024);
                     if (definition.excluded()) {
                         binding.validateExcludedRow(header, bytes, 0);
                     }

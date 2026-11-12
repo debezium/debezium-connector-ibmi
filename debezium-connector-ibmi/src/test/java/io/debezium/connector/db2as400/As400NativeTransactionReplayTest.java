@@ -183,7 +183,7 @@ class As400NativeTransactionReplayTest {
             }
             catch (NormalizationException failure) {
                 assertThat(failure.getCause().getMessage()).containsAnyOf(
-                        "Missing or ambiguous physical object identity", "Entry does not match verified single-member object/format binding");
+                        "Missing or ambiguous physical object identity", "Entry does not match verified file/member object/format binding");
                 rejected = entry;
                 break;
             }

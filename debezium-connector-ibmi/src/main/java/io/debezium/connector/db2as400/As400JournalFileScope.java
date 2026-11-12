@@ -44,10 +44,20 @@ final class As400JournalFileScope {
     private static final List<String> COUNTS = List.of("JOURNALED_FILES", "JOURNALED_MEMBERS", "JOURNALED_LIBRARIES", "JOURNALED_DATA_AREAS",
             "JOURNALED_DATA_QUEUES", "JOURNALED_IFS_OBJECTS", "JOURNALED_ACCESS_PATHS", "NUMBER_REMOTE_JOURNALS");
 
-    record Scope(JournalReceiver journal, List<As400OperatorTableEvidence.Request> files, Set<String> journaledLibraries) {
+    record Scope(JournalReceiver journal, List<As400OperatorTableEvidence.Request> files, Set<String> journaledLibraries, int journaledMembers,
+            Set<String> logicalFiles) {
+        Scope(JournalReceiver journal, List<As400OperatorTableEvidence.Request> files, Set<String> journaledLibraries) {
+            this(journal, files, journaledLibraries, files.size());
+        }
+
+        Scope(JournalReceiver journal, List<As400OperatorTableEvidence.Request> files, Set<String> journaledLibraries, int journaledMembers) {
+            this(journal, files, journaledLibraries, journaledMembers, Set.of());
+        }
+
         Scope {
             files = List.copyOf(files);
             journaledLibraries = Set.copyOf(journaledLibraries);
+            logicalFiles = Set.copyOf(logicalFiles);
         }
     }
 
@@ -67,20 +77,22 @@ final class As400JournalFileScope {
         require(connection.getAutoCommit() && connection.getTransactionIsolation() == Connection.TRANSACTION_NONE,
                 "Dedicated nontransactional native metadata connection required");
         Map<String, Integer> before = counts(connection);
-        require(before.get("JOURNALED_FILES") > 0 && before.get("JOURNALED_MEMBERS").equals(before.get("JOURNALED_FILES"))
-                && COUNTS.subList(3, COUNTS.size()).stream().allMatch(field -> before.get(field) == 0), "Native scope is unsupported");
+        require(before.get("JOURNALED_FILES") > 0, "Native journal has no data files");
         int expectedObjects = Math.addExact(before.get("JOURNALED_FILES"), before.get("JOURNALED_LIBRARIES"));
         // CHGPF accepts at most 2147483646 records. One extra row detects a
         // growing inventory; its independent counts, not a connector file cap,
         // bound both native temporary storage and this read.
         require(expectedObjects < Integer.MAX_VALUE - 1, "Native inventory exceeds physical outfile capacity");
-        // A fresh dedicated job owns this temporary file. Bound the native output
-        // itself, not merely the later JDBC result, and never wait for an inquiry.
+        // A fresh dedicated job owns this temporary file. Restrict WRKJRNA's
+        // output to files/libraries: *OUTPUT also repeats physical files for
+        // journaled access paths, and includes non-row resources. Their presence
+        // does not make the physical-file inventory incomplete. Independent file
+        // and member counts, plus the surrounding journal audit, remain required.
         for (String text : List.of("CHGJOB INQMSGRPY(*DFT)",
                 "CRTDUPOBJ OBJ(QAWRKJRNA) FROMLIB(QSYS) OBJTYPE(*FILE) TOLIB(QTEMP) NEWOBJ(DCGSCOPE) DATA(*NO)",
                 "CHGPF FILE(QTEMP/DCGSCOPE) SIZE(" + (expectedObjects + 1) + " 0 0)",
                 "WRKJRNA JRN(" + journal.library() + "/" + journal.name()
-                        + ") OUTPUT(*OUTFILE) OUTFILE(QTEMP/DCGSCOPE) OUTMBR(*FIRST *REPLACE) DETAIL(*OUTPUT)")) {
+                        + ") OUTPUT(*OUTFILE) OUTFILE(QTEMP/DCGSCOPE) OUTMBR(*FIRST *REPLACE) DETAIL(*JRNFILE *JRNLIB)")) {
             check();
             try (var command = connection.prepareStatement("CALL QSYS2.QCMDEXC(?)")) {
                 command.setQueryTimeout(timeout);
@@ -90,6 +102,7 @@ final class As400JournalFileScope {
             }
         }
         var files = new ArrayList<As400OperatorTableEvidence.Request>();
+        var logicalFiles = new HashSet<String>();
         var libraries = new HashSet<String>();
         var objects = new HashSet<String>();
         try (var statement = connection.prepareStatement(FILES_SQL)) {
@@ -110,8 +123,14 @@ final class As400JournalFileScope {
                     name(object);
                     require(objects.add(library + "/" + object + "/" + type), "Duplicate native scope object");
                     if (type.equals("*FILE")) {
-                        require(text(rows, "FILE_TYPE").equals("PF"), "Only physical data files can enter native clear scope");
-                        files.add(new As400OperatorTableEvidence.Request(journal, library, object));
+                        String fileType = text(rows, "FILE_TYPE");
+                        require(fileType.equals("PF") || fileType.equals("LF"), "Unknown native file type");
+                        if (fileType.equals("PF")) {
+                            files.add(new As400OperatorTableEvidence.Request(journal, library, object));
+                        }
+                        else {
+                            logicalFiles.add(library + "/" + object);
+                        }
                     }
                     else if (type.equals("*LIB")) {
                         require(library.equals("QSYS") && libraries.add(object), "Ambiguous journaled library");
@@ -125,12 +144,11 @@ final class As400JournalFileScope {
             }
         }
         require(!files.isEmpty() && before.equals(counts(connection)), "Empty or changed native journal scope");
-        require(before.get("JOURNALED_FILES") == files.size() && before.get("JOURNALED_MEMBERS") == files.size()
+        require(before.get("JOURNALED_FILES") == files.size() + logicalFiles.size() && before.get("JOURNALED_MEMBERS") >= files.size()
                 && before.get("JOURNALED_LIBRARIES") == libraries.size(), "Incomplete native file/member/library inventory");
-        require(COUNTS.subList(3, COUNTS.size()).stream().allMatch(field -> before.get(field) == 0), "Unknown or unsupported journal resource");
         require(connection.getWarnings() == null, "Native scope connection warning");
         files.sort(java.util.Comparator.comparing(As400OperatorTableEvidence.Request::library).thenComparing(As400OperatorTableEvidence.Request::file));
-        return new Scope(journal, files, libraries);
+        return new Scope(journal, files, libraries, before.get("JOURNALED_MEMBERS"), logicalFiles);
     }
 
     private Map<String, Integer> counts(Connection connection) throws SQLException {

@@ -141,7 +141,8 @@ final class As400NativeBindingAcquisition {
             connection.setReadOnly(true);
             check(connection);
             for (Observation observation : before) {
-                definitions.add(acquire(connection, observation));
+                var definition = acquire(connection, observation);
+                definitions.add(new As400BindingDefinition(definition.identity(), definition.schema(), definition.codecs(), observation.memberJournalIds()));
             }
             check(connection);
         }
@@ -154,7 +155,13 @@ final class As400NativeBindingAcquisition {
 
     private As400BindingDefinition acquire(Connection connection, Observation observation) throws SQLException {
         if (captured.test(observation.table())) {
+            require(!observation.format().lob(), "LOB value capture is unsupported");
             return read(connection, observation);
+        }
+        if (observation.format().lob()) {
+            // Preserve ordinary table filtering. Only fixed source identity and
+            // transaction effects are needed; no LOB address or value is read.
+            return As400BindingDefinition.excluded(observation.tableIdentity(), true);
         }
         if (retainExcludedSchemas) {
             try {

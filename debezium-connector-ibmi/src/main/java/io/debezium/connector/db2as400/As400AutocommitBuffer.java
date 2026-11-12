@@ -64,7 +64,7 @@ final class As400AutocommitBuffer implements AutoCloseable {
                     "Autocommit entry has a transaction scope");
             Objects.requireNonNull(table);
             for (RecordIdentity known : before.keySet()) {
-                require(!known.table().tableId().equals(table.tableId()) || known.table().equals(table), "Binding changed across a pending update");
+                require(!known.table().tableId().equals(table.tableId()) || known.table().compatibleBinding(table), "Binding changed across a pending update");
             }
             String type = source.journalCode() + "/" + source.entryType();
             if (type.equals("F/CR") || type.equals("D/CG")) {

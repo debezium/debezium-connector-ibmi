@@ -77,10 +77,15 @@ class As400ShortBoundaryProgramTest {
     }
 
     @Test
-    void duplicatePhysicalFilesCannotMasqueradeAsSingleMemberScope() {
+    void shouldAllocateEachMemberOnceAndRejectDuplicateOrUnorderedTargets() {
         var first = new As400ShortBoundaryProgram.Target("LIB", "FILE", "FIRST");
         var second = new As400ShortBoundaryProgram.Target("LIB", "FILE", "SECOND");
-        assertThrows(IllegalArgumentException.class, () -> new As400ShortBoundaryProgram(new JournalReceiver("JRN", "JLIB"),
-                List.of(first, second), "A".repeat(32), "B".repeat(64)));
+        var program = new As400ShortBoundaryProgram(new JournalReceiver("JRN", "JLIB"), List.of(first, second), "A".repeat(32), "B".repeat(64));
+        assertThat(program.statement()).contains("(LIB/FILE *FILE *EXCLRD FIRST)", "(LIB/FILE *FILE *EXCLRD SECOND)");
+        assertThat(program.release()).contains("(LIB/FILE *FILE *EXCLRD FIRST)", "(LIB/FILE *FILE *EXCLRD SECOND)");
+        for (var invalid : List.of(List.of(first, first), List.of(second, first))) {
+            assertThrows(IllegalArgumentException.class, () -> new As400ShortBoundaryProgram(new JournalReceiver("JRN", "JLIB"),
+                    invalid, "A".repeat(32), "B".repeat(64)));
+        }
     }
 }

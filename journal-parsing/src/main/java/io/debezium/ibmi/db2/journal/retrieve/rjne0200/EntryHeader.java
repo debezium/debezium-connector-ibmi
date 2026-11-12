@@ -102,7 +102,13 @@ public class EntryHeader {
      */
     public record ControlInfo(char indicatorFlag, long nestedCommitLevel, boolean hasTransactionIdentifier,
             boolean hasLogicalUnitOfWork, byte flags) {
+
         public static final ControlInfo UNKNOWN = new ControlInfo('\0', -1, false, false, (byte) 0);
+
+        /** RJNE0200 offset 218, bit 5 (MSB first): this entry describes a logical file. */
+        public boolean logicalFile() {
+            return (flags & 0x04) != 0;
+        }
     }
 
     @Override

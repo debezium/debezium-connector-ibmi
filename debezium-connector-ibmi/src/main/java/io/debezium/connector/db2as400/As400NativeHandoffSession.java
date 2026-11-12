@@ -628,10 +628,12 @@ class As400NativeHandoffSession implements As400TaskHandoff {
     }
 
     @Override
-    public As400SchemaChange schemaChange(As400BindingDefinition before, RawJournalPage.Entry opening) throws Exception {
+    public As400SchemaChange schemaChange(As400BindingDefinition before, RawJournalPage.Entry opening,
+                                          As400SourceNormalizer.TableResolver verifiedBindings)
+            throws Exception {
         check();
         var change = new As400NativeSchemaRefresh(foreground, journal, identity, foreground.server(), this::check)
-                .collect(before, opening);
+                .collect(before, opening, verifiedBindings);
         requireTopics(List.of(change.after()));
         return change;
     }
@@ -733,7 +735,8 @@ class As400NativeHandoffSession implements As400TaskHandoff {
             require(identity.tableId().catalog() == null, "Acquired binding already has an unqualified catalog association");
             var id = new TableId(server, identity.tableId().schema(), identity.tableId().table());
             return new As400BindingDefinition(new As400TransactionBuffer.TableIdentity(id, identity.physicalFile(), identity.member(),
-                    identity.fileJournalId(), identity.memberJournalId(), identity.recordFormat()), definition.schema().edit().tableId(id).create(), definition.codecs());
+                    identity.fileJournalId(), identity.memberJournalId(), identity.recordFormat()), definition.schema().edit().tableId(id).create(), definition.codecs(),
+                    definition.members());
         }).toList();
     }
 

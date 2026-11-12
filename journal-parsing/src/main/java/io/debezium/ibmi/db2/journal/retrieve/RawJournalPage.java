@@ -119,9 +119,15 @@ public record RawJournalPage(List<Entry> entries, Optional<JournalPosition> cont
             require(i == count - 1 ? next == 0 : next >= 236 && (long) offset + next + 236 <= returned,
                     "Journal entry count and links disagree");
             if (header.getPointerHandle() != 0) {
-                // Only the documented inline creation metadata is consumed.
-                // Rows, clears and all other incomplete images still reject.
-                FileCreationEntryDecoder.metadata(header, bounded, offset);
+                // Never follow native pointers. Creation metadata is inline;
+                // pointer rows can only be consumed later by a verified excluded
+                // LOB binding. Captured row/clear image validation stays strict.
+                if (header.getJournalCode() == 'R') {
+                    PointerRowEntryDecoder.metadata(header, bounded, offset);
+                }
+                else {
+                    FileCreationEntryDecoder.metadata(header, bounded, offset);
+                }
                 releasePointer.accept(header.getPointerHandle());
             }
             if (entries.size() < maximumEntries) {

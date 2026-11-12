@@ -604,18 +604,32 @@ IBM documents the named-member and `*ALL` behavior in
 Mapping a one-member clear to a whole-table Debezium `op=t` is unsafe when several
 members share the output topic: it could erase rows from untouched members.
 
-Transactional truncate still requires an unambiguous single-member binding. That
-is an explicit feature scope, not evidence that the original rejected every
-multi-member row. Defining a member-aware key/topic/snapshot model would go beyond
-the original guarantee and can change existing output identities. Ordinary CDC
-remains available with transactional truncate disabled; unsupported online
-admission leaves ordinary capture running. No complete multi-member compatibility
-claim is made.
+The online runtime now retains every member's native JID and streams its rows
+into the existing table topic and key shape. Before/after images use member and
+producer identity internally, so equal RRNs in different members cannot pair.
+Snapshots retain the original first-member behavior. Version-1 single-member
+binding records remain byte-compatible; multi-member records use version 2.
+A complete native F/JM, D/MA, F/MC sequence can add a member during streaming.
+The retained physical-file schema is reused. After validating the complete
+sequence, the new association is persisted at its opening, before even unrelated
+output can advance W. F pins the full sequence until F/MC is processed. This lets
+a fresh task recover if another member publishes between the association records.
+Missing or inconsistent associations reject.
 
-Current admission checks the whole journal inventory. A multi-member file can
-therefore prevent transactional activation even when excluded from output; this
-is not a per-table truncate opt-out. The original connector's partial row support
-does not resolve that compatibility decision.
+A captured member clear still requires an unambiguous single-member file. It
+cannot become a table-wide event when the original output merges multiple
+members. This preserves existing row identities and adds no member-aware key,
+topic or snapshot contract. Excluded files retain their member identities and
+transaction effects without emitting a truncate.
+
+Native file inventory now requests WRKJRNA `DETAIL(*JRNFILE *JRNLIB)` and compares
+independent file/member counts around discovery. `*OUTPUT` also includes access
+paths, which can duplicate physical-file rows, and non-row resources; those are
+not additional captured tables. Logical-file metadata is classified using the
+documented RJNE0200 file-type flag, with matching object type and creation
+attributes. Access-path start/end records use the distinct `*QDDSI` identity.
+Neither classification supplies a physical row binding or relaxes physical
+start/end-journaling checks.
 
 Online startup also permits inherited worker key/value converters, standard
 `errors.tolerance=none` and task-count defaults, producer tracing interceptors,
@@ -624,3 +638,31 @@ the connector still returns exactly one task even when `tasks.max` is larger.
 Tolerated serialization failures and overrides of recovery-history processing
 remain rejected; successful ordinary row processing is distinct from losing a
 required truncate or durable progress record.
+
+### Excluded external values and source physical files
+
+The original packaged connector was run with excluded CLOB and source physical
+files on the captured tables' journal. Selected ordinary rows continued through
+insert/update/delete on both excluded files. The buffered path preserves this
+selection behavior. `SYSFILES` distinguishes `DATA` and `SOURCE` physical files;
+both require the same exact native object/member, format and image checks.
+[IBM documents the source-file format](https://www.ibm.com/docs/en/i/7.6.0?topic=file-creating-source-without-dds)
+as including sequence/date fields before the source text; these are not silently
+removed from the pinned physical format.
+
+Excluded LOB files retain identity-only history with an explicit native LOB
+capability. Their bounded row descriptors, identities and null metadata are
+validated; their transaction effects, before-image pairing, clear companions and
+rollback controls still participate in F/W recovery. External values are never
+followed. The API reader releases every returned pointer handle in the original
+retrieving job before returning a page, including deferred entries; a release
+failure prevents progress and cancels the job. Captured LOB values remain
+unsupported, and changing a filter cannot promote identity-only history into an
+output schema. The original `JdbcFileDecoder` did not implement CLOB capture;
+`AS400Xml.toObject()` returned an empty string, not the XML document.
+
+The continuous runtime must preserve the excluded LOB capability and the complete
+member mapping when applying output selection. A live failure exposed a discarded
+capability in that adapter; a new continuous-runtime/fresh-history regression
+covers it alongside component replay and native publication tests. See the
+[validation report](dcg-validation.md) for successful and failed evidence.

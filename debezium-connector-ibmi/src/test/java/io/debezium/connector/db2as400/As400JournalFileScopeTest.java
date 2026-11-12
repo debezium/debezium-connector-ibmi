@@ -47,7 +47,7 @@ class As400JournalFileScopeTest {
         assertThat(fixture.commands).containsExactly("CHGJOB INQMSGRPY(*DFT)",
                 "CRTDUPOBJ OBJ(QAWRKJRNA) FROMLIB(QSYS) OBJTYPE(*FILE) TOLIB(QTEMP) NEWOBJ(DCGSCOPE) DATA(*NO)",
                 "CHGPF FILE(QTEMP/DCGSCOPE) SIZE(7 0 0)",
-                "WRKJRNA JRN(DCNC0946/QSQJRN) OUTPUT(*OUTFILE) OUTFILE(QTEMP/DCGSCOPE) OUTMBR(*FIRST *REPLACE) DETAIL(*OUTPUT)");
+                "WRKJRNA JRN(DCNC0946/QSQJRN) OUTPUT(*OUTFILE) OUTFILE(QTEMP/DCGSCOPE) OUTMBR(*FIRST *REPLACE) DETAIL(*JRNFILE *JRNLIB)");
         for (var statement : fixture.statements) {
             verify(statement).setQueryTimeout(5);
             verify(statement).close();
@@ -58,7 +58,7 @@ class As400JournalFileScopeTest {
 
     @ParameterizedTest
     @ValueSource(strings = { "extra-member", "remote", "missing-count", "overflow", "fraction", "duplicate-file", "missing-file", "foreign",
-            "logical", "unknown-resource", "asp", "asp-group", "missing-asp", "asp-changed", "implicit", "changed-count", "command-error", "command-warning",
+            "unknown-file", "unknown-resource", "asp", "asp-group", "missing-asp", "asp-changed", "implicit", "changed-count", "command-error", "command-warning",
             "row-warning", "transaction" })
     void incompleteOrUnsupportedNativeScopeRejects(String fault) throws Exception {
         var f = new Fixture();
@@ -74,7 +74,7 @@ class As400JournalFileScopeTest {
             case "duplicate-file" -> f.objects.add(f.objects.get(0));
             case "missing-file" -> f.objects.remove(0);
             case "foreign" -> f.objects.get(0).put("JOURNAL_NAME", "OTHER");
-            case "logical" -> f.objects.get(0).put("FILE_TYPE", "LF");
+            case "unknown-file" -> f.objects.get(0).put("FILE_TYPE", "??");
             case "unknown-resource" -> f.objects.get(0).put("OBJECT_TYPE", "*DTAARA");
             case "asp" -> f.before.put("ASP_NUMBER", 33);
             case "asp-group" -> f.before.put("JOURNAL_ASPGRP", "IASP");
@@ -92,9 +92,46 @@ class As400JournalFileScopeTest {
         for (var statement : f.statements) {
             verify(statement).close();
         }
-        if (List.of("extra-member", "remote", "missing-count", "overflow", "fraction", "transaction").contains(fault)) {
+        if (List.of("missing-count", "overflow", "fraction", "transaction").contains(fault)) {
             assertThat(f.commands).isEmpty();
         }
+    }
+
+    @Test
+    void shouldRetainIndependentMemberCountWithoutTreatingMembersAsSeparateFiles() throws Exception {
+        var f = new Fixture();
+        f.before.put("JOURNALED_MEMBERS", 8);
+        f.after.put("JOURNALED_MEMBERS", 8);
+        var scope = f.collect();
+        assertThat(scope.files()).hasSize(5);
+        assertThat(scope.journaledMembers()).isEqualTo(8);
+    }
+
+    @Test
+    void shouldCountLogicalFilesWithoutTreatingThemAsPhysicalMembers() throws Exception {
+        var f = new Fixture();
+        var logical = f.objects.stream().filter(row -> row.path("OBJECT_TYPE").asText().equals("*FILE")).findFirst().orElseThrow();
+        logical.put("FILE_TYPE", "LF");
+        f.before.put("JOURNALED_MEMBERS", 4);
+        f.after.put("JOURNALED_MEMBERS", 4);
+        var scope = f.collect();
+        assertThat(scope.files()).hasSize(4).noneMatch(file -> file.file().equals(logical.path("OBJECT_NAME").asText()));
+        assertThat(scope.logicalFiles()).containsExactly(logical.path("OBJECT_LIBRARY").asText() + "/" + logical.path("OBJECT_NAME").asText());
+        assertThat(scope.journaledMembers()).isEqualTo(4);
+    }
+
+    @Test
+    void shouldKeepCompleteFileScopeWhenTheJournalAlsoContainsNonRowResources() throws Exception {
+        var f = new Fixture();
+        for (var counts : List.of(f.before, f.after)) {
+            for (String field : List.of("JOURNALED_DATA_AREAS", "JOURNALED_DATA_QUEUES", "JOURNALED_IFS_OBJECTS",
+                    "JOURNALED_ACCESS_PATHS", "NUMBER_REMOTE_JOURNALS")) {
+                counts.put(field, 3);
+            }
+        }
+        assertThat(f.collect().files()).hasSize(5);
+        verify(f.fileStatement).setMaxRows(7); // Five files, one library and overflow detection.
+        assertThat(f.commands.get(f.commands.size() - 1)).endsWith("DETAIL(*JRNFILE *JRNLIB)");
     }
 
     @ParameterizedTest

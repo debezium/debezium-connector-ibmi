@@ -42,20 +42,28 @@ import io.debezium.relational.Table;
  * of a native association or a consistent baseline; initialization must supply it.
  * No default charset, Java serialization, reflective codec or live metadata fallback.
  */
-record As400BindingDefinition(TableIdentity identity, Table schema, List<As400BindingDefinition.Codec> codecs) {
+record As400BindingDefinition(TableIdentity identity, Table schema, List<As400BindingDefinition.Codec> codecs, Map<String, String> members) {
 
     private static final String PREFIX = "ibmi.binding.";
     private static final int MAX_ROW_BYTES = 16 * 1024 * 1024;
     static final String KEY_MODE = "ibmi.output.key.mode";
     static final String RRN_COLUMN = "__IBMI_RRN";
     private static final String EXCLUDED = "ibmi.output.excluded";
+    private static final String EXCLUDED_LOB = "ibmi.output.excluded.lob";
+
+    As400BindingDefinition(TableIdentity identity, Table schema, List<Codec> codecs) {
+        this(identity, schema, codecs, Map.of(identity.member(), identity.memberJournalId()));
+    }
 
     As400BindingDefinition {
         Objects.requireNonNull(identity);
+        members = validatedMembers(identity, members);
         Objects.requireNonNull(schema);
         codecs = List.copyOf(codecs);
         var excludedAttribute = schema.attributeWithName(EXCLUDED);
         boolean excluded = excludedAttribute != null;
+        var lob = schema.attributeWithName(EXCLUDED_LOB);
+        require(lob == null || excluded && "true".equals(lob.value()), "LOB metadata is only valid for an excluded binding");
         require(!excluded || "true".equals(excludedAttribute.value()) && codecs.isEmpty() && schema.columns().isEmpty()
                 && schema.primaryKeyColumnNames().isEmpty() && schema.attributeWithName(KEY_MODE) == null,
                 "An excluded binding contains identity only, never a partial output schema");
@@ -97,24 +105,76 @@ record As400BindingDefinition(TableIdentity identity, Table schema, List<As400Bi
     }
 
     static As400BindingDefinition excluded(TableIdentity identity) {
-        return new As400BindingDefinition(identity, Table.editor().tableId(identity.tableId())
-                .addAttribute(Attribute.editor().name(EXCLUDED).value("true").create()).create(), List.of());
+        return excluded(identity, false);
+    }
+
+    static As400BindingDefinition excluded(TableIdentity identity, boolean lob) {
+        var schema = Table.editor().tableId(identity.tableId()).addAttribute(Attribute.editor().name(EXCLUDED).value("true").create());
+        if (lob) {
+            schema.addAttribute(Attribute.editor().name(EXCLUDED_LOB).value("true").create());
+        }
+        return new As400BindingDefinition(identity, schema.create(), List.of());
     }
 
     boolean excluded() {
         return schema.attributeWithName(EXCLUDED) != null;
     }
 
+    static Map<String, String> validatedMembers(TableIdentity identity, Map<String, String> members) {
+        require(identity.memberJournalId().equals(members.get(identity.member())), "Canonical member is absent or changed");
+        if (members instanceof MemberMap validated && validated.fileJournalId.equals(identity.fileJournalId())) {
+            return members;
+        }
+        var ordered = new TreeMap<>(members);
+        require(ordered.values().stream().distinct().count() == ordered.size(), "Member journal identities must be distinct");
+        ordered.forEach((member, jid) -> {
+            require(member.matches("[A-Z0-9_#$@]{1,10}") && TableIdentity.validJournalId(jid) && !jid.equals(identity.fileJournalId()),
+                    "Complete distinct member journal identity required");
+        });
+        return new MemberMap(identity.fileJournalId(), ordered);
+    }
+
+    /** Share one validated immutable mapping across member decoder views, never copy the whole file's members per row. */
+    private static final class MemberMap extends java.util.AbstractMap<String, String> {
+        private final String fileJournalId;
+        private final Map<String, String> values;
+
+        private MemberMap(String fileJournalId, Map<String, String> values) {
+            this.fileJournalId = fileJournalId;
+            this.values = java.util.Collections.unmodifiableMap(values);
+        }
+
+        @Override
+        public String get(Object key) {
+            return values.get(key);
+        }
+
+        @Override
+        public java.util.Set<Entry<String, String>> entrySet() {
+            return values.entrySet();
+        }
+    }
+
+    TableIdentity memberIdentity(String member) {
+        String jid = members.get(member);
+        require(jid != null, "Unknown member in durable binding");
+        return new TableIdentity(identity.tableId(), identity.physicalFile(), member, identity.fileJournalId(), jid, identity.recordFormat());
+    }
+
+    List<TableIdentity> identities() {
+        return members.keySet().stream().map(this::memberIdentity).toList();
+    }
+
     TableBinding binding(int maximumRowBytes) {
         if (excluded()) {
-            return new TableBinding(identity, null, false, true);
+            return new TableBinding(identity, null, false, true, members, schema.attributeWithName(EXCLUDED_LOB) != null);
         }
         boolean[] nullable = new boolean[codecs.size()];
         for (int i = 0; i < nullable.length; i++) {
             nullable[i] = schema.columns().get(i).isOptional();
         }
         return new TableBinding(identity, new CompleteRowEntryDecoder(codecs.stream().map(Codec::decoder).toArray(AS400DataType[]::new), nullable, maximumRowBytes),
-                usesRrn());
+                usesRrn(), false, members);
     }
 
     boolean usesRrn() {
@@ -139,7 +199,12 @@ record As400BindingDefinition(TableIdentity identity, Table schema, List<As400Bi
     Table storedTable() {
         Map<String, String> attributes = new TreeMap<>();
         schema.attributes().forEach(a -> attributes.put(a.name(), a.value()));
-        attributes.put(PREFIX + "version", "1");
+        // Keep existing single-member history byte-compatible. Version 2 pins
+        // every member, sharing the file's schema and physical decoders.
+        attributes.put(PREFIX + "version", members.size() == 1 ? "1" : "2");
+        if (members.size() > 1) {
+            members.forEach((member, jid) -> attributes.put(PREFIX + "members." + member, jid));
+        }
         attributes.put(PREFIX + "file", identity.physicalFile());
         attributes.put(PREFIX + "member", identity.member());
         attributes.put(PREFIX + "file.jid", identity.fileJournalId());
@@ -155,7 +220,8 @@ record As400BindingDefinition(TableIdentity identity, Table schema, List<As400Bi
     }
 
     static As400BindingDefinition restore(Table stored) {
-        require("1".equals(value(stored, "version")), "Unsupported binding version");
+        String version = value(stored, "version");
+        require(List.of("1", "2").contains(version), "Unsupported binding version");
         var identity = new TableIdentity(stored.id(), value(stored, "file"), value(stored, "member"),
                 value(stored, "file.jid"), value(stored, "member.jid"), value(stored, "format"));
         List<Codec> codecs = new ArrayList<>();
@@ -164,7 +230,16 @@ record As400BindingDefinition(TableIdentity identity, Table schema, List<As400Bi
         }
         var clean = stored.edit();
         stored.attributes().stream().filter(a -> a.name().startsWith(PREFIX)).forEach(a -> clean.removeAttribute(a.name()));
-        var restored = new As400BindingDefinition(identity, clean.create(), codecs);
+        Map<String, String> members = new TreeMap<>();
+        if (version.equals("1")) {
+            members.put(identity.member(), identity.memberJournalId());
+        }
+        else {
+            stored.attributes().stream().filter(a -> a.name().startsWith(PREFIX + "members."))
+                    .forEach(a -> require(members.put(a.name().substring((PREFIX + "members.").length()), a.value()) == null, "Duplicate member binding"));
+            require(members.size() > 1, "Version 2 requires a complete multi-member binding");
+        }
+        var restored = new As400BindingDefinition(identity, clean.create(), codecs, members);
         // Reject extra/duplicate attributes and noncanonical descriptors instead of dropping them.
         require(stored.attributes().stream().sorted(Comparator.comparing(Attribute::name)).toList().equals(restored.storedTable().attributes()),
                 "Incomplete or unsupported binding attributes");

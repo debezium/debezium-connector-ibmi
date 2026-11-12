@@ -116,7 +116,7 @@ class As400FileCreationTest {
                 }
 
                 @Override
-                public As400SchemaChange schemaChange(As400BindingDefinition old, RawJournalPage.Entry opening) {
+                public As400SchemaChange schemaChange(As400BindingDefinition old, RawJournalPage.Entry opening, As400SourceNormalizer.TableResolver verifiedBindings) {
                     refreshes++;
                     assertThat(old).isNull();
                     assertThat(opening.position()).isEqualTo(position(94));

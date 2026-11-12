@@ -26,7 +26,7 @@ import io.debezium.ibmi.db2.journal.retrieve.rjne0200.EntryHeader;
 
 /**
  * Normalizes selected captured records plus ALL C controls into the transaction buffer.
- * Not wired into streaming. The reader resolves the CURRENT entry receiver, verifies
+ * The reader resolves the CURRENT entry receiver, verifies
  * journal incarnation/order, and must not pass a next-entry/continuation cursor here.
  */
 final class As400SourceNormalizer {
@@ -71,7 +71,7 @@ final class As400SourceNormalizer {
             throw new NormalizationException("Source normalizer is stopped; reconstruct from a safe checkpoint", null);
         }
         try {
-            As400SourceMetadata source = validateSource(header, data, offset, currentPosition);
+            As400SourceMetadata source = validateSource(header, data, offset, currentPosition, tables);
             if (header.getJournalCode() == 'C') {
                 Control control = controls.decode(header, data, offset);
                 SavepointRollback disposition = control.kind() == Kind.ROLLBACK_SAVEPOINT
@@ -86,6 +86,7 @@ final class As400SourceNormalizer {
                 TableBinding table = table(header, header.getFile(), header.getLibrary(), header.getMember(), ObjectKind.MEMBER_DATA);
                 buffer.requireNoConflictingClear(source.commitCycle(), table.identity());
                 if (header.getJournalCode() == 'F' && header.getEntryType().equals("CR")) {
+                    table.requireTableWideClear();
                     return autocommit.accept(source, table.identity(), null, null, completedReplay);
                 }
                 if (header.getJournalCode() != 'R' || !FORWARD.contains(header.getEntryType())) {
@@ -114,6 +115,7 @@ final class As400SourceNormalizer {
                     throw new IllegalArgumentException("D/CG payload and header object identities disagree");
                 }
                 TableBinding table = table(header, clear.file(), clear.library(), clear.member(), ObjectKind.FILE);
+                table.requireTableWideClear();
                 buffer.truncate(source, table.identity());
                 return Optional.empty();
             }
@@ -153,6 +155,24 @@ final class As400SourceNormalizer {
     }
 
     static As400SourceMetadata validateSource(EntryHeader header, byte[] data, int offset, JournalPosition position) {
+        return validateSource(header, data, offset, position, false);
+    }
+
+    static As400SourceMetadata validateSource(EntryHeader header, byte[] data, int offset, JournalPosition position, TableResolver tables) throws Exception {
+        if (header.getPointerHandle() == 0) {
+            return validateSource(header, data, offset, position);
+        }
+        var binding = Objects.requireNonNull(tables.resolve(header.getFile(), header.getLibrary(), header.getMember()), "Missing excluded LOB binding");
+        var identity = binding.identity();
+        if (!binding.excludedLob() || !header.getFile().equals(identity.physicalFile()) || !header.getLibrary().equals(identity.tableId().schema())
+                || !header.getMember().equals(identity.member()) || !header.getRecordInfo().objectJournalId().equals(identity.memberJournalId())) {
+            throw new IllegalArgumentException("Pointer row requires its exact verified excluded LOB binding");
+        }
+        binding.validateExcludedRow(header, data, offset);
+        return validateSource(header, data, offset, position, true);
+    }
+
+    private static As400SourceMetadata validateSource(EntryHeader header, byte[] data, int offset, JournalPosition position, boolean excludedPointer) {
         Objects.requireNonNull(header);
         Objects.requireNonNull(data);
         Objects.requireNonNull(position);
@@ -168,7 +188,7 @@ final class As400SourceNormalizer {
         name(header.getEntryType(), 2);
         var info = Objects.requireNonNull(header.getControlInfo());
         if (info.nestedCommitLevel() < 0 || info.hasTransactionIdentifier() || info.hasLogicalUnitOfWork()
-                || (info.flags() & 0x3f) != 0 || header.getPointerHandle() != 0) {
+                || (info.flags() & 0x3f) != (excludedPointer ? 0x20 : 0) || !excludedPointer && header.getPointerHandle() != 0) {
             throw new IllegalArgumentException("Unsupported, minimized, incomplete, or pointer-backed source entry");
         }
         return As400SourceMetadata.from(header, position);
@@ -182,12 +202,12 @@ final class As400SourceNormalizer {
                 || !TableIdentity.validJournalId(info.objectJournalId())) {
             throw new IllegalArgumentException("Missing or ambiguous physical object identity");
         }
-        TableBinding binding = Objects.requireNonNull(tables.resolve(file, library), "Missing verified table binding");
+        TableBinding binding = Objects.requireNonNull(tables.resolve(file, library, member), "Missing verified table binding");
         TableIdentity identity = binding.identity();
         if (!file.equals(identity.physicalFile()) || !library.equals(identity.tableId().schema())
                 || !info.objectJournalId().equals(kind == ObjectKind.FILE ? identity.fileJournalId() : identity.memberJournalId())
                 || (!member.equals(identity.member()) && !(kind == ObjectKind.FILE && member.isEmpty()))) {
-            throw new IllegalArgumentException("Entry does not match verified single-member object/format binding");
+            throw new IllegalArgumentException("Entry does not match verified file/member object/format binding");
         }
         return binding;
     }
@@ -235,12 +255,17 @@ final class As400SourceNormalizer {
     }
 
     /**
-     * Bootstrap must prove both JIDs belong to this exact single-member file in the
+     * Bootstrap must prove both JIDs belong to this exact file and member in the
      * same journal incarnation and pin the association/layout for the replay window.
      * Never fill a missing JID from the incoming row or infer one JID from the other.
      */
     interface TableResolver {
         TableBinding resolve(String physicalFile, String library) throws Exception;
+
+        default TableBinding resolve(String physicalFile, String library, String member) throws Exception {
+            TableBinding binding = resolve(physicalFile, library);
+            return binding == null || member.isEmpty() ? binding : binding.forMember(member);
+        }
 
         default boolean allowsSchemaChange(JournalPosition opening) {
             return false;
@@ -262,7 +287,16 @@ final class As400SourceNormalizer {
         }
     }
 
-    record TableBinding(TableIdentity identity, CompleteRowEntryDecoder decoder, boolean rrnKey, boolean excluded) {
+    record TableBinding(TableIdentity identity, CompleteRowEntryDecoder decoder, boolean rrnKey, boolean excluded, java.util.Map<String, String> members,
+            boolean excludedLob) {
+        TableBinding(TableIdentity identity, CompleteRowEntryDecoder decoder, boolean rrnKey, boolean excluded, java.util.Map<String, String> members) {
+            this(identity, decoder, rrnKey, excluded, members, false);
+        }
+
+        TableBinding(TableIdentity identity, CompleteRowEntryDecoder decoder, boolean rrnKey, boolean excluded) {
+            this(identity, decoder, rrnKey, excluded, java.util.Map.of(identity.member(), identity.memberJournalId()));
+        }
+
         TableBinding(TableIdentity identity, CompleteRowEntryDecoder decoder) {
             this(identity, decoder, false, false);
         }
@@ -281,15 +315,32 @@ final class As400SourceNormalizer {
 
         TableBinding {
             Objects.requireNonNull(identity);
+            members = As400BindingDefinition.validatedMembers(identity, members);
             if (!excluded) {
                 Objects.requireNonNull(decoder);
             }
-            if (excluded && (decoder != null || rrnKey)) {
+            if (excluded && (decoder != null || rrnKey) || excludedLob && !excluded) {
                 throw new IllegalArgumentException("Excluded identity and complete output decoder are distinct bindings");
             }
             name(identity.tableId().schema(), 10);
             name(identity.physicalFile(), 10);
             name(identity.member(), 10);
+        }
+
+        TableBinding forMember(String member) {
+            String jid = members.get(member);
+            if (jid == null) {
+                throw new IllegalArgumentException("Unknown member in verified file binding");
+            }
+            return identity.member().equals(member) ? this
+                    : new TableBinding(new TableIdentity(identity.tableId(), identity.physicalFile(), member,
+                            identity.fileJournalId(), jid, identity.recordFormat()), decoder, rrnKey, excluded, members, excludedLob);
+        }
+
+        void requireTableWideClear() {
+            if (members.size() != 1 && !excluded) {
+                throw new IllegalArgumentException("A member clear cannot be emitted as a whole-table truncate for a multi-member file");
+            }
         }
 
         As400RowData materialize(EntryHeader header, byte[] data, int offset, long maximumBytes) throws java.io.IOException {
@@ -304,8 +355,13 @@ final class As400SourceNormalizer {
             // No value codecs or nullable guesses for excluded files. Retain the
             // real row/clear effects, pairing and savepoints, and still reject an
             // incomplete physical image or a changed pinned format.
-            if (header.getJournalCode() != 'R' || !FORWARD.contains(header.getEntryType()) || header.getControlInfo() == null
-                    || (header.getControlInfo().flags() & 0x3f) != 0 || header.getPointerHandle() != 0
+            boolean pointer = excludedLob && header.getPointerHandle() != 0;
+            if (pointer) {
+                io.debezium.ibmi.db2.journal.retrieve.PointerRowEntryDecoder.metadata(header, data, offset);
+            }
+            if (header.getJournalCode() != 'R' || !(FORWARD.contains(header.getEntryType()) || pointer && COMPENSATION.contains(header.getEntryType()))
+                    || header.getControlInfo() == null
+                    || (header.getControlInfo().flags() & 0x3f) != (pointer ? 0x20 : 0) || !pointer && header.getPointerHandle() != 0
                     || (header.getEntryType().equals("UB") || header.getEntryType().equals("DL")) && header.getControlInfo().indicatorFlag() != '1') {
                 throw new java.io.IOException("Incomplete or unsupported excluded row image");
             }
