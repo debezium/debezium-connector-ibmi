@@ -7,6 +7,7 @@ package io.debezium.connector.db2as400;
 
 import java.math.BigInteger;
 import java.sql.Connection;
+import java.sql.PreparedStatement;
 import java.sql.SQLException;
 import java.util.Optional;
 
@@ -46,6 +47,7 @@ final class As400NativeBoundaryPulse implements AutoCloseable {
             + "WHERE SYSTEM_OBJECT_SCHEMA=? AND SYSTEM_OBJECT_NAME=? AND OBJECT_TYPE='*FILE' "
             + "AND JOB_NAME=? AND LOCK_STATE='*EXCLRD' AND LOCK_STATUS='HELD'";
     static final String RESULT_SQL = "SELECT ATTEMPT,SCOPE_DIGEST,ACQUIRED,RELEASED FROM SESSION.DCGPULSE";
+    private static final String COMMAND_SQL = "CALL QSYS2.QCMDEXC(?)";
     private final As400JdbcConnectionFactory connections;
     private final Runnable checkRunning;
     private final JournalReceiver journal;
@@ -106,6 +108,11 @@ final class As400NativeBoundaryPulse implements AutoCloseable {
         require(!attempted && program.journal().equals(journal) && program.nonce().equals(nonce), "Pulse cannot be reused or redirected");
         attempted = true;
         requireNoAllocations(program);
+        check();
+        if (program.batched()) {
+            execute(As400ShortBoundaryProgram.PREPARE_BATCHES_SQL);
+            prepareBatches(program);
+        }
         boolean success = true;
         try {
             // No client callback, query, force or metadata operation is reachable
@@ -124,7 +131,12 @@ final class As400NativeBoundaryPulse implements AutoCloseable {
                 // this dedicated holder, never after a lost/uncertain response.
                 // Pre-existing allocations were excluded before starting it.
                 try {
-                    command(program.release());
+                    if (program.batched()) {
+                        execute(program.retryBatchRelease());
+                    }
+                    else {
+                        command(program.release());
+                    }
                 }
                 catch (SQLException failure) {
                     // This response may itself be lost. Do not turn an unknown
@@ -138,6 +150,7 @@ final class As400NativeBoundaryPulse implements AutoCloseable {
         check();
         requireNoAllocations(program);
         releaseVerified = true;
+        check();
         try (var statement = holder.prepareStatement(RESULT_SQL)) {
             statement.setQueryTimeout(5);
             statement.setMaxRows(2);
@@ -173,28 +186,69 @@ final class As400NativeBoundaryPulse implements AutoCloseable {
         command(program.closing()); // Forced only after all metadata and release checks.
     }
 
+    private void prepareBatches(As400ShortBoundaryProgram program) throws SQLException {
+        // Bounded parameter records are populated before any allocation. No
+        // generated SQL or JDBC call grows with the complete file inventory.
+        try (var statement = holder.prepareStatement(As400ShortBoundaryProgram.INSERT_BATCH_SQL)) {
+            statement.setQueryTimeout(5);
+            int pending = 0;
+            for (int i = 0; i < program.batchCount(); i++) {
+                check();
+                var batch = program.allocationBatch(i);
+                statement.setInt(1, i);
+                statement.setString(2, batch.allocate());
+                statement.setString(3, batch.release());
+                statement.addBatch();
+                pending++;
+                if (pending == 32 || i == program.batchCount() - 1) {
+                    var counts = statement.executeBatch();
+                    require(counts.length == pending && java.util.Arrays.stream(counts).allMatch(count -> count == 1),
+                            "Incomplete allocation command ledger");
+                    require(statement.getWarnings() == null && holder.getWarnings() == null, "Allocation command ledger warning");
+                    statement.clearBatch();
+                    pending = 0;
+                }
+            }
+        }
+        check();
+    }
+
     private void requireNoAllocations(As400ShortBoundaryProgram program) throws SQLException {
         check();
         try (var observer = connections.open()) {
-            for (var target : program.targets()) {
+            check();
+            // Reuse statement handles only within this fresh observer job. Every
+            // file still gets both authority checks and a new lock observation;
+            // neither results nor authority are cached between files or passes.
+            try (var authority = observer.prepareStatement(COMMAND_SQL)) {
+                authority.setQueryTimeout(5);
                 check();
-                // The documented view can hide objects lacking authority. Check
-                // effective authority in this observer job, not the holder's job.
-                // CHKOBJ only checks access; it grants nothing and reads no rows.
-                command(observer, "CHKOBJ OBJ(QSYS/" + target.library() + ") OBJTYPE(*LIB) AUT(*EXECUTE)");
-                command(observer, "CHKOBJ OBJ(" + target.library() + "/" + target.file() + ") OBJTYPE(*FILE) AUT(*OBJOPR *READ)");
                 try (var statement = observer.prepareStatement(LOCKS_SQL)) {
                     statement.setQueryTimeout(5);
                     statement.setMaxRows(1);
-                    statement.setString(1, target.library());
-                    statement.setString(2, target.file());
-                    statement.setString(3, job);
-                    try (var rows = statement.executeQuery()) {
-                        require(!rows.next(), "Native pulse allocation remains held or predates this attempt");
-                        As400DcgNativeIo.noWarnings(rows, statement);
+                    for (var target : program.targets()) {
+                        check();
+                        // The view can hide objects lacking authority. CHKOBJ
+                        // verifies access in this observer job without granting it.
+                        command(observer, authority, "CHKOBJ OBJ(QSYS/" + target.library() + ") OBJTYPE(*LIB) AUT(*EXECUTE)");
+                        command(observer, authority, "CHKOBJ OBJ(" + target.library() + "/" + target.file() + ") OBJTYPE(*FILE) AUT(*OBJOPR *READ)");
+                        statement.setString(1, target.library());
+                        statement.setString(2, target.file());
+                        statement.setString(3, job);
+                        check();
+                        try (var rows = statement.executeQuery()) {
+                            As400DcgNativeIo.noWarnings(rows, statement);
+                            require(!rows.next(), "Native pulse allocation remains held or predates this attempt");
+                            As400DcgNativeIo.noWarnings(rows, statement);
+                        }
+                        check();
+                        // Re-execution clears statement warnings. Inspect them
+                        // after cursor close, before the handle can be reused.
+                        require(statement.getWarnings() == null && observer.getWarnings() == null, "Incomplete independent pulse lock observation");
                     }
                 }
             }
+            check();
             require(observer.getWarnings() == null, "Incomplete independent pulse lock observation");
         }
     }
@@ -205,12 +259,19 @@ final class As400NativeBoundaryPulse implements AutoCloseable {
 
     private void command(Connection connection, String command) throws SQLException {
         check();
-        try (var statement = connection.prepareStatement("CALL QSYS2.QCMDEXC(?)")) {
+        try (var statement = connection.prepareStatement(COMMAND_SQL)) {
             statement.setQueryTimeout(5);
-            statement.setString(1, command);
-            statement.execute();
-            require(statement.getWarnings() == null && connection.getWarnings() == null, "Native command warning");
+            command(connection, statement, command);
         }
+        check();
+    }
+
+    private void command(Connection connection, PreparedStatement statement, String command) throws SQLException {
+        check();
+        statement.setString(1, command);
+        check();
+        statement.execute();
+        require(statement.getWarnings() == null && connection.getWarnings() == null, "Native command warning");
         check();
     }
 

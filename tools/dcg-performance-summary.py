@@ -67,6 +67,7 @@ def summarize_run(directory):
     if not sockets:
         raise ValueError('No flight recorder socket observations in measured interval')
     return {'run': directory.name, 'version': report['version'], 'mode': report['mode'],
+            'buffer_storage': report.get('buffer_storage', 'memory'),
             'distribution_sha256': report['distribution_sha256'], 'image': report['image'],
             'rows_per_burst': report['rows_per_burst'], 'measurements': measurements,
             'burst_resources': {'rows': count, 'seconds': (end-start)/1000,
@@ -84,7 +85,7 @@ def summarize(directories):
     if len({r['image'] for r in runs}) != 1 or len({r['rows_per_burst'] for r in runs}) != 1:
         raise ValueError('Runtime image or workload differs across comparisons')
     for version in {r['version'] for r in runs}:
-        variants = {(r['distribution_sha256'], r['mode']) for r in runs if r['version'] == version}
+        variants = {(r['distribution_sha256'], r['mode'], r['buffer_storage']) for r in runs if r['version'] == version}
         if len(variants) != 1:
             raise ValueError('A version label mixes different artifacts or modes')
     groups = defaultdict(list)
@@ -96,6 +97,7 @@ def summarize(directories):
         if len({v['rows'] for v in values}) != 1:
             raise ValueError('Scenario has different record counts')
         results.append({'version': version, 'scenario': scenario, 'trials': len(values), 'rows': values[0]['rows'],
+                        **({'p99_ms': statistics.median(v['p99_ms'] for v in values)} if all('p99_ms' in v for v in values) else {}),
                         **{key: statistics.median(v[key] for v in values)
                            for key in ['elapsed_ms', 'rows_per_second', 'source_sql_ms', 'p50_ms', 'p95_ms']},
                         'sql_return_to_last_visible_ms': (statistics.median(v['elapsed_ms']-v['source_sql_ms'] for v in values)

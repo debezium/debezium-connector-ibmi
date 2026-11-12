@@ -178,6 +178,7 @@ class LiveExperiment(handoff.HandoffExperiment):
         addresses = {r[4][0] for r in socket.getaddrinfo(self.fixture.target.host, None, socket.AF_INET, socket.SOCK_STREAM)}
         if len(addresses) != 1:
             raise ValueError('Exact native test address required')
+        self.fixture.redactions.update(addresses)
         self.native_host = self.fixture.target.host + ':' + addresses.pop()
 
     java = native.NativeExperiment.java

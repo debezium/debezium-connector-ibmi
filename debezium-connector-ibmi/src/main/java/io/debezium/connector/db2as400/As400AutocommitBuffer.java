@@ -33,16 +33,28 @@ final class As400AutocommitBuffer implements AutoCloseable {
     private final String journal;
     private final Limits limits;
     private final Supplier<Usage> transactions;
-    private final Map<RecordIdentity, Image> before = new LinkedHashMap<>();
+    private final Map<RecordIdentity, Image> before;
+    private final As400SpillStore spill;
     private CommittedBatch pending;
     private long bytes;
     private int entries;
     private boolean stopped;
 
     As400AutocommitBuffer(String journal, Limits limits, Supplier<Usage> transactions) {
+        this(journal, limits, transactions, null);
+    }
+
+    As400AutocommitBuffer(String journal, Limits limits, Supplier<Usage> transactions, As400SpillStore spill) {
         this.journal = Objects.requireNonNull(journal);
         this.limits = Objects.requireNonNull(limits);
         this.transactions = Objects.requireNonNull(transactions);
+        this.spill = spill;
+        before = spill == null ? new LinkedHashMap<>() : spill.map("autocommit-before", As400SpillCodec.RECORD, As400SpillCodec.IMAGE);
+    }
+
+    void requireIdleTable(TableIdentity table) {
+        require(!stopped && pending == null && before.keySet().stream().noneMatch(record -> record.table().tableId().equals(table.tableId())),
+                "Schema refresh crosses an incomplete autocommit update");
     }
 
     Optional<CommittedBatch> accept(As400SourceMetadata source, TableIdentity table, RecordIdentity record, As400RowData row, boolean completedReplay) {
@@ -109,12 +121,19 @@ final class As400AutocommitBuffer implements AutoCloseable {
         return bytes;
     }
 
-    List<JournalPosition> retainedStarts() {
-        var positions = new java.util.ArrayList<>(before.values().stream().map(Image::position).toList());
-        if (pending != null) {
-            positions.add(pending.startSource().position());
-        }
-        return List.copyOf(positions);
+    java.util.Collection<JournalPosition> retainedStarts() {
+        return new java.util.AbstractCollection<>() {
+            @Override
+            public int size() {
+                return before.size() + (pending == null ? 0 : 1);
+            }
+
+            @Override
+            public java.util.Iterator<JournalPosition> iterator() {
+                return java.util.stream.Stream.concat(before.values().stream().map(Image::position),
+                        pending == null ? java.util.stream.Stream.empty() : java.util.stream.Stream.of(pending.startSource().position())).iterator();
+            }
+        };
     }
 
     /** Called after transaction admission as well, so the two buffers share one bound. */
@@ -141,7 +160,9 @@ final class As400AutocommitBuffer implements AutoCloseable {
     @Override
     public void close() {
         stopped = true;
-        before.clear();
+        if (spill == null) {
+            before.clear();
+        }
         pending = null;
         entries = 0;
         bytes = 0;

@@ -14,6 +14,7 @@ import java.math.BigDecimal;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.Connection;
+import java.sql.DatabaseMetaData;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
@@ -48,8 +49,8 @@ public final class As400OnlineFenceEvidence {
         var queries = new LinkedHashMap<>(Map.of("member", new Query(As400OperatorTableEvidence.MEMBER_SQL, 1),
                 "format", new Query(As400OperatorTableEvidence.FORMAT_SQL, 1),
                 "object", new Query(As400OperatorTableEvidence.OBJECT_SQL, 1),
-                "columns", new Query(As400NativeBindingAcquisition.COLUMNS_SQL, 4096),
-                "keys", new Query(As400NativeBindingAcquisition.KEYS_SQL, 4096),
+                "columns", new Query(As400NativeBindingAcquisition.COLUMNS_SQL, 8000),
+                "keys", new Query(As400NativeBindingAcquisition.KEYS_SQL, 8000),
                 "journal", new Query(As400OperatorJournalEvidence.JOURNAL_SQL, 1),
                 "receivers", new Query(As400OperatorJournalEvidence.RECEIVERS_SQL, 16),
                 "identity", new Query(As400JdbcNativeIdentityEvidence.SQL, 1),
@@ -104,7 +105,7 @@ public final class As400OnlineFenceEvidence {
             As400OnlineLockScope.same(scope.path("discovered"), scope.path("before"), library);
             As400OnlineLockScope.same(scope.path("before"), scope.path("after"), library);
         }
-        var rows = new CapturedRows(captured.path("queries"));
+        var rows = new CapturedRows(captured);
         var journals = new As400OperatorJournalEvidence(rows::connection, journal, new As400OperatorJournalEvidence.Limits(16, 5));
         var identityReader = new As400JdbcNativeIdentityEvidence(rows::connection, new As400JdbcNativeIdentityEvidence.Limits(2, 5, 1024));
         var before = journals.collect();
@@ -142,8 +143,10 @@ public final class As400OnlineFenceEvidence {
     }
 
     private static Map<String, Integer> expectedNames(int tables) {
-        return Map.of("member", 2 * tables, "format", 2 * tables, "object", 4 * tables, "columns", tables, "keys", tables, "controls", tables,
-                "journal", 2, "receivers", 2, "identity", 4);
+        var names = new LinkedHashMap<>(Map.of("member", 2 * tables, "format", 2 * tables, "object", 4 * tables, "columns", tables, "keys", tables, "controls", tables,
+                "journal", 2, "receivers", 2, "identity", 4));
+        names.put("jdbc_columns", tables);
+        return names;
     }
 
     private static void require(boolean condition, String message) {
@@ -157,8 +160,10 @@ public final class As400OnlineFenceEvidence {
         private final Map<List<String>, List<List<Map<String, Object>>>> values = new LinkedHashMap<>();
         private final Map<String, Integer> names = new LinkedHashMap<>();
         private final Map<List<String>, Integer> consumed = new LinkedHashMap<>();
+        private final String searchEscape;
 
-        CapturedRows(JsonNode captured) {
+        CapturedRows(JsonNode evidence) {
+            JsonNode captured = evidence.path("queries");
             require(captured.isArray() && captured.size() <= 558, "Bounded metadata capture required");
             for (JsonNode query : captured) {
                 String name = query.path("name").asText();
@@ -179,6 +184,21 @@ public final class As400OnlineFenceEvidence {
                 values.computeIfAbsent(List.copyOf(key), ignored -> new ArrayList<>()).add(rows);
                 names.merge(name, 1, Integer::sum);
             }
+            var jdbc = evidence.path("jdbc_metadata");
+            searchEscape = jdbc.path("search_escape").asText();
+            if (!jdbc.isMissingNode()) {
+                require(jdbc.path("tables").isArray() && jdbc.get("tables").size() <= 50 && searchEscape.length() == 1,
+                        "Bounded exact JDBC metadata capture required");
+                for (var table : jdbc.get("tables")) {
+                    require(table.path("schema_pattern").isTextual() && table.path("table_pattern").isTextual()
+                            && table.path("rows").isArray() && table.get("rows").size() <= 8000, "Incomplete captured JDBC columns");
+                    var key = List.of("jdbc_columns", table.get("schema_pattern").asText(), table.get("table_pattern").asText());
+                    List<Map<String, Object>> rows = JSON.convertValue(table.get("rows"), new TypeReference<>() {
+                    });
+                    require(values.putIfAbsent(key, List.of(rows)) == null, "Duplicate captured JDBC columns");
+                    names.merge("jdbc_columns", 1, Integer::sum);
+                }
+            }
         }
 
         Map<String, Integer> observedNames() {
@@ -190,6 +210,14 @@ public final class As400OnlineFenceEvidence {
         Connection connection() throws SQLException {
             Connection connection = mock(Connection.class);
             when(connection.isReadOnly()).thenReturn(true);
+            var metadata = mock(DatabaseMetaData.class);
+            when(connection.getMetaData()).thenReturn(metadata);
+            when(metadata.getSearchStringEscape()).thenAnswer(call -> {
+                require(!searchEscape.isEmpty(), "Native validator requested uncaptured JDBC output evidence");
+                return searchEscape;
+            });
+            when(metadata.getColumns(org.mockito.ArgumentMatchers.isNull(), anyString(), anyString(), org.mockito.ArgumentMatchers.isNull()))
+                    .thenAnswer(call -> result(consume(List.of("jdbc_columns", call.getArgument(1), call.getArgument(2)))));
             when(connection.prepareStatement(anyString())).thenAnswer(call -> {
                 String sql = call.getArgument(0);
                 PreparedStatement statement = mock(PreparedStatement.class);
@@ -199,27 +227,71 @@ public final class As400OnlineFenceEvidence {
                     return null;
                 }).when(statement).setString(org.mockito.ArgumentMatchers.anyInt(), anyString());
                 when(statement.executeQuery()).thenAnswer(execution -> {
-                    List<String> key = List.of(sql, parameters.get(1), parameters.get(2));
-                    require(parameters.size() == 2 && values.containsKey(key), "Native validator requested uncaptured evidence");
-                    int response = consumed.merge(key, 1, Integer::sum) - 1;
-                    require(response < values.get(key).size(), "Missing independent metadata observation");
-                    List<Map<String, Object>> data = values.get(key).get(response);
-                    AtomicInteger at = new AtomicInteger(-1);
-                    ResultSet result = mock(ResultSet.class);
-                    when(result.next()).thenAnswer(next -> at.incrementAndGet() < data.size());
-                    when(result.getString(anyString())).thenAnswer(get -> {
-                        Object value = column(data.get(at.get()), get.getArgument(0));
-                        return value == null ? null : value.toString();
-                    });
-                    when(result.getBigDecimal(anyString())).thenAnswer(get -> {
-                        Object value = column(data.get(at.get()), get.getArgument(0));
-                        return value == null ? null : new BigDecimal(value.toString());
-                    });
-                    return result;
+                    List<Map<String, Object>> data = new ArrayList<>();
+                    if (sql.contains("UNION ALL")) {
+                        require(parameters.size() >= 4 && parameters.size() <= 32 && parameters.size() % 2 == 0,
+                                "Bounded exact-path object batch required");
+                        require(sql.equals(String.join(" UNION ALL ", java.util.Collections.nCopies(parameters.size() / 2,
+                                As400OperatorTableEvidence.OBJECT_SQL))), "Uncaptured object query");
+                        for (int i = 1; i <= parameters.size(); i += 2) {
+                            data.addAll(consume(List.of(As400OperatorTableEvidence.OBJECT_SQL, parameters.get(i), parameters.get(i + 1))));
+                        }
+                    }
+                    else if (parameters.size() > 2) {
+                        require(parameters.size() <= 51, "Unbounded catalog batch");
+                        // Old captures contain the exact per-file observations.
+                        // Combine only the requested members of the same read;
+                        // never invent rows or reuse a consumed before/after phase.
+                        String placeholders = String.join(",", java.util.Collections.nCopies(parameters.size() - 1, "?"));
+                        String original = List.of(As400OperatorTableEvidence.MEMBER_SQL, As400OperatorTableEvidence.FORMAT_SQL).stream()
+                                .filter(candidate -> candidate.replace("SYSTEM_TABLE_NAME = ?", "SYSTEM_TABLE_NAME IN (" + placeholders + ")").equals(sql))
+                                .findFirst().orElseThrow(() -> new SQLException("Uncaptured catalog query"));
+                        for (int i = 2; i <= parameters.size(); i++) {
+                            data.addAll(consume(List.of(original, parameters.get(1), parameters.get(i))));
+                        }
+                    }
+                    else {
+                        require(parameters.size() == 2, "Exact captured query parameters required");
+                        data.addAll(consume(List.of(sql, parameters.get(1), parameters.get(2))));
+                    }
+                    return result(data);
                 });
                 return statement;
             });
             return connection;
+        }
+
+        private ResultSet result(List<Map<String, Object>> data) throws SQLException {
+            AtomicInteger at = new AtomicInteger(-1);
+            ResultSet result = mock(ResultSet.class);
+            when(result.next()).thenAnswer(next -> at.incrementAndGet() < data.size());
+            when(result.getString(anyString())).thenAnswer(get -> {
+                Object value = column(data.get(at.get()), get.getArgument(0));
+                return value == null ? null : value.toString();
+            });
+            when(result.getBigDecimal(anyString())).thenAnswer(get -> {
+                Object value = column(data.get(at.get()), get.getArgument(0));
+                return value == null ? null : new BigDecimal(value.toString());
+            });
+            var jdbcNames = Map.of(4, "COLUMN_NAME", 5, "DATA_TYPE", 6, "TYPE_NAME", 7, "COLUMN_SIZE", 9, "DECIMAL_DIGITS", 11, "NULLABLE",
+                    17, "ORDINAL_POSITION", 23, "IS_AUTOINCREMENT");
+            when(result.getString(org.mockito.ArgumentMatchers.anyInt())).thenAnswer(get -> {
+                Object value = column(data.get(at.get()), jdbcNames.get(get.getArgument(0)));
+                return value == null ? null : value.toString();
+            });
+            when(result.getObject(org.mockito.ArgumentMatchers.anyInt())).thenAnswer(get -> column(data.get(at.get()), jdbcNames.get(get.getArgument(0))));
+            when(result.getInt(org.mockito.ArgumentMatchers.anyInt())).thenAnswer(get -> {
+                Object value = column(data.get(at.get()), jdbcNames.get(get.getArgument(0)));
+                return value == null ? 0 : ((Number) value).intValue();
+            });
+            return result;
+        }
+
+        private List<Map<String, Object>> consume(List<String> key) {
+            require(values.containsKey(key), "Native validator requested uncaptured evidence");
+            int response = consumed.merge(key, 1, Integer::sum) - 1;
+            require(response < values.get(key).size(), "Missing independent metadata observation");
+            return values.get(key).get(response);
         }
 
         private Object column(Map<String, Object> row, String name) throws SQLException {

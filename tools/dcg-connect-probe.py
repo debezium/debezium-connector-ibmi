@@ -105,7 +105,7 @@ class Experiment:
             path = Path(item)
             if (path.name in {"debezium-api-3.8.0-SNAPSHOT.jar", "debezium-config-3.8.0-SNAPSHOT.jar",
                               "debezium-util-3.8.0-SNAPSHOT.jar", "debezium-connector-common-3.8.0-SNAPSHOT.jar"}
-                    or "/net/sf/jt400/" in item):
+                    or "/net/sf/jt400/" in item or "/com/h2database/h2-mvstore/" in item):
                 shutil.copy2(path, self.plugin / path.name)
         self.report["harness_sha256"] = {name: hashlib.sha256((ROOT / name).read_bytes()).hexdigest()
                                          for name in ["tools/dcg-connect-probe", "tools/dcg-connect-probe.py",

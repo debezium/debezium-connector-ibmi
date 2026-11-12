@@ -133,62 +133,63 @@ public final class As400OnlineCensusCapture {
                 var candidate = collector.collect();
                 report.put("candidate_present", candidate.isPresent());
                 if (candidate.isPresent()) {
-                    var c = candidate.orElseThrow();
-                    report.put("program", Map.of("nonce", c.program().nonce(), "scope_digest", c.program().scopeDigest(), "targets", c.program().targets()));
-                    Files.writeString(directory.resolve("statement.sql"), c.program().statement());
-                    report.put("completion", Map.of("job", c.completion().job(), "thread", c.completion().thread().toString(),
-                            "acquired", c.completion().acquired().toString(), "released", c.completion().released().toString()));
-                    report.put("origin", position(c.origin()));
-                    report.put("history_floor", position(c.historyFloor()));
-                    report.put("pending", As400NativeHistoryDiscoveryProbe.pending(c.pending()));
-                    report.put("pending_before",
-                            As400OnlineNativeEvidence.sample(new As400OnlineNativeEvidence.Sample(c.pendingBefore().directory(), c.pendingBefore().identities())));
-                    report.put("pending_after",
-                            As400OnlineNativeEvidence.sample(new As400OnlineNativeEvidence.Sample(c.pendingAfter().directory(), c.pendingAfter().identities())));
-                    report.put("native_identity_evidence", new As400OnlineNativeEvidence.Window(c.window().from(), c.window().through(),
-                            new As400OnlineNativeEvidence.Sample(c.window().before().directory(), c.window().before().identities()),
-                            new As400OnlineNativeEvidence.Sample(c.window().after().directory(), c.window().after().identities())).report());
-                    var changes = new TableChanges();
-                    c.bindings().definitions().forEach(d -> changes.create(d.storedTable()));
-                    var bindings = Document.create();
-                    bindings.setArray("tables", new JsonTableChangeSerializer().serialize(changes));
-                    Files.writeString(directory.resolve("bindings.json"), DocumentWriter.defaultWriter().write(bindings));
-                    var entries = new ArrayList<Map<String, Object>>();
-                    for (var entry : c.audit().entries()) {
-                        entries.add(Map.of("position", position(entry.position()), "raw", java.util.Base64.getEncoder().encodeToString(entry.data()),
-                                "sha256", As400OnlineHandoff.hash(entry.data()), "type", entry.header().getJournalCode() + "/" + entry.header().getEntryType()));
-                    }
-                    report.put("entries", entries);
-                    var journals = new As400OperatorJournalEvidence(() -> connection(credentials), journal, new As400OperatorJournalEvidence.Limits(16, 5));
-                    var identities = new As400JdbcNativeIdentityEvidence(() -> connection(credentials), new As400JdbcNativeIdentityEvidence.Limits(17, 5, 1024));
-                    var history = new As400NativeHandoffHistory(journals, identities, reader, () -> {
-                        if (Thread.currentThread().isInterrupted() || System.nanoTime() >= deadline) {
-                            throw new IllegalStateException("Bounded native control discovery stopped");
+                    try (var c = candidate.orElseThrow()) {
+                        report.put("program", Map.of("nonce", c.program().nonce(), "scope_digest", c.program().scopeDigest(), "targets", c.program().targets()));
+                        Files.writeString(directory.resolve("statement.sql"), c.program().statement());
+                        report.put("completion", Map.of("job", c.completion().job(), "thread", c.completion().thread().toString(),
+                                "acquired", c.completion().acquired().toString(), "released", c.completion().released().toString()));
+                        report.put("origin", position(c.origin()));
+                        report.put("history_floor", position(c.historyFloor()));
+                        report.put("pending", As400NativeHistoryDiscoveryProbe.pending(c.pending()));
+                        report.put("pending_before",
+                                As400OnlineNativeEvidence.sample(new As400OnlineNativeEvidence.Sample(c.pendingBefore().directory(), c.pendingBefore().identities())));
+                        report.put("pending_after",
+                                As400OnlineNativeEvidence.sample(new As400OnlineNativeEvidence.Sample(c.pendingAfter().directory(), c.pendingAfter().identities())));
+                        report.put("native_identity_evidence", new As400OnlineNativeEvidence.Window(c.window().from(), c.window().through(),
+                                new As400OnlineNativeEvidence.Sample(c.window().before().directory(), c.window().before().identities()),
+                                new As400OnlineNativeEvidence.Sample(c.window().after().directory(), c.window().after().identities())).report());
+                        var changes = new TableChanges();
+                        c.bindings().definitions().forEach(d -> changes.create(d.storedTable()));
+                        var bindings = Document.create();
+                        bindings.setArray("tables", new JsonTableChangeSerializer().serialize(changes));
+                        Files.writeString(directory.resolve("bindings.json"), DocumentWriter.defaultWriter().write(bindings));
+                        var entries = new ArrayList<Map<String, Object>>();
+                        for (var entry : c.audit().entries()) {
+                            entries.add(Map.of("position", position(entry.position()), "raw", java.util.Base64.getEncoder().encodeToString(entry.data()),
+                                    "sha256", As400OnlineHandoff.hash(entry.data()), "type", entry.header().getJournalCode() + "/" + entry.header().getEntryType()));
                         }
-                    });
-                    var controls = history.collect(c, c.window().through());
-                    var controlEntries = new ArrayList<Map<String, Object>>();
-                    for (var entry : controls.entries()) {
-                        controlEntries.add(Map.of("position", position(entry.position()), "raw", java.util.Base64.getEncoder().encodeToString(entry.data()),
-                                "sha256", As400OnlineHandoff.hash(entry.data()), "type", entry.header().getJournalCode() + "/" + entry.header().getEntryType()));
+                        report.put("entries", entries);
+                        var journals = new As400OperatorJournalEvidence(() -> connection(credentials), journal, new As400OperatorJournalEvidence.Limits(16, 5));
+                        var identities = new As400JdbcNativeIdentityEvidence(() -> connection(credentials), new As400JdbcNativeIdentityEvidence.Limits(17, 5, 1024));
+                        var history = new As400NativeHandoffHistory(journals, identities, reader, () -> {
+                            if (Thread.currentThread().isInterrupted() || System.nanoTime() >= deadline) {
+                                throw new IllegalStateException("Bounded native control discovery stopped");
+                            }
+                        });
+                        var controls = history.collect(c, c.window().through());
+                        var controlEntries = new ArrayList<Map<String, Object>>();
+                        for (var entry : controls.entries()) {
+                            controlEntries.add(Map.of("position", position(entry.position()), "raw", java.util.Base64.getEncoder().encodeToString(entry.data()),
+                                    "sha256", As400OnlineHandoff.hash(entry.data()), "type", entry.header().getJournalCode() + "/" + entry.header().getEntryType()));
+                        }
+                        report.put("controls", controlEntries);
+                        report.put("control_inventory", Map.of("open_at_origin", controls.inventory().openAtLower().keySet().stream().map(Object::toString).toList(),
+                                "open_through", controls.inventory().openThrough().keySet().stream().map(Object::toString).toList(),
+                                "terminal_count", controls.inventory().terminals().size(), "maintenance_count", controls.inventory().maintenance().size()));
+                        var cut = c.audit().entries().stream().filter(e -> e.header().getJournalCode() == 'R' && e.header().getEntryType().equals("PT")
+                                && e.header().getCommitCycle().signum() == 0 && e.position().offset().compareTo(c.origin().offset()) > 0)
+                                .map(RawJournalPage.Entry::position).max(java.util.Comparator.comparing(JournalPosition::offset)).orElseThrow();
+                        var config = new As400ConnectorConfig(io.debezium.config.Configuration.create().with("topic.prefix", "test")
+                                .with("database.dbname", credentials.getProperty("database.dbname")).with("database.schema", library)
+                                .with("skipped.operations", "none").with("provide.transaction.metadata", false).build());
+                        var policy = new As400CaptureFingerprint.Policy(Map.of(), java.util.Set.of(), Map.of("version", "strict-v1"),
+                                Map.of("version", "native-v1"), Map.of("version", "test-v1"), false, true, Map.of("server", "test"));
+                        var prepared = history.prepare(c, cut, config, policy);
+                        report.put("prepared_replay", Map.of("checkpoint", prepared.replay().candidate().checkpoint().toOffset(),
+                                "scan", position(prepared.replay().candidate().scan()), "publication_acknowledged", false,
+                                "completed_prior_cycles", prepared.replay().completedPriorCycles().stream().map(Object::toString).toList(),
+                                "row_count", prepared.replay().projection().entries().size()));
                     }
-                    report.put("controls", controlEntries);
-                    report.put("control_inventory", Map.of("open_at_origin", controls.inventory().openAtLower().keySet().stream().map(Object::toString).toList(),
-                            "open_through", controls.inventory().openThrough().keySet().stream().map(Object::toString).toList(),
-                            "terminal_count", controls.inventory().terminals().size(), "maintenance_count", controls.inventory().maintenance().size()));
-                    var cut = c.audit().entries().stream().filter(e -> e.header().getJournalCode() == 'R' && e.header().getEntryType().equals("PT")
-                            && e.header().getCommitCycle().signum() == 0 && e.position().offset().compareTo(c.origin().offset()) > 0)
-                            .map(RawJournalPage.Entry::position).max(java.util.Comparator.comparing(JournalPosition::offset)).orElseThrow();
-                    var config = new As400ConnectorConfig(io.debezium.config.Configuration.create().with("topic.prefix", "test")
-                            .with("database.dbname", credentials.getProperty("database.dbname")).with("database.schema", library)
-                            .with("skipped.operations", "none").with("provide.transaction.metadata", false).build());
-                    var policy = new As400CaptureFingerprint.Policy(Map.of(), java.util.Set.of(), Map.of("version", "strict-v1"),
-                            Map.of("version", "native-v1"), Map.of("version", "test-v1"), false, true, Map.of("server", "test"));
-                    var prepared = history.prepare(c, cut, config, policy);
-                    report.put("prepared_replay", Map.of("checkpoint", prepared.replay().candidate().checkpoint().toOffset(),
-                            "scan", position(prepared.replay().candidate().scan()), "publication_acknowledged", false,
-                            "completed_prior_cycles", prepared.replay().completedPriorCycles().stream().map(Object::toString).toList(),
-                            "row_count", prepared.replay().projection().entries().size()));
                 }
             }
             else if (args[2].equals("bindings")) {
@@ -198,10 +199,14 @@ public final class As400OnlineCensusCapture {
                 var info = new JournalInfoRetrieval(0, 0, 0);
                 var journalInfo = new JournalInfo(journal.name(), library, false);
                 var from = info.getCurrentPosition(transport, journalInfo);
-                var limits = new As400OperatorTableEvidence.Limits(4, 5);
+                var names = args.length > 3 ? List.of(args[3].split(",")) : List.of("A", "B", "M", "U");
+                if (names.isEmpty() || names.size() > 50 || names.stream().anyMatch(name -> !name.matches("[A-Z][A-Z0-9_]{0,9}"))) {
+                    throw new IllegalArgumentException("Expected bounded physical-file names in the owned fixture library");
+                }
+                var limits = new As400OperatorTableEvidence.Limits(names.size(), 5);
                 var tables = new As400OperatorTableEvidence(() -> connection(credentials), limits);
                 var acquired = new As400NativeBindingAcquisition(() -> connection(credentials), tables, limits)
-                        .collect(List.of("A", "B", "M", "U").stream().map(name -> new As400OperatorTableEvidence.Request(journal, library, name)).toList());
+                        .collect(names.stream().map(name -> new As400OperatorTableEvidence.Request(journal, library, name)).toList());
                 var changes = new TableChanges();
                 acquired.definitions().forEach(definition -> changes.create(definition.storedTable()));
                 Document document = Document.create();

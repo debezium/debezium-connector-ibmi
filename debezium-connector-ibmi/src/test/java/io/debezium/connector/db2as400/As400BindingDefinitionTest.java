@@ -46,7 +46,9 @@ class As400BindingDefinitionTest {
                 new Example(new Codec("BINARY", 3, 0, 0), Types.BINARY, "000102", new byte[]{ 0, 1, 2 }),
                 new Example(new Codec("VARBINARY", 3, 0, 0), Types.VARBINARY, "0003000102", new byte[]{ 0, 1, 2 }),
                 new Example(new Codec("TEXT", 3, 0, 37), Types.CHAR, "c1c2c3", "ABC"),
-                new Example(new Codec("VARCHAR", 3, 0, 37), Types.VARCHAR, "0003c1c2c3", "ABC"));
+                new Example(new Codec("VARCHAR", 3, 0, 37), Types.VARCHAR, "0003c1c2c3", "ABC"),
+                new Example(new Codec("VARCHAR", 5, 0, 1208), Types.VARCHAR, "0005c384e7958c", "Ä界"),
+                new Example(new Codec("VARGRAPHIC", 2, 0, 1200), Types.NVARCHAR, "000200c4754c", "Ä界"));
     }
 
     @ParameterizedTest
@@ -70,7 +72,7 @@ class As400BindingDefinitionTest {
 
     @ParameterizedTest
     @ValueSource(strings = { "DATE:10:0:0", "TIME:8:0:0", "TIMESTAMP:26:0:0", "XML:4:0:0", "BIN4:8:0:0", "BIN4:4:1:0",
-            "TEXT:4:0:0", "VARCHAR:4:0:1208", "VARBINARY:65535:0:0", "PACKED:64:0:0", "BIN4:04:0:0", "BIN4:4:0:0:extra" })
+            "TEXT:4:0:0", "VARCHAR:4:0:65535", "VARGRAPHIC:32767:0:1200", "VARBINARY:65535:0:0", "PACKED:64:0:0", "BIN4:04:0:0", "BIN4:4:0:0:extra" })
     void unqualifiedOrImplicitCodecSettingsFailClosed(String encoded) {
         assertThrows(IllegalArgumentException.class, () -> Codec.decode(encoded));
     }
@@ -84,12 +86,15 @@ class As400BindingDefinitionTest {
         var wrongLength = new TableIdentity(id.tableId(), id.physicalFile(), id.member(), id.fileJournalId(), id.memberJournalId(), "T:0123456789ABC:8:1:false");
         assertThrows(IllegalArgumentException.class, () -> new As400BindingDefinition(wrongLength, valid.schema(), valid.codecs()));
         assertThrows(IllegalArgumentException.class, () -> valid.binding(3));
+        var varying = definition(new Example(new Codec("VARCHAR", 3, 0, 37), Types.VARCHAR, "0003c1c2c3", "ABC"), false);
+        var fixed = new TableIdentity(id.tableId(), id.physicalFile(), id.member(), id.fileJournalId(), id.memberJournalId(), "T:0123456789ABC:5:1:false");
+        assertThrows(IllegalArgumentException.class, () -> new As400BindingDefinition(fixed, varying.schema(), varying.codecs()));
     }
 
     private static As400BindingDefinition definition(Example example, boolean nullable) {
         Codec codec = example.codec();
         var id = new TableId(null, "LIB", "T");
-        boolean varying = codec.kind().equals("VARBINARY") || codec.kind().equals("VARCHAR");
+        boolean varying = List.of("VARBINARY", "VARCHAR", "VARGRAPHIC").contains(codec.kind());
         var identity = new TableIdentity(id, "T", "T", "00000000000000000001", "00000000000000000002",
                 "T:0123456789ABC:" + codec.decoder().getByteLength() + ":1:" + varying);
         var column = Column.editor().name("ID").position(1).jdbcType(example.jdbc()).type(codec.kind()).length(codec.size()).scale(codec.scale())

@@ -33,7 +33,6 @@ final class As400NativeJournalWindow {
             stable(before.directory().attached().equals(after.directory().attached()), "Journal attachment changed during capture");
             var chain = As400OperatorCutReader.chain(before.directory(), from.receiver());
             var recheck = As400OperatorCutReader.chain(after.directory(), from.receiver());
-            require(chain.size() <= 128, "Required receiver chain exceeds bound");
             stable(chain.size() == recheck.size(), "Receiver chain changed during capture");
             require(before.identities().objects().keySet().equals(java.util.Set.copyOf(targets(before.directory(), from)))
                     && before.identities().equals(after.identities()), "Missing, extra or changed native object identity");
@@ -97,7 +96,7 @@ final class As400NativeJournalWindow {
     }
 
     private static List<Target> directoryTargets(Observation directory) {
-        require(!directory.receivers().isEmpty() && directory.receivers().size() <= 1023, "Bounded complete directory required");
+        require(!directory.receivers().isEmpty(), "Complete directory required");
         var targets = new ArrayList<Target>();
         targets.add(target(directory.journal(), Kind.JOURNAL));
         directory.receivers().forEach(r -> targets.add(target(r.name(), Kind.RECEIVER)));
@@ -107,7 +106,6 @@ final class As400NativeJournalWindow {
 
     static List<Target> targets(Observation directory, JournalPosition from) {
         var chain = As400OperatorCutReader.chain(directory, from.receiver());
-        require(chain.size() <= 128, "Native receiver observation exceeds bound");
         var result = new ArrayList<Target>();
         result.add(target(directory.journal(), Kind.JOURNAL));
         chain.forEach(r -> result.add(target(r.name(), Kind.RECEIVER)));

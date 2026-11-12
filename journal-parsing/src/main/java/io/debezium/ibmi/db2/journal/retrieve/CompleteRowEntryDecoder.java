@@ -36,6 +36,9 @@ import io.debezium.ibmi.db2.journal.retrieve.rjne0200.EntryHeader;
  * No pointers, minimized/defaulted fields, XML placeholders, or unknown codecs.
  */
 public final class CompleteRowEntryDecoder implements JournalEntryDeocder<Object[]> {
+    // IBM i database-file limit, not a connector-specific inventory ceiling.
+    // https://www.ibm.com/docs/en/i/7.5.0?topic=concepts-database-file-sizes
+    public static final int MAX_COLUMNS = 8000;
     private static final Set<Class<?>> SUPPORTED = Set.of(AS400Bin2.class, AS400Bin4.class, AS400Bin8.class,
             AS400ByteArray.class, AS400Date.class, AS400Float4.class, AS400Float8.class, AS400PackedDecimal.class,
             AS400Text.class, AS400Time.class, AS400Timestamp.class, AS400ZonedDecimal.class,
@@ -45,7 +48,7 @@ public final class CompleteRowEntryDecoder implements JournalEntryDeocder<Object
     private final int rowLength;
 
     public CompleteRowEntryDecoder(AS400DataType[] columns, boolean[] nullable, int maximumRowBytes) {
-        if (columns == null || nullable == null || columns.length == 0 || columns.length > 4096
+        if (columns == null || nullable == null || columns.length == 0 || columns.length > MAX_COLUMNS
                 || columns.length != nullable.length || maximumRowBytes <= 0) {
             throw new IllegalArgumentException("Invalid complete-row layout");
         }
@@ -107,7 +110,8 @@ public final class CompleteRowEntryDecoder implements JournalEntryDeocder<Object
                 byte[] field = Arrays.copyOfRange(data, position, position + length);
                 if (columns[i] instanceof AS400VarBin || columns[i] instanceof AS400VarChar) {
                     int used = Short.toUnsignedInt(ByteBuffer.wrap(field).getShort());
-                    if (used > Short.MAX_VALUE || used > length - 2) {
+                    int unit = columns[i] instanceof AS400VarChar text ? text.getBytesPerChar() : 1;
+                    if (unit < 1 || used > Short.MAX_VALUE || (long) used * unit > length - 2) {
                         throw new IOException("Invalid varying field length");
                     }
                 }

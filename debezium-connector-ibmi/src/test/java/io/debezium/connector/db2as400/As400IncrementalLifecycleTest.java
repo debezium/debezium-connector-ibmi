@@ -419,7 +419,7 @@ class As400IncrementalLifecycleTest {
         assertRejectedWithoutPublication("lifecycle-discrimination", "savepoint_reuse", entries);
     }
 
-    private static void assertRejectedWithoutPublication(String fixture, String scenario, List<Entry> entries) throws Exception {
+    private void assertRejectedWithoutPublication(String fixture, String scenario, List<Entry> entries) throws Exception {
         List<SourceRecord> records = new ArrayList<>();
         try (var output = new Output(bindings(fixture)).dispatcher;
                 var coordinator = coordinator(initial(entries).toOffset(), fixture, entries, records::add, LIMITS)) {
@@ -876,8 +876,8 @@ class As400IncrementalLifecycleTest {
         }).toList();
     }
 
-    private static As400ReplayCoordinator coordinator(Map<String, ?> saved, String fixture, List<Entry> entries,
-                                                      As400ReplayCoordinator.RecordSink sink, As400JournalLifecycle.Limits limits)
+    private As400ReplayCoordinator coordinator(Map<String, ?> saved, String fixture, List<Entry> entries,
+                                               As400ReplayCoordinator.RecordSink sink, As400JournalLifecycle.Limits limits)
             throws IOException {
         var bindings = bindings(fixture);
         var receiver = entries.get(0).position().receiver();
@@ -885,7 +885,11 @@ class As400IncrementalLifecycleTest {
                 Map.of(receiver, new As400JournalOrder.Range(BigInteger.ONE, BigInteger.valueOf(100000))));
         return new As400ReplayCoordinator(saved, IDENTITY, FINGERPRINT, order, new As400TransactionBuffer.Limits(32, 1000, 128, 65536),
                 1024, 100, (file, library) -> bindings.get(file), As400SourceNormalizer.SavepointPolicy.consumingTargets(),
-                PARTITION.getSourcePartition(), sink, limits);
+                PARTITION.getSourcePartition(), sink, limits, false, spill());
+    }
+
+    protected As400SpillStore spill() {
+        return null;
     }
 
     private static As400Checkpoint initial(List<Entry> entries) {

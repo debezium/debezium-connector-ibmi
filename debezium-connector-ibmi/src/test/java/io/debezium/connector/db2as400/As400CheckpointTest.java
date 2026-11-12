@@ -26,10 +26,55 @@ import io.debezium.ibmi.db2.journal.retrieve.JournalPosition;
 import io.debezium.ibmi.db2.journal.retrieve.JournalReceiver;
 
 class As400CheckpointTest {
+    @Test
+    void shouldRestoreStandardIncrementalSnapshotProgressWithoutChangingJournalCoordinates() throws Exception {
+        var context = new io.debezium.pipeline.source.snapshot.incremental.SignalBasedIncrementalSnapshotContext<io.debezium.relational.TableId>(true);
+        context.addDataCollectionNamesToSnapshot(null, List.of("DB.LIB.ORDERS", "DB.LIB.ITEMS"), List.of(), "");
+        context.maximumKey(new Object[]{ 900 });
+        context.sendEvent(new Object[]{ 256 });
+        var saved = initial().withSnapshotState(As400IncrementalSnapshotState.capture(context));
+        var json = new ObjectMapper();
+        Map<String, Object> restoredOffset = json.readValue(json.writeValueAsBytes(saved.toOffset()), new TypeReference<>() {
+        });
+        var restored = As400Checkpoint.fromOffset(restoredOffset, IDENTITY, FINGERPRINT);
+        assertThat(restored).isEqualTo(saved);
+        assertThat(restored.replayFrom()).isEqualTo(initial().replayFrom());
+        assertThat(restored.completedThrough()).isEqualTo(initial().completedThrough());
+        var chunk = As400IncrementalSnapshotState.restore(restored.snapshotState());
+        assertThat(chunk.currentDataCollectionId().getId()).isEqualTo(io.debezium.relational.TableId.parse("DB.LIB.ORDERS"));
+        assertThat(chunk.chunkEndPosititon()).containsExactly(256);
+        assertThat(chunk.maximumKey().orElseThrow()).containsExactly(900);
+        assertThat(chunk.dataCollectionsToBeSnapshottedCount()).isEqualTo(2);
+        assertThat(restored.withSnapshotState(Map.of()).toOffset()).isEqualTo(initial().toOffset());
+        assertThrows(IllegalArgumentException.class, () -> legacyLoader().load(restoredOffset));
+        restoredOffset.remove(As400IncrementalSnapshotState.COLLECTIONS);
+        assertThrows(IllegalArgumentException.class, () -> As400Checkpoint.fromOffset(restoredOffset, IDENTITY, FINGERPRINT));
+    }
+
     private static As400JournalOrder order(List<JournalReceiver> receivers, Map<JournalReceiver, String> incarnations) {
         Map<JournalReceiver, As400JournalOrder.Range> ranges = new HashMap<>();
         receivers.forEach(receiver -> ranges.put(receiver, new As400JournalOrder.Range(BigInteger.ONE, BigInteger.ONE.shiftLeft(64).subtract(BigInteger.ONE))));
         return new As400JournalOrder(receivers, incarnations, ranges);
+    }
+
+    @Test
+    void shouldRetainSchemaDependenciesAlongsideIncrementalSnapshotProgress() throws Exception {
+        var context = new io.debezium.pipeline.source.snapshot.incremental.SignalBasedIncrementalSnapshotContext<io.debezium.relational.TableId>(true);
+        context.addDataCollectionNamesToSnapshot(null, List.of("DB.LIB.ORDERS"), List.of(), "");
+        var saved = initial().withSnapshotState(As400IncrementalSnapshotState.capture(context))
+                .withSchemaState(new As400SchemaState(As400SchemaState.ORIGIN, new As400SchemaState.Cursor(1, "a".repeat(64))));
+        Map<String, Object> offset = new ObjectMapper().readValue(new ObjectMapper().writeValueAsBytes(saved.toOffset()), new TypeReference<>() {
+        });
+        assertThat(offset).containsEntry(As400Checkpoint.VERSION, "4");
+        assertThat(As400Checkpoint.fromOffset(offset, IDENTITY, FINGERPRINT)).isEqualTo(saved);
+        assertThat(saved.withSnapshotState(Map.of()).schemaState()).isEqualTo(saved.schemaState());
+        for (String field : saved.schemaState().fields().keySet()) {
+            var missing = new HashMap<>(offset);
+            missing.remove(field);
+            assertThrows(IllegalArgumentException.class, () -> As400Checkpoint.fromOffset(missing, IDENTITY, FINGERPRINT));
+        }
+        offset.put("schema.floor.ordinal", "2");
+        assertThrows(IllegalArgumentException.class, () -> As400Checkpoint.fromOffset(offset, IDENTITY, FINGERPRINT));
     }
 
     private static As400Checkpoint checkpoint(String journal, String fingerprint, JournalPosition floor, boolean inclusive, JournalPosition completed) {
@@ -67,8 +112,8 @@ class As400CheckpointTest {
     }
 
     @ParameterizedTest
-    @ValueSource(strings = { "1", "3", "", "2.0" })
-    void rejectsUnsupportedVersionsInBothLoaders(String version) {
+    @ValueSource(strings = { "1", "3", "4", "", "2.0" })
+    void shouldRejectUnsupportedVersionsAndSnapshotVersionWithoutChunkState(String version) {
         Map<String, Object> offset = new HashMap<>(initial().toOffset());
         offset.put(As400Checkpoint.VERSION, version);
         assertThrows(IllegalArgumentException.class, () -> As400Checkpoint.fromOffset(offset, IDENTITY, FINGERPRINT));

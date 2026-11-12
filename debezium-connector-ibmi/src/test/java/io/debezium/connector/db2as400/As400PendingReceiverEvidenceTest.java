@@ -40,6 +40,45 @@ import io.debezium.ibmi.db2.journal.retrieve.RawJournalPage;
 import io.debezium.ibmi.db2.journal.retrieve.rjne0200.EntryHeaderDecoder;
 
 class As400PendingReceiverEvidenceTest {
+    @ParameterizedTest
+    @ValueSource(strings = { "valid", "missing", "extra", "changed-count", "late-unknown" })
+    void shouldValidatePendingHistoryAcrossLargeNativeDirectories(String fault) throws Exception {
+        var fixture = new Fixture();
+        int count = 5000;
+        fixture.before.put("NUMBER_JOURNAL_RECEIVERS", count);
+        fixture.before.put("ATTACHED_JOURNAL_RECEIVER_NAME", "R" + (count - 1));
+        fixture.after.putAll(fixture.before);
+        fixture.receiverRows.clear();
+        for (int i = 0; i < count; i++) {
+            var row = new HashMap<>(fixture.receiver);
+            row.put("JOURNAL_RECEIVER_NAME", "R" + i);
+            row.put("STATUS", i == count - 1 ? "ATTACHED" : "ONLINE");
+            row.put("FIRST_SEQUENCE_NUMBER", i * 10L + 1);
+            row.put("LAST_SEQUENCE_NUMBER", (i + 1L) * 10);
+            row.put("PREVIOUS_JOURNAL_RECEIVER_LIBRARY", i == 0 ? null : "LIB");
+            row.put("PREVIOUS_JOURNAL_RECEIVER", i == 0 ? null : "R" + (i - 1));
+            row.put("NEXT_JOURNAL_RECEIVER_LIBRARY", i == count - 1 ? null : "LIB");
+            row.put("NEXT_JOURNAL_RECEIVER", i == count - 1 ? null : "R" + (i + 1));
+            fixture.receiverRows.add(row);
+        }
+        switch (fault) {
+            case "missing" -> fixture.receiverRows.remove(count - 1);
+            case "extra" -> fixture.receiverRows.add(fixture.receiver);
+            case "changed-count" -> fixture.after.put("NUMBER_JOURNAL_RECEIVERS", count - 1);
+            case "late-unknown" -> fixture.receiverRows.get(count - 1).put("PENDING_TRANSACTIONS", "UNKNOWN");
+        }
+        var collector = new As400PendingReceiverEvidence(() -> fixture.connection, new JournalReceiver("JRN", "LIB"), Integer.MAX_VALUE - 1, 5);
+        if (fault.equals("valid")) {
+            assertThat(collector.collect().receivers()).hasSize(count).allMatch(As400PendingReceiverEvidence.Receiver::pending);
+            verify(fixture.statements.get(1)).setMaxRows(count + 1);
+            verify(fixture.statements.get(1)).setFetchSize(128);
+        }
+        else {
+            assertThrows(SQLException.class, collector::collect);
+        }
+        verify(fixture.connection).close();
+    }
+
     @Test
     void collectsCompleteReadOnlyParameterizedDirectoryWithBothCounts() throws Exception {
         var fixture = new Fixture();

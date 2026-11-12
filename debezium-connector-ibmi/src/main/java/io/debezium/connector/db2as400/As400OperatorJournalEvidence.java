@@ -64,7 +64,7 @@ final class As400OperatorJournalEvidence {
 
     record Limits(int maximumReceivers, int queryTimeoutSeconds) {
         Limits {
-            if (maximumReceivers < 1 || maximumReceivers > 1024 || queryTimeoutSeconds < 1 || queryTimeoutSeconds > 3600) {
+            if (maximumReceivers < 1 || maximumReceivers == Integer.MAX_VALUE || queryTimeoutSeconds < 1 || queryTimeoutSeconds > 3600) {
                 throw new IllegalArgumentException("Finite journal evidence limits required");
             }
         }
@@ -75,6 +75,7 @@ final class As400OperatorJournalEvidence {
     private final Limits limits;
     private final boolean currentOnly;
     private final boolean requireRetention;
+    private final boolean nativeCount;
 
     As400OperatorJournalEvidence(As400JdbcConnectionFactory connections, JournalReceiver journal, Limits limits) {
         this(connections, journal, limits, false);
@@ -89,9 +90,24 @@ final class As400OperatorJournalEvidence {
         return new As400OperatorJournalEvidence(connections, journal, limits, true, true);
     }
 
+    /** Complete native inventory bounds replace arbitrary connector receiver ceilings. */
+    static As400OperatorJournalEvidence directory(As400JdbcConnectionFactory connections, JournalReceiver journal) {
+        return new As400OperatorJournalEvidence(connections, journal, new Limits(Integer.MAX_VALUE - 1, 5), false, false, true);
+    }
+
+    static As400OperatorJournalEvidence retained(As400JdbcConnectionFactory connections, JournalReceiver journal) {
+        return new As400OperatorJournalEvidence(connections, journal, new Limits(Integer.MAX_VALUE - 1, 5), true, true, true);
+    }
+
     private As400OperatorJournalEvidence(As400JdbcConnectionFactory connections, JournalReceiver journal, Limits limits,
                                          boolean currentOnly, boolean requireRetention) {
+        this(connections, journal, limits, currentOnly, requireRetention, false);
+    }
+
+    private As400OperatorJournalEvidence(As400JdbcConnectionFactory connections, JournalReceiver journal, Limits limits,
+                                         boolean currentOnly, boolean requireRetention, boolean nativeCount) {
         this.requireRetention = requireRetention;
+        this.nativeCount = nativeCount;
         this.currentOnly = currentOnly;
         this.connections = Objects.requireNonNull(connections);
         this.journal = names(journal.library(), journal.name());
@@ -110,14 +126,33 @@ final class As400OperatorJournalEvidence {
     private Observation collect(JournalReceiver floor, boolean linked) throws SQLException {
         checkInterrupted();
         try (Connection connection = connections.open()) {
+            return collectOn(connection, floor, linked);
+        }
+    }
+
+    /** The interval owner closes this connection after both fresh observations. */
+    Observation collectOn(Connection connection) throws SQLException {
+        return collectOn(connection, null, currentOnly);
+    }
+
+    Observation collectFromOn(Connection connection, JournalReceiver floor) throws SQLException {
+        return collectOn(connection, Objects.requireNonNull(floor), true);
+    }
+
+    private Observation collectOn(Connection connection, JournalReceiver floor, boolean linked) throws SQLException {
+        checkInterrupted();
+        try {
             connection.setReadOnly(true);
-            List<JournalReceiver> attached = attachment(connection);
-            if (attached.size() != 1) {
+            List<Directory> directory = attachment(connection);
+            if (directory.size() != 1) {
                 throw new SQLException("Journal is absent or ambiguous");
             }
+            Directory observed = directory.get(0);
+            JournalReceiver attached = observed.attached();
+            int maximum = Math.min(limits.maximumReceivers(), observed.count());
             Decode<Receiver> decoder = row -> {
                 exactJournal(row);
-                one(row, "JOURNAL_RECEIVER_ASP_NUMBER");
+                systemBasicAsp(row, "JOURNAL_RECEIVER_ASP_NUMBER");
                 return new Receiver(names(text(row, "JOURNAL_RECEIVER_LIBRARY"), text(row, "JOURNAL_RECEIVER_NAME")), text(row, "STATUS"),
                         sequence(row, "FIRST_SEQUENCE_NUMBER"), sequence(row, "LAST_SEQUENCE_NUMBER"),
                         optionalNames(row, "PREVIOUS_JOURNAL_RECEIVER_LIBRARY", "PREVIOUS_JOURNAL_RECEIVER"),
@@ -127,14 +162,23 @@ final class As400OperatorJournalEvidence {
             };
             List<Receiver> receivers;
             if (!linked) {
-                receivers = query(connection, RECEIVERS_SQL, limits.maximumReceivers(), decoder);
+                receivers = query(connection, RECEIVERS_SQL, maximum, decoder);
+                if (nativeCount) {
+                    var after = attachment(connection);
+                    if (after.size() != 1 || !observed.equals(after.get(0))) {
+                        throw new As400OperatorCutReader.UnstableCutException("Receiver directory count or attachment changed during observation");
+                    }
+                    if (receivers.size() != observed.count()) {
+                        throw new SQLException("Incomplete native receiver directory");
+                    }
+                }
             }
             else {
                 receivers = new ArrayList<>();
-                JournalReceiver next = floor == null ? attached.get(0) : floor;
+                JournalReceiver next = floor == null ? attached : floor;
                 var visited = new java.util.HashSet<JournalReceiver>();
                 while (true) {
-                    if (!visited.add(next) || receivers.size() >= limits.maximumReceivers()) {
+                    if (!visited.add(next) || receivers.size() >= maximum) {
                         throw new SQLException("Required receiver chain is cyclic or exceeds the retained-chain bound");
                     }
                     JournalReceiver exact = next;
@@ -152,13 +196,13 @@ final class As400OperatorJournalEvidence {
                         }
                     }
                     receivers.add(receiver);
-                    if (next.equals(attached.get(0))) {
+                    if (next.equals(attached)) {
                         if (!"ATTACHED".equals(receiver.status()) || receiver.next().isPresent()) {
                             // Retry only an observed attachment change. A static
                             // contradictory row remains a hard validation failure.
                             if (!"ATTACHED".equals(receiver.status()) && receiver.next().isPresent()) {
                                 var current = attachment(connection);
-                                if (current.size() == 1 && !current.get(0).equals(attached.get(0))) {
+                                if (current.size() == 1 && !current.get(0).attached().equals(attached)) {
                                     throw new As400OperatorCutReader.UnstableCutException("Attachment changed between journal and receiver observations");
                                 }
                             }
@@ -176,7 +220,7 @@ final class As400OperatorJournalEvidence {
                 throw new SQLException("Receiver directory is absent or ambiguous");
             }
             check(connection);
-            return new Observation(journal, attached.get(0), receivers);
+            return new Observation(journal, attached, receivers);
         }
         catch (As400OperatorCutReader.UnstableCutException race) {
             throw race;
@@ -186,13 +230,20 @@ final class As400OperatorJournalEvidence {
         }
     }
 
-    private List<JournalReceiver> attachment(Connection connection) throws SQLException {
-        return query(connection, requireRetention ? RETAINED_JOURNAL_SQL : JOURNAL_SQL, 1, row -> {
+    private record Directory(JournalReceiver attached, int count) {
+    }
+
+    private List<Directory> attachment(Connection connection) throws SQLException {
+        String sql = requireRetention ? RETAINED_JOURNAL_SQL : JOURNAL_SQL;
+        if (nativeCount) {
+            sql = sql.replace("JOURNAL_CACHE", "JOURNAL_CACHE, NUMBER_JOURNAL_RECEIVERS");
+        }
+        return query(connection, sql, 1, row -> {
             exactJournal(row);
             exact(row, "JOURNAL_TYPE", "*LOCAL");
             exact(row, "JOURNAL_STATE", "*ACTIVE");
             exact(row, "JOURNAL_ASPGRP", "*SYSBAS");
-            one(row, "ASP_NUMBER");
+            systemBasicAsp(row, "ASP_NUMBER");
             exact(row, "REMOVE_INTERNAL_ENTRIES", "NO");
             exact(row, "REMOVE_FIXED_LENGTH_DETAIL", "NO");
             exact(row, "MINIMIZE_ESD_FOR_FILES", "NO");
@@ -203,7 +254,11 @@ final class As400OperatorJournalEvidence {
             if (requireRetention) {
                 exact(row, "DELETE_RECEIVER_OPTION", "NO");
             }
-            return names(text(row, "ATTACHED_JOURNAL_RECEIVER_LIBRARY"), text(row, "ATTACHED_JOURNAL_RECEIVER_NAME"));
+            BigInteger count = nativeCount ? sequence(row, "NUMBER_JOURNAL_RECEIVERS") : BigInteger.valueOf(limits.maximumReceivers());
+            if (count == null || count.signum() <= 0 || count.compareTo(BigInteger.valueOf(Integer.MAX_VALUE - 1)) > 0) {
+                throw new SQLException("Missing or invalid native receiver count");
+            }
+            return new Directory(names(text(row, "ATTACHED_JOURNAL_RECEIVER_LIBRARY"), text(row, "ATTACHED_JOURNAL_RECEIVER_NAME")), count.intValueExact());
         });
     }
 
@@ -212,6 +267,7 @@ final class As400OperatorJournalEvidence {
         try (PreparedStatement statement = connection.prepareStatement(sql)) {
             statement.setQueryTimeout(limits.queryTimeoutSeconds());
             statement.setMaxRows(maximum + 1);
+            statement.setFetchSize(Math.min(maximum + 1, 128));
             statement.setString(1, journal.library());
             statement.setString(2, journal.name());
             if (exact.length != 0) {
@@ -252,10 +308,15 @@ final class As400OperatorJournalEvidence {
         }
     }
 
-    private static void one(ResultSet row, String key) throws SQLException {
-        if (!BigInteger.ONE.equals(sequence(row, key))) {
-            throw new SQLException("Only system ASP 1 is supported");
+    private static void systemBasicAsp(ResultSet row, String key) throws SQLException {
+        if (!systemBasicAsp(sequence(row, key))) {
+            throw new SQLException("Journal evidence requires the system or a basic user ASP (1-32)");
         }
+    }
+
+    /** QSYS.LIB names are shared by the system ASP and basic user ASPs, not independent ASP groups. */
+    static boolean systemBasicAsp(BigInteger number) {
+        return number != null && number.signum() > 0 && number.compareTo(BigInteger.valueOf(32)) <= 0;
     }
 
     private static BigInteger sequence(ResultSet row, String key) throws SQLException {
@@ -307,7 +368,20 @@ final class As400OperatorJournalEvidence {
 
     private static void warning(SQLWarning warning) throws SQLException {
         if (warning != null) {
+            // IBM metadata views can enumerate objects outside the selected
+            // journal. SQL0462/01548 can accompany a disappearing or locked
+            // object, or insufficient authority. None of that observation is
+            // usable: a caller may only retry the entire unpublished interval.
+            if (warning.getErrorCode() == 462 && "01548".equals(warning.getSQLState()) && warning.getNextException() == null) {
+                throw new IncompleteObservationException(warning);
+            }
             throw new SQLException("Partial journal evidence rejected", warning);
+        }
+    }
+
+    static final class IncompleteObservationException extends SQLException {
+        IncompleteObservationException(SQLWarning warning) {
+            super("Partial journal evidence rejected; complete recollection required", warning.getSQLState(), warning.getErrorCode(), warning);
         }
     }
 

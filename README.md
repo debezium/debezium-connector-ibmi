@@ -70,6 +70,14 @@ already emitted prefix can repeat. When transaction metadata is enabled and a
 restart begins inside a transaction, BEGIN/END describe the observed suffix;
 counts before the saved offset are not reconstructed.
 
+Journal row events include the optional string field `source.rrn` (relative record
+number), adapted from [PR #92](https://github.com/debezium/debezium-connector-ibmi/pull/92)
+by Jona J. It is populated from the row's native journal header in both legacy and
+transaction-buffered streaming. Snapshot, truncate and transaction-control records
+have no row RRN. This field does not change Kafka keys or restart offsets. IBM i can
+reuse record numbers after a clear and change them during physical reorganization;
+they are physical coordinates within a member, not permanent business identifiers.
+
 # Limitations
 
 * TODO integrate with exit program to prevent journal loss https://github.com/jhc-systems/debezium-ibmi-exitpgm
@@ -83,7 +91,9 @@ The connector can emit a standard Debezium truncate event (`op=t`, null key,
 null `before` and `after`) for `F/CR` member clears. This follow-up also classifies
 `D/CG` subtype `8` (SQL truncate) and subtype `3` (optimized bulk DELETE) using
 the object-level entry-specific data. The legacy reader refreshes the schema for
-other D/CG subtypes; the configured path rejects unqualified structural changes.
+other D/CG subtypes. The online path supports validated, observed column-schema
+changes and newly created tables, saving their definitions before output. It rejects ambiguous historical
+changes rather than decoding old rows with an unproven current definition.
 
 The transactional path uses bounded transaction buffering, immutable binding
 history and durable replay checkpoints. See the [architecture](docs/dcg-architecture.md)
@@ -94,9 +104,15 @@ For an already-streaming connector, the default-off
 snapshot or an administrator-managed write pause. It uses brief automatic native
 locks and standard table filters; read the
 [online configuration and restrictions](docs/dcg-online-configuration.md) before enabling it.
+Online startup can use ordinary durable source offsets without Kafka source
+transactions. Binding history can use Kafka or the standard file-history settings
+for an ordered Engine deployment, including the tested Server JVM/HTTP profile.
+Delivery remains at least once; see the
+[runtime evidence and remaining gaps](docs/dcg-compatibility-baseline.md).
 The separate [configured first-start profile](docs/dcg-configured-native.md)
 provides an operator-controlled initial snapshot, including explicit RRN key
-support for native files without declared primary keys.
+support when physical row keys are explicitly wanted. Otherwise files without
+declared primary keys retain Debezium's null-key behavior in either profile.
 
 See [contributor testing](docs/dcg-contributor-testing.md) for offline, local Kafka
 and optional isolated IBM i tests. Historical design experiments and progress
@@ -220,9 +236,10 @@ The SQL client can appear to hang while this inquiry is pending. Verify that bot
 the SQL schema and the IBM i library are gone, and remove the private credentials
 file. Do not use `CASCADE` to bypass unexpected dependencies.
 
-Before release, validate member-scope and commitment-control rejection on a live
-system, restart/replay behavior, and the complete source/transform/sink path.
-Transactional truncates and general optimized-DELETE support remain out of scope.
+These F/CR integration tests do not qualify transactional D/CG or optimized
+DELETE. Their separate native, restart and runtime evidence is recorded in the
+[transactional validation report](docs/dcg-validation.md). Downstream handling
+still depends on the selected transform and consumer.
 
 # Problems
 

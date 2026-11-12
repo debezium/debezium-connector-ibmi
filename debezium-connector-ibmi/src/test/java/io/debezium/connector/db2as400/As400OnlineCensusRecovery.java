@@ -351,6 +351,7 @@ final class As400OnlineCensusRecovery {
 
     static final class Output extends As400ConnectorTask implements AutoCloseable {
         final As400BatchDispatcher dispatcher;
+        final As400NativeTableSchemas schemas;
 
         Output(List<As400BindingDefinition> definitions) {
             this(definitions, true);
@@ -373,7 +374,7 @@ final class As400OnlineCensusRecovery {
                     return "offline." + id.schema() + "." + id.table();
                 }
             };
-            var schemas = new As400NativeTableSchemas(definitions, config, topics);
+            schemas = new As400NativeTableSchemas(definitions, config, topics);
             dispatcher = new As400BatchDispatcher(config, PARTITION, schemas, topics, new DebeziumHeaderProducer(taskContext), () -> 42_000L, 20_000, true);
         }
 

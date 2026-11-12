@@ -72,6 +72,50 @@ class As400ReplayCoordinatorTest {
     private static final As400Checkpoint INITIAL = As400Checkpoint.afterVerifiedBoundary(IDENTITY, FINGERPRINT, pos(1), "old-instance");
     private final QueueSink sink = new QueueSink();
 
+    @ParameterizedTest
+    @ValueSource(booleans = { false, true })
+    void shouldKeepChunkProgressBehindEveryPartiallyDeliveredSnapshotBatch(boolean interrupted) throws Exception {
+        var context = new io.debezium.pipeline.source.snapshot.incremental.SignalBasedIncrementalSnapshotContext<TableId>(true);
+        context.addDataCollectionNamesToSnapshot("snapshot-request", List.of("DB.LIB.TEST"), List.of(), "");
+        context.maximumKey(new Object[]{ 900 });
+        context.sendEvent(new Object[]{ 100 });
+        var saved = INITIAL.withSnapshotState(As400IncrementalSnapshotState.capture(context));
+        var replay = fresh(saved.toOffset());
+        var factory = new As400ReplayCoordinator.RecordFactory() {
+            @Override
+            public void prepare(CommittedBatch batch, Consumer<SourceRecord> output) {
+                throw new AssertionError("Expected independent snapshot signal preparation");
+            }
+
+            @Override
+            public void prepareSignals(Consumer<SourceRecord> output) {
+                for (int id : List.of(101, 102, 103)) {
+                    context.sendEvent(new Object[]{ id });
+                    output.accept(record("snapshot", id));
+                }
+            }
+
+            @Override
+            public Optional<Map<String, String>> snapshotState() {
+                return Optional.of(As400IncrementalSnapshotState.capture(context));
+            }
+        };
+        if (interrupted) {
+            sink.failAt = 1;
+            assertThrows(RecoveryException.class, () -> replay.deliverSignals(factory));
+            assertThat(replay.checkpoint()).isEqualTo(saved);
+        }
+        else {
+            replay.deliverSignals(factory);
+            assertThat(replay.checkpoint().completedThrough()).isEqualTo(saved.completedThrough());
+            assertThat(As400IncrementalSnapshotState.restore(replay.checkpoint().snapshotState()).chunkEndPosititon()).containsExactly(103);
+        }
+        assertThat(sink.records).allSatisfy(record -> assertThat(record.sourceOffset()).isEqualTo(saved.toOffset()));
+        sink.acknowledgeThrough(sink.records.size() - 1);
+        var restart = fresh(durableRoundTrip(sink.durable));
+        assertThat(As400IncrementalSnapshotState.restore(restart.checkpoint().snapshotState()).chunkEndPosititon()).containsExactly(100);
+    }
+
     @Test
     void scanFloorAndCompletedBoundaryRemainSeparateAndSnapshotsDoNotMutate() throws Exception {
         As400ReplayCoordinator coordinator = fresh(INITIAL.toOffset());
@@ -447,7 +491,11 @@ class As400ReplayCoordinatorTest {
         return new As400ReplayCoordinator(offset, IDENTITY, FINGERPRINT, ORDER, limits, 1024, outputLimit,
                 (file, library) -> new As400SourceNormalizer.TableBinding(file.equals("OTHER") ? other : table, decoder),
                 (source, control) -> SavepointRollback.UNRESOLVED,
-                PARTITION, sink::enqueue);
+                PARTITION, sink::enqueue, null, false, spill());
+    }
+
+    protected As400SpillStore spill() {
+        return null;
     }
 
     private Optional<CommittedBatch> feed(As400ReplayCoordinator coordinator, Event event) {

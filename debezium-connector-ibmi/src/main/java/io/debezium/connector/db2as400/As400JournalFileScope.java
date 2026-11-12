@@ -27,7 +27,6 @@ final class As400JournalFileScope {
     static final String FILES_SQL = """
             SELECT TRIM(CAST(QJOJRNLIB AS CHAR(10) CCSID 37)) AS JOURNAL_LIBRARY,
                    TRIM(CAST(QJOJOURNAL AS CHAR(10) CCSID 37)) AS JOURNAL_NAME,
-                   TRIM(CAST(QJOASP AS CHAR(10) CCSID 37)) AS ASP,
                    TRIM(CAST(QJOLIBRARY AS CHAR(10) CCSID 37)) AS OBJECT_LIBRARY,
                    TRIM(CAST(QJOOBJECT AS CHAR(10) CCSID 37)) AS OBJECT_NAME,
                    TRIM(CAST(QJOOBJTYPE AS CHAR(7) CCSID 37)) AS OBJECT_TYPE,
@@ -36,7 +35,7 @@ final class As400JournalFileScope {
             FROM QTEMP.DCGSCOPE
             """;
     static final String COUNTS_SQL = """
-            SELECT JOURNAL_LIBRARY, JOURNAL_NAME, JOURNAL_TYPE, JOURNAL_STATE,
+            SELECT JOURNAL_LIBRARY, JOURNAL_NAME, JOURNAL_TYPE, JOURNAL_STATE, ASP_NUMBER, JOURNAL_ASPGRP,
                    JOURNALED_FILES, JOURNALED_MEMBERS, JOURNALED_LIBRARIES,
                    JOURNALED_DATA_AREAS, JOURNALED_DATA_QUEUES, JOURNALED_IFS_OBJECTS,
                    JOURNALED_ACCESS_PATHS, NUMBER_REMOTE_JOURNALS
@@ -68,14 +67,18 @@ final class As400JournalFileScope {
         require(connection.getAutoCommit() && connection.getTransactionIsolation() == Connection.TRANSACTION_NONE,
                 "Dedicated nontransactional native metadata connection required");
         Map<String, Integer> before = counts(connection);
-        require(before.get("JOURNALED_FILES") > 0 && before.get("JOURNALED_FILES") <= 50
-                && before.get("JOURNALED_MEMBERS").equals(before.get("JOURNALED_FILES")) && before.get("JOURNALED_LIBRARIES") <= 50
-                && COUNTS.subList(3, COUNTS.size()).stream().allMatch(field -> before.get(field) == 0), "Native scope is excessive or unsupported");
+        require(before.get("JOURNALED_FILES") > 0 && before.get("JOURNALED_MEMBERS").equals(before.get("JOURNALED_FILES"))
+                && COUNTS.subList(3, COUNTS.size()).stream().allMatch(field -> before.get(field) == 0), "Native scope is unsupported");
+        int expectedObjects = Math.addExact(before.get("JOURNALED_FILES"), before.get("JOURNALED_LIBRARIES"));
+        // CHGPF accepts at most 2147483646 records. One extra row detects a
+        // growing inventory; its independent counts, not a connector file cap,
+        // bound both native temporary storage and this read.
+        require(expectedObjects < Integer.MAX_VALUE - 1, "Native inventory exceeds physical outfile capacity");
         // A fresh dedicated job owns this temporary file. Bound the native output
         // itself, not merely the later JDBC result, and never wait for an inquiry.
         for (String text : List.of("CHGJOB INQMSGRPY(*DFT)",
                 "CRTDUPOBJ OBJ(QAWRKJRNA) FROMLIB(QSYS) OBJTYPE(*FILE) TOLIB(QTEMP) NEWOBJ(DCGSCOPE) DATA(*NO)",
-                "CHGPF FILE(QTEMP/DCGSCOPE) SIZE(128 0 0)",
+                "CHGPF FILE(QTEMP/DCGSCOPE) SIZE(" + (expectedObjects + 1) + " 0 0)",
                 "WRKJRNA JRN(" + journal.library() + "/" + journal.name()
                         + ") OUTPUT(*OUTFILE) OUTFILE(QTEMP/DCGSCOPE) OUTMBR(*FIRST *REPLACE) DETAIL(*OUTPUT)")) {
             check();
@@ -91,13 +94,17 @@ final class As400JournalFileScope {
         var objects = new HashSet<String>();
         try (var statement = connection.prepareStatement(FILES_SQL)) {
             statement.setQueryTimeout(timeout);
-            statement.setMaxRows(129);
+            statement.setMaxRows(expectedObjects + 1);
+            statement.setFetchSize(Math.min(128, expectedObjects + 1));
             try (var rows = statement.executeQuery()) {
                 while (rows.next()) {
                     check();
-                    require(objects.size() < 128, "Native journal scope exceeds observation bound");
+                    require(objects.size() < expectedObjects, "Native journal scope grew beyond independent counts");
                     exactJournal(rows);
-                    require(text(rows, "ASP").equals("1") && text(rows, "JOURNALED_TYPE").equals("0"), "Unsupported native storage or journaling mode");
+                    // Storage is established by JOURNAL_INFO and the subsequent
+                    // exact file/member identity reads. QJOASP is a character
+                    // device field, not the documented numeric ASP_NUMBER.
+                    require(text(rows, "JOURNALED_TYPE").equals("0"), "Unsupported native journaling mode");
                     String type = text(rows, "OBJECT_TYPE"), library = text(rows, "OBJECT_LIBRARY"), object = text(rows, "OBJECT_NAME");
                     name(library);
                     name(object);
@@ -117,7 +124,7 @@ final class As400JournalFileScope {
                 As400DcgNativeIo.noWarnings(rows, statement);
             }
         }
-        require(!files.isEmpty() && files.size() <= 50 && before.equals(counts(connection)), "Empty, excessive or changed native journal scope");
+        require(!files.isEmpty() && before.equals(counts(connection)), "Empty or changed native journal scope");
         require(before.get("JOURNALED_FILES") == files.size() && before.get("JOURNALED_MEMBERS") == files.size()
                 && before.get("JOURNALED_LIBRARIES") == libraries.size(), "Incomplete native file/member/library inventory");
         require(COUNTS.subList(3, COUNTS.size()).stream().allMatch(field -> before.get(field) == 0), "Unknown or unsupported journal resource");
@@ -138,6 +145,10 @@ final class As400JournalFileScope {
                 exactJournal(rows);
                 require(text(rows, "JOURNAL_TYPE").equals("*LOCAL") && text(rows, "JOURNAL_STATE").equals("*ACTIVE"), "Unsupported journal scope");
                 var result = new TreeMap<String, Integer>();
+                var asp = rows.getBigDecimal("ASP_NUMBER");
+                require(asp != null && As400OperatorJournalEvidence.systemBasicAsp(asp.toBigIntegerExact())
+                        && "*SYSBAS".equals(rows.getString("JOURNAL_ASPGRP")), "Unsupported native journal storage");
+                result.put("ASP_NUMBER", asp.intValueExact());
                 for (String field : COUNTS) {
                     var count = rows.getBigDecimal(field);
                     require(count != null && count.signum() >= 0, "Missing or invalid native scope count");

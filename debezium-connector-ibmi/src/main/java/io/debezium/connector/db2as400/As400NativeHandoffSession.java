@@ -6,7 +6,6 @@
 package io.debezium.connector.db2as400;
 
 import java.time.Duration;
-import java.util.ArrayDeque;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -22,9 +21,9 @@ import org.apache.kafka.connect.source.SourceTaskContext;
 
 import io.debezium.config.Configuration;
 import io.debezium.connector.base.ChangeEventQueue;
-import io.debezium.connector.base.QueueProvider;
 import io.debezium.connector.common.CdcSourceTaskContext;
 import io.debezium.connector.common.DebeziumHeaderProducer;
+import io.debezium.ibmi.db2.journal.retrieve.JournalPosition;
 import io.debezium.ibmi.db2.journal.retrieve.JournalReceiver;
 import io.debezium.ibmi.db2.journal.retrieve.RawJournalPage;
 import io.debezium.pipeline.DataChangeEvent;
@@ -37,7 +36,7 @@ import io.debezium.util.Clock;
 /**
  * Task-owned composition of online native discovery, durable legacy handoff and
  * continuous F/W recovery. Public admission uses the same qualified source,
- * retention, output and Kafka contract as recovery. Native acquisition remains lazy.
+ * retention, output and acknowledgement contract as recovery. Native acquisition remains lazy.
  */
 class As400NativeHandoffSession implements As400TaskHandoff {
     private static final org.slf4j.Logger LOGGER = org.slf4j.LoggerFactory.getLogger(As400NativeHandoffSession.class);
@@ -61,6 +60,8 @@ class As400NativeHandoffSession implements As400TaskHandoff {
     private final As400ContinuousRuntime.Limits limits;
     private final Configuration nativeRaw;
     private final String historyTopic;
+    private final boolean sourceOffsets;
+    private final boolean snapshotRequired;
     private String identity;
     private String fingerprint;
     private As400OperatorCutReader continuation;
@@ -72,6 +73,15 @@ class As400NativeHandoffSession implements As400TaskHandoff {
                               JournalReceiver journal, As400CaptureFingerprint.Policy policy, String historyTopic, String controlTopic,
                               As400ContinuousRuntime.Limits limits)
             throws Exception {
+        this(config, context, taskContext, nativeRaw, journal, policy, historyTopic, controlTopic, limits, false);
+    }
+
+    /** The acknowledgement contract follows the admitted runtime's actual transaction capability. */
+    As400NativeHandoffSession(As400ConnectorConfig config, SourceTaskContext context,
+                              CdcSourceTaskContext<As400ConnectorConfig> taskContext, Configuration nativeRaw,
+                              JournalReceiver journal, As400CaptureFingerprint.Policy policy, String historyTopic, String controlTopic,
+                              As400ContinuousRuntime.Limits limits, boolean sourceOffsets)
+            throws Exception {
         this.config = config;
         this.context = context;
         this.taskContext = taskContext;
@@ -81,13 +91,23 @@ class As400NativeHandoffSession implements As400TaskHandoff {
         this.limits = java.util.Objects.requireNonNull(limits);
         this.nativeRaw = nativeRaw;
         this.historyTopic = historyTopic;
-        requireProfile(config, context);
-        require(!policy.transactionMetadata() && policy.skippedOperations().isEmpty()
+        this.sourceOffsets = sourceOffsets;
+        requireDeliveryProfile();
+        require(policy.transactionMetadata() == config.shouldProvideTransactionMetadata()
+                && policy.skippedOperations().equals(As400DcgConfig.skippedOperations(config.getConfig()))
                 && policy.tombstones() == config.isEmitTombstoneOnDelete()
                 && policy.sourcePartition().equals(partition().getSourcePartition()), "Handoff policy differs from effective publication configuration");
-        var loaded = context.offsetStorageReader().offset(partition().getSourcePartition());
-        require(loaded != null, "Missing offsets cannot select automatic migration");
-        if (loaded.containsKey(As400Checkpoint.VERSION)) {
+        var loaded = As400FullSnapshotState.base(As400DeliveryOffset.strip(context.offsetStorageReader().offset(partition().getSourcePartition())));
+        snapshotRequired = As400DcgConfig.transactionalTruncateEnabled(nativeRaw) && snapshotRequired(loaded);
+        if (snapshotRequired) {
+            // Read the history store before creating IBM i handles. Even a
+            // partial proposal means this is not a new empty generation.
+            As400DcgNativeIo.bindingHistory(nativeRaw, policy, historyTopic, config.getLogicalName()).requireEmptyForSnapshot();
+        }
+        else if (loaded == null) {
+            throw new IllegalArgumentException("Missing offsets cannot select automatic migration");
+        }
+        else if (loaded.containsKey(As400Checkpoint.VERSION)) {
             identity = (String) loaded.get("journal_identity");
             fingerprint = (String) loaded.get("capture_fingerprint");
             As400Checkpoint.fromOffset(loaded, identity, fingerprint);
@@ -99,6 +119,71 @@ class As400NativeHandoffSession implements As400TaskHandoff {
                 config.getLogicalName());
         background = new As400DcgNativeIo(nativeRaw, config.getConfig().getString("database.dbname"), journal, false, policy, historyTopic,
                 config.getLogicalName());
+    }
+
+    static boolean snapshotRequired(Map<String, ?> loaded) {
+        if (loaded == null) {
+            return true;
+        }
+        if (loaded.containsKey(As400Checkpoint.VERSION) || !"false".equals(loaded.get("snapshot_completed"))) {
+            return false;
+        }
+        var partial = As400LegacyHandoff.strings(loaded);
+        require(!partial.containsKey(As400LegacyHandoff.VERSION) && !partial.containsKey(As400LegacyHandoff.FINGERPRINT)
+                && !partial.containsKey(As400LegacyHandoff.CHECKPOINT) && !partial.containsKey("snapshot")
+                && "true".equals(partial.get("offset.processed")), "Invalid incomplete ordinary snapshot offset");
+        As400Checkpoint.validatePosition(new JournalPosition(new java.math.BigInteger(partial.get("offset.event_sequence")),
+                new JournalReceiver(partial.get("offset.receiver"), partial.get("offset.receiver_library"))));
+        return true;
+    }
+
+    @Override
+    public boolean snapshotRequired() {
+        return snapshotRequired;
+    }
+
+    @Override
+    public Map<String, ?> snapshot(io.debezium.pipeline.source.spi.ChangeEventSource.ChangeEventSourceContext context,
+                                   As400OffsetContext previous,
+                                   io.debezium.pipeline.source.spi.SnapshotProgressListener<As400Partition> listener,
+                                   java.util.List<io.debezium.pipeline.notification.channels.NotificationChannel> notifications, Output output)
+            throws Exception {
+        check();
+        require(snapshotRequired || config.getServiceRegistry().getService(io.debezium.snapshot.SnapshotterService.class)
+                .getSnapshotter().shouldSnapshotData(previous != null, previous != null && !previous.isSnapshotComplete()),
+                "This task was not admitted for an ordinary snapshot");
+        foreground.history.requireEmptyForSnapshot();
+        foreground.requireRetention();
+        requireTopics(List.of());
+        var connections = new io.debezium.jdbc.DefaultMainConnectionProvidingConnectionFactory<>(
+                () -> new As400JdbcConnection(config.getJdbcConfig(), ignored -> foreground.connection(false)));
+        var saved = As400LegacySnapshotBootstrap.execute(config, taskContext, connections, this::snapshotPosition,
+                context, previous, listener, notifications, output, offset -> marker(offset, "SNAPSHOT"));
+        check();
+        require(saved.equals(durable()), "Ordinary snapshot has no matching durable completion offset");
+        foreground.history.requireEmptyForSnapshot();
+        observe("snapshot-complete", () -> saved);
+        return saved;
+    }
+
+    @Override
+    public JournalPosition snapshotPosition() throws Exception {
+        check();
+        var directory = foreground.journals.collect();
+        var attached = directory.receivers().stream().filter(r -> r.name().equals(directory.attached())).findFirst().orElseThrow();
+        attached.requireReadableProfile();
+        return new JournalPosition(attached.last(), attached.name());
+    }
+
+    @Override
+    public As400Checkpoint fullSnapshot(As400Checkpoint original, As400BindingHistory.Recovered history,
+                                        io.debezium.pipeline.source.spi.ChangeEventSource.ChangeEventSourceContext context,
+                                        io.debezium.pipeline.source.spi.SnapshotProgressListener<As400Partition> listener,
+                                        java.util.List<io.debezium.pipeline.notification.channels.NotificationChannel> channels,
+                                        Output output, boolean interrupted)
+            throws Exception {
+        return As400NativeResnapshot.execute(this, config, taskContext, original, history, context, listener, channels, output,
+                offset -> marker(offset, "SNAPSHOT"), interrupted);
     }
 
     static As400NativeHandoffSession open(As400ConnectorConfig config, SourceTaskContext context,
@@ -113,7 +198,8 @@ class As400NativeHandoffSession implements As400TaskHandoff {
         // Keep the task's service registry: startRecovery registers the converter
         // and queue services on this exact configuration before coordinator work.
         return new As400NativeHandoffSession(config, context, taskContext, raw,
-                profile.journal, profile.onlinePolicy(), profile.historyTopic, profile.controlTopic(), profile.runtimeLimits);
+                profile.journal, profile.onlinePolicy(), profile.historyTopic, profile.controlTopic(), profile.runtimeLimits,
+                context.transactionContext() == null);
     }
 
     @Override
@@ -124,6 +210,11 @@ class As400NativeHandoffSession implements As400TaskHandoff {
     @Override
     public boolean allowLegacyHandoffRecovery() {
         return true;
+    }
+
+    @Override
+    public boolean sourceOffsetAcknowledgements() {
+        return sourceOffsets;
     }
 
     @Override
@@ -144,15 +235,37 @@ class As400NativeHandoffSession implements As400TaskHandoff {
     @Override
     public void checkQualified(Configuration raw) {
         check();
-        requireProfile(config, context);
+        // Connector settings are fixed for this task instance and were validated
+        // before constructing either native handle. Reconfiguration creates a
+        // new task. Do not rebuild SMT rules and configuration maps per record;
+        // keep the live stop and runtime-capability checks on every publication.
+        require(context != null && (context.transactionContext() == null) == sourceOffsets,
+                "Native handoff runtime acknowledgement capability changed");
+    }
+
+    private void requireDeliveryProfile() {
+        require(!As400BindingHistory.fileStorage(nativeRaw) || sourceOffsets,
+                "File binding history requires ordinary source-offset acknowledgement");
+        if (!sourceOffsets) {
+            requireProfile(config, context);
+            return;
+        }
+        As400BatchDispatcher.requireConfiguration(config);
+        As400RecoveryAcknowledgements.requireSourceOffsetProfile(config.getConfig().asMap());
+        require(context != null && context.transactionContext() == null,
+                "Qualified ordered source-offset handoff without transaction context required");
     }
 
     static void requireProfile(As400ConnectorConfig config, SourceTaskContext context) {
         As400BatchDispatcher.requireConfiguration(config);
         As400RecoveryAcknowledgements.requireConnectorProfile(config.getConfig().asMap());
-        require(!config.shouldProvideTransactionMetadata() && "none".equals(config.getConfig().getString("skipped.operations"))
-                && context != null && context.transactionContext() != null,
-                "Qualified no-metadata native handoff with Connect source transactions required");
+        require(context != null && context.transactionContext() != null,
+                "Qualified native handoff with Connect source transactions required");
+    }
+
+    @Override
+    public boolean supportsTaskRestart() {
+        return true;
     }
 
     private void check() {
@@ -177,10 +290,19 @@ class As400NativeHandoffSession implements As400TaskHandoff {
     }
 
     private As400NativeHandoffHistory historyReader() {
-        return new As400NativeHandoffHistory(background.journals, background.identities, background.reader, this::check);
+        return new As400NativeHandoffHistory(background.journals, background.identities, background.reader, this::check,
+                background.handoffWork(runtimeLimits(), this::check));
     }
 
-    private Future<Optional<As400NativeBoundaryCollector.Candidate>> collect() {
+    /** Immutable discovery facts only; the collector closes every raw capture before returning. */
+    private record Discovered(String journal, JournalPosition origin, String receiver,
+            List<As400BindingDefinition> definitions, As400BindingHistory.Discovery discovery) {
+        private Discovered {
+            definitions = List.copyOf(definitions);
+        }
+    }
+
+    private Future<Optional<Discovered>> collect() {
         check();
         int attempt = ++attempts;
         return collector.submit(() -> {
@@ -190,7 +312,37 @@ class As400NativeHandoffSession implements As400TaskHandoff {
                 Thread.sleep(delay);
                 check();
             }
-            return attemptBoundary(attempt);
+            var boundary = attemptBoundary(attempt);
+            if (boundary.isEmpty()) {
+                return Optional.empty();
+            }
+            // Complete potentially large control-history discovery on this same
+            // background thread. Legacy publication does not borrow these handles
+            // or captures. Only immutable facts cross back to the source loop.
+            try (var c = boundary.orElseThrow(); var history = historyReader()) {
+                var nativeHistory = history.collect(c, c.window().through());
+                var definitions = legacyCatalog(c.bindings().definitions(), background.server());
+                As400NativeTableSchemas.requireLegacyTemporalCompatibility(definitions.stream()
+                        .filter(d -> config.getTableFilters().dataCollectionFilter().isIncluded(d.identity().tableId())
+                                || config.isSignalDataCollection(d.identity().tableId()))
+                        .toList());
+                observe("native-boundary", () -> Map.of("origin", c.origin().toString(), "floor", c.historyFloor().toString(),
+                        "acquired", c.completion().acquired().toString(), "released", c.completion().released().toString(),
+                        "job", c.completion().job(), "thread", c.completion().thread().toString(),
+                        "raw", raw(c.audit().entries()), "controls", raw(nativeHistory.entries()),
+                        "native_before", nativeSample(c.window().before()), "native_after", nativeSample(c.window().after())));
+                check();
+                return Optional.of(new Discovered(c.window().journalToken(), c.origin(), c.window().receiverTokens().get(c.origin().receiver()),
+                        definitions, new As400BindingHistory.Discovery(c.historyFloor(), nativeHistory.order().incarnation(c.historyFloor()))));
+            }
+            catch (IllegalArgumentException rejected) {
+                check();
+                if (hasSuppressedCleanup(rejected)) {
+                    throw rejected;
+                }
+                LOGGER.warn("Unpublished boundary history changed; acquiring a new boundary while legacy capture continues: {}", rejected.getMessage());
+                return Optional.empty();
+            }
         });
     }
 
@@ -201,7 +353,7 @@ class As400NativeHandoffSession implements As400TaskHandoff {
             Optional<As400NativeBoundaryCollector.Candidate> candidate;
             try {
                 candidate = new As400NativeBoundaryCollector(journal, () -> background.connection(false),
-                        background.acquisition, background.reader, this::check).collect();
+                        background.acquisition, background.reader, this::check, () -> background.capture(this::check)).collect();
             }
             catch (Exception failure) {
                 if (As400NativeBoundaryPulse.hasUnverifiedCleanup(failure)) {
@@ -250,6 +402,11 @@ class As400NativeHandoffSession implements As400TaskHandoff {
 
     @Override
     public As400Checkpoint handoff(Map<String, ?> loaded, Output output) throws Exception {
+        return handoff(loaded, output, null);
+    }
+
+    @Override
+    public As400Checkpoint handoff(Map<String, ?> loaded, Output output, Signals signals) throws Exception {
         requireTopics(List.of());
         var pending = foreground.history.pendingOnlineCandidate(loaded, policy);
         if (pending.isPresent()) {
@@ -257,10 +414,12 @@ class As400NativeHandoffSession implements As400TaskHandoff {
         }
         if (loaded.containsKey(As400LegacyHandoff.VERSION)) {
             var facts = pending.orElseThrow();
-            var prepared = historyReader().resume(facts, As400LegacyHandoff.position(As400LegacyHandoff.strings(loaded)), config, policy);
-            return activate(facts, prepared, loaded, output);
+            try (var history = historyReader()) {
+                var prepared = history.resume(facts, As400LegacyHandoff.position(As400LegacyHandoff.strings(loaded)), config, policy);
+                return activate(facts, prepared, loaded, output);
+            }
         }
-        Future<Optional<As400NativeBoundaryCollector.Candidate>> candidate = pending.isEmpty() ? collect() : null;
+        Future<Optional<Discovered>> candidate = pending.isEmpty() ? collect() : null;
         // Preserve clear capture during the legacy prefix. A transactional clear
         // before a qualified boundary must stop explicitly, never disappear.
         var legacyConfig = config;
@@ -272,19 +431,48 @@ class As400NativeHandoffSession implements As400TaskHandoff {
         try (var jdbc = new As400JdbcConnection(legacyConfig.getJdbcConfig(), ignored -> foreground.connection(false))) {
             var schemas = new As400DatabaseSchema(legacyConfig, jdbc, topics, config.schemaNameAdjuster(),
                     config.getServiceRegistry().tryGetService(CustomConverterRegistry.class), taskContext);
-            var staging = new Staging();
+            var legacyNotifications = new java.util.concurrent.atomic.AtomicReference<io.debezium.pipeline.notification.NotificationService<As400Partition, As400OffsetContext>>();
+            var staging = new As400LegacySnapshotBootstrap.Delivery(output, offset -> marker(offset, "LEGACY-PREFIX"));
             var delivery = new ChangeEventQueue.Builder<DataChangeEvent>().maxBatchSize(4096).maxQueueSize(4096).pollInterval(Duration.ZERO)
                     .loggingContextSupplier(() -> taskContext.configureLoggingContext("automatic-legacy"))
                     .queueProvider(staging).build();
             try (var dispatcher = new As400EventDispatcher(legacyConfig, topics, schemas, delivery,
-                    legacyConfig.getTableFilters().dataCollectionFilter(), DataChangeEvent::new, new As400EventMetadataProvider(),
-                    config.schemaNameAdjuster(), null, new DebeziumHeaderProducer(taskContext))) {
+                    table -> legacyConfig.getTableFilters().dataCollectionFilter().isIncluded(table) || legacyConfig.isSignalDataCollection(table),
+                    DataChangeEvent::new, new As400EventMetadataProvider(),
+                    config.schemaNameAdjuster(), signals == null ? null : signals.processor(), new DebeziumHeaderProducer(taskContext)) {
+                @Override
+                public boolean dispatchDataChangeEvent(As400Partition partition, TableId table, io.debezium.pipeline.spi.ChangeRecordEmitter<As400Partition> emitter)
+                        throws InterruptedException {
+                    boolean handled = super.dispatchDataChangeEvent(partition, table, emitter);
+                    if (signals != null) {
+                        signals.processor().executePending();
+                    }
+                    return handled;
+                }
+            }) {
+                if (signals != null) {
+                    var tables = new io.debezium.relational.Tables();
+                    jdbc.readSchema(tables, jdbc.getRealDatabaseName(), config.getSchema(), config.getTableFilters().eligibleDataCollectionFilter(), null, false);
+                    tables.tableIds().forEach(id -> schemas.forwardSchema(tables.forTable(id)));
+                    var notifications = new io.debezium.pipeline.notification.NotificationService<As400Partition, As400OffsetContext>(
+                            signals.notifications(), config, io.debezium.schema.SchemaFactory.get(), dispatcher::enqueueNotification);
+                    legacyNotifications.set(notifications);
+                    var incremental = new io.debezium.pipeline.source.snapshot.incremental.SignalBasedIncrementalSnapshotChangeEventSource<As400Partition, TableId>(
+                            config, jdbc, dispatcher, schemas, Clock.system(), signals.progress(), signals.changes(), notifications);
+                    dispatcher.setIncrementalSnapshotChangeEventSource(Optional.of(incremental));
+                    signals.processor().setContext(io.debezium.pipeline.spi.Offsets.of(partition(), scan));
+                    signals.register().accept(dispatcher);
+                    incremental.init(partition(), scan);
+                }
                 var source = new As400StreamingChangeEventSource(legacyConfig, null, jdbc, dispatcher,
                         new ErrorHandler(As400RpcConnector.class, legacyConfig, delivery, null), Clock.system(), schemas);
                 var prefix = new As400LegacyNativePrefix(foreground.journals, foreground.identities, foreground.reader, source,
                         partition(), scan, this::check, new As400OperatorCutReader.Limits(32, 500, 16 * 1024 * 1024));
                 while (true) {
                     check();
+                    if (signals != null) {
+                        signals.processor().executePending();
+                    }
                     Optional<Map<String, ?>> progress;
                     try {
                         progress = prefix.publishNext();
@@ -297,48 +485,23 @@ class As400NativeHandoffSession implements As400TaskHandoff {
                     if (progress.isEmpty() && pending.isPresent() && prefix.scan().offset().compareTo(pending.orElseThrow().origin().offset()) < 0) {
                         progress = prefix.advanceThroughMarker(pending.orElseThrow().origin());
                     }
-                    while (!staging.records.isEmpty()) {
-                        output.emit(staging.records.removeFirst().getRecord());
+                    if (progress.isEmpty() && staging.pending() && prefix.completePosition().isPresent()) {
+                        progress = prefix.completePosition();
                     }
                     if (progress.isPresent()) {
-                        var barrier = marker(progress.orElseThrow(), "LEGACY");
-                        output.barrier(barrier);
-                        output.acknowledge(barrier);
-                        observe("progress-" + (++steps), () -> Map.of("offset", barrier.sourceOffset()));
+                        var completedPrefix = progress.orElseThrow();
+                        staging.flush(completedPrefix);
+                        observe("progress-" + (++steps), () -> Map.of("offset", completedPrefix));
                     }
                     if (pending.isEmpty() && candidate != null && candidate.isDone()) {
                         var collected = candidate.get();
                         if (collected.isPresent()) {
                             var c = collected.orElseThrow();
-                            As400NativeHandoffHistory.Observed nativeHistory;
-                            List<As400BindingDefinition> definitions;
-                            try {
-                                nativeHistory = historyReader().collect(c, c.window().through());
-                                definitions = legacyCatalog(c.bindings().definitions(), config.getConfig().getString("database.dbname"));
-                                As400NativeTableSchemas.requireLegacyTemporalCompatibility(definitions);
-                            }
-                            catch (IllegalArgumentException rejected) {
-                                check();
-                                if (hasSuppressedCleanup(rejected)) {
-                                    throw rejected;
-                                }
-                                LOGGER.warn("Unpublished boundary history changed; acquiring a new boundary while legacy capture continues: {}",
-                                        rejected.getMessage());
-                                candidate = collect();
-                                continue;
-                            }
-                            observe("native-boundary", () -> Map.of("origin", c.origin().toString(), "floor", c.historyFloor().toString(),
-                                    "acquired", c.completion().acquired().toString(), "released", c.completion().released().toString(),
-                                    "job", c.completion().job(), "thread", c.completion().thread().toString(),
-                                    "raw", raw(c.audit().entries()), "controls", raw(nativeHistory.entries()),
-                                    "native_before", nativeSample(c.window().before()), "native_after", nativeSample(c.window().after())));
-                            requireTopics(definitions);
+                            requireTopics(c.definitions());
                             As400BindingHistory.Pending selected;
                             try {
-                                selected = foreground.history.recordOnlineCandidate(c.window().journalToken(), c.origin(),
-                                        c.window().receiverTokens().get(c.origin().receiver()), definitions,
-                                        policy,
-                                        new As400BindingHistory.Discovery(c.historyFloor(), nativeHistory.order().incarnation(c.historyFloor())), durable());
+                                selected = foreground.history.recordOnlineCandidate(c.journal(), c.origin(), c.receiver(), c.definitions(),
+                                        policy, c.discovery(), durable());
                             }
                             catch (As400BindingHistory.CandidateHistoryFullException exhausted) {
                                 check();
@@ -362,36 +525,39 @@ class As400NativeHandoffSession implements As400TaskHandoff {
                     // row publication progresses, then kill this task before activation.
                     var complete = prefix.completePosition();
                     if (pending.isPresent() && complete.isPresent() && !activationDeferred()
+                            && !scan.getIncrementalSnapshotContext().snapshotRunning()
                             && prefix.scan().offset().compareTo(pending.orElseThrow().origin().offset()) >= 0) {
-                        As400NativeHandoffHistory.Prepared prepared = null;
-                        try {
-                            prepared = historyReader().resume(pending.orElseThrow(), prefix.scan(), config, policy);
-                        }
-                        catch (As400ProspectiveHandoffReplay.PriorEpochPending | As400HandoffReplay.SelectedPrefixPending deferred) {
-                            observe("deferred-" + steps, () -> Map.of("reason", deferred.getMessage()));
-                        }
-                        catch (IllegalArgumentException rejected) {
-                            check();
-                            require(!durable().containsKey(As400LegacyHandoff.VERSION), "Cannot replace an acknowledged handoff");
-                            if (hasSuppressedCleanup(rejected)) {
-                                throw rejected;
+                        try (var history = historyReader()) {
+                            As400NativeHandoffHistory.Prepared prepared = null;
+                            try {
+                                prepared = history.resume(pending.orElseThrow(), prefix.scan(), config, policy);
                             }
-                            LOGGER.warn("Unpublished truncate boundary is no longer usable; acquiring a new boundary while legacy capture continues: {}",
-                                    rejected.getMessage());
-                            pending = Optional.empty();
-                            candidate = collect();
-                        }
-                        if (prepared != null) {
-                            var ready = prepared;
-                            observe("prepared", () -> Map.of("raw", raw(ready.replay().projection().entries()), "controls", raw(ready.controls().entries()),
-                                    "candidate", ready.replay().candidate().checkpoint().toOffset(), "publication_acknowledged", false));
-                            var barrier = marker(As400LegacyHandoff.bind(complete.orElseThrow(), prepared.replay().candidate().checkpoint()), "HANDOFF");
-                            // Once this record is offered, even an uncertain
-                            // acknowledgement must fail, never supersede it.
-                            output.barrier(barrier);
-                            output.acknowledge(barrier);
-                            observe("handoff-acknowledged", () -> Map.of("legacy", barrier.sourceOffset()));
-                            return activate(pending.orElseThrow(), prepared, barrier.sourceOffset(), output);
+                            catch (As400ProspectiveHandoffReplay.PriorEpochPending | As400HandoffReplay.SelectedPrefixPending deferred) {
+                                observe("deferred-" + steps, () -> Map.of("reason", deferred.getMessage()));
+                            }
+                            catch (IllegalArgumentException rejected) {
+                                check();
+                                require(!durable().containsKey(As400LegacyHandoff.VERSION), "Cannot replace an acknowledged handoff");
+                                if (hasSuppressedCleanup(rejected)) {
+                                    throw rejected;
+                                }
+                                LOGGER.warn("Unpublished truncate boundary is no longer usable; acquiring a new boundary while legacy capture continues: {}",
+                                        rejected.getMessage());
+                                pending = Optional.empty();
+                                candidate = collect();
+                            }
+                            if (prepared != null) {
+                                var ready = prepared;
+                                observe("prepared", () -> Map.of("raw", raw(ready.replay().projection().entries()), "controls", raw(ready.controls().entries()),
+                                        "candidate", ready.replay().candidate().checkpoint().toOffset(), "publication_acknowledged", false));
+                                var barrier = marker(As400LegacyHandoff.bind(complete.orElseThrow(), prepared.replay().candidate().checkpoint()), "HANDOFF");
+                                // Once this record is offered, even an uncertain
+                                // acknowledgement must fail, never supersede it.
+                                output.barrier(barrier);
+                                output.acknowledge(barrier);
+                                observe("handoff-acknowledged", () -> Map.of("legacy", barrier.sourceOffset()));
+                                return activate(pending.orElseThrow(), prepared, barrier.sourceOffset(), output);
+                            }
                         }
                     }
                     if (progress.isEmpty()) {
@@ -400,14 +566,21 @@ class As400NativeHandoffSession implements As400TaskHandoff {
                 }
             }
             finally {
-                schemas.close();
+                try {
+                    if (legacyNotifications.get() != null) {
+                        legacyNotifications.get().stop();
+                    }
+                }
+                finally {
+                    schemas.close();
+                }
             }
         }
     }
 
     private Map<String, ?> durable() {
         check();
-        return context.offsetStorageReader().offset(partition().getSourcePartition());
+        return As400DeliveryOffset.strip(context.offsetStorageReader().offset(partition().getSourcePartition()));
     }
 
     private As400Checkpoint activate(As400BindingHistory.Pending pending, As400NativeHandoffHistory.Prepared prepared,
@@ -442,9 +615,25 @@ class As400NativeHandoffSession implements As400TaskHandoff {
         var history = foreground.history.recoverOnlineCandidate(durable, identity, policy);
         history.requireStartupOrigin(durable, true);
         requireTopics(history.definitions());
-        continuation = new As400OperatorCutReader(foreground.journals, foreground.identities, journal, history, foreground.reader, foreground.cutLimits);
+        continuation = new As400OperatorCutReader(foreground.journals, foreground.identities, journal, history, foreground.reader, foreground.cutLimits,
+                () -> foreground.connection(false));
         observe("recovered", () -> Map.of("checkpoint", durable));
         return history;
+    }
+
+    @Override
+    public As400JdbcConnection incrementalSnapshotConnection(As400ConnectorConfig config) {
+        check();
+        return new As400JdbcConnection(config.getJdbcConfig(), ignored -> foreground.connection(false));
+    }
+
+    @Override
+    public As400SchemaChange schemaChange(As400BindingDefinition before, RawJournalPage.Entry opening) throws Exception {
+        check();
+        var change = new As400NativeSchemaRefresh(foreground, journal, identity, foreground.server(), this::check)
+                .collect(before, opening);
+        requireTopics(List.of(change.after()));
+        return change;
     }
 
     private void requireTopics(List<As400BindingDefinition> definitions) {
@@ -456,11 +645,26 @@ class As400NativeHandoffSession implements As400TaskHandoff {
                 names.add(topics.dataChangeTopic(definition.schema().id()));
             }
         }
-        require(definitions.isEmpty() || !names.isEmpty(), "Table filters select no native binding");
-        names.add(topics.heartbeatTopic());
+        if (!config.getHeartbeatInterval().isZero()) {
+            names.add(topics.heartbeatTopic());
+        }
+        if (config.shouldProvideTransactionMetadata()) {
+            names.add(topics.transactionTopic());
+        }
         names.add(controlTopic);
+        if (As400BindingHistory.fileStorage(nativeRaw)) {
+            // Engine/Server destinations are logical names, not Kafka topics.
+            // Successful ordered delivery and durable offsets acknowledge them;
+            // do not open a Kafka client to infer a sink this task does not own.
+            var routing = As400TopicRouting.from(nativeRaw.asMap());
+            if (routing.predictable()) {
+                require(names.stream().map(routing::topic).distinct().count() == names.size(), "Data and control destinations must be distinct");
+            }
+            check();
+            return;
+        }
         names.add(historyTopic);
-        As400KafkaTopicGate.require(nativeRaw, names, false, this::check);
+        As400KafkaTopicGate.require(nativeRaw, names, java.util.Set.of(controlTopic, historyTopic), false, this::check);
     }
 
     @Override
@@ -523,7 +727,7 @@ class As400NativeHandoffSession implements As400TaskHandoff {
      * replacement tasks use the same topics and schema names without catalog reads.
      */
     static List<As400BindingDefinition> legacyCatalog(List<As400BindingDefinition> definitions, String server) {
-        require(server != null && server.matches("[A-Z0-9_#$@]{1,10}"), "Verified native server required");
+        require(server != null && !server.isBlank(), "Verified native server required");
         return definitions.stream().map(definition -> {
             var identity = definition.identity();
             require(identity.tableId().catalog() == null, "Acquired binding already has an unqualified catalog association");
@@ -531,35 +735,6 @@ class As400NativeHandoffSession implements As400TaskHandoff {
             return new As400BindingDefinition(new As400TransactionBuffer.TableIdentity(id, identity.physicalFile(), identity.member(),
                     identity.fileJournalId(), identity.memberJournalId(), identity.recordFormat()), definition.schema().edit().tableId(id).create(), definition.codecs());
         }).toList();
-    }
-
-    private static final class Staging implements QueueProvider<DataChangeEvent> {
-        final ArrayDeque<DataChangeEvent> records = new ArrayDeque<>();
-
-        @Override
-        public void configure(Map<String, ?> config) {
-        }
-
-        @Override
-        public String name() {
-            return "isolated-legacy-staging";
-        }
-
-        @Override
-        public void enqueue(DataChangeEvent event) {
-            require(records.size() < 4096, "Bounded legacy staging exceeded");
-            records.addLast(event);
-        }
-
-        @Override
-        public DataChangeEvent poll() {
-            return records.pollFirst();
-        }
-
-        @Override
-        public int size() {
-            return records.size();
-        }
     }
 
     private static void require(boolean valid, String reason) {

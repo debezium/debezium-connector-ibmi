@@ -246,13 +246,27 @@ public class As400ConnectorConfig extends RelationalDatabaseConnectorConfig {
             .withDescription("Maximum retained changes, before-images and table identities across open D/CG transactions.");
     public static final Field DCG_BUFFER_SAVEPOINTS = Field.create("dcg.buffer.max.savepoints").withType(Type.INT).withDefault(1024)
             .withDescription("Maximum retained native savepoint scopes.");
-    public static final Field DCG_BUFFER_BYTES = Field.create("dcg.buffer.max.bytes").withType(Type.INT).withDefault(16777216)
+    public static final Field DCG_BUFFER_BYTES = Field.create("dcg.buffer.max.bytes").withType(Type.LONG).withDefault(16777216L)
             .withDescription("Maximum retained source payload bytes; excludes JVM object and output serialization overhead.");
+
+    public static final Field TRUNCATE_BUFFER_STORAGE = Field.create("truncate.buffer.storage").withType(Type.STRING).withDefault("memory")
+            .withDescription(
+                    "Working storage for transactional capture: memory or task-local disk. Disk is disposable; recovery uses journal history and durable offsets.");
+    public static final Field TRUNCATE_BUFFER_DIRECTORY = Field.create("truncate.buffer.directory").withType(Type.STRING)
+            .withDescription(
+                    "Existing absolute local directory for private transaction spill and large boundary-audit files. Defaults to the JVM temporary directory; no shared storage is required.");
+    public static final Field TRUNCATE_BUFFER_CACHE = Field.create("truncate.buffer.cache.mb").withType(Type.INT).withDefault(8)
+            .withDescription("Disk storage page cache in MiB. This is not a limit on total JVM memory.");
+    public static final Field TRUNCATE_BUFFER_WRITE = Field.create("truncate.buffer.write.kb").withType(Type.INT).withDefault(1024)
+            .withDescription("Dirty working-page threshold in KiB before flushing transaction spill storage.");
+    public static final Field TRUNCATE_BUFFER_DISK = Field.create("truncate.buffer.disk.max.bytes").withType(Type.LONG).withDefault(10737418240L)
+            .withDescription(
+                    "Byte budget for each transaction spill store or raw boundary capture; exceeding it stops capture without discarding pending work or advancing the durable offset.");
 
     public static final Field TRANSACTIONAL_TRUNCATE = Field.create("truncate.transactional.enabled")
             .withType(Type.BOOLEAN).withDefault(false)
             .withDescription(
-                    "Enable transactional truncate capture from an existing completed streaming offset using an automatic brief native lock boundary. Requires the qualified Kafka Connect and retention profile; defaults to false.");
+                    "Enable transactional truncate capture from an existing completed streaming offset using an automatic brief native lock boundary. Requires durable source offsets, binding history and retained journals; defaults to false.");
 
     public static final Field DCG_MODE = Field.create("dcg.mode")
             .withType(Type.STRING).withDefault("disabled")
@@ -278,7 +292,8 @@ public class As400ConnectorConfig extends RelationalDatabaseConnectorConfig {
             DIAGNOSTICS_FOLDER, TRIM_NON_XML_CHARSEQUENCE_FIELD_MODE, JOURNAL_CACHE_ADDITIONAL_DELAY,
             TRANSACTIONAL_TRUNCATE, DCG_MODE, DCG_JOURNAL, DCG_KEY_MODE, DCG_TABLES, DCG_CONTROLLED, DCG_LIBRARIES, DCG_WINDOW, DCG_RETENTION, DCG_BUFFER_TRANSACTIONS,
             DCG_BUFFER_ENTRIES,
-            DCG_BUFFER_SAVEPOINTS, DCG_BUFFER_BYTES);
+            DCG_BUFFER_SAVEPOINTS, DCG_BUFFER_BYTES, TRUNCATE_BUFFER_STORAGE, TRUNCATE_BUFFER_DIRECTORY, TRUNCATE_BUFFER_CACHE, TRUNCATE_BUFFER_WRITE,
+            TRUNCATE_BUFFER_DISK);
 
     public static ConfigDef configDef() {
         final ConfigDef c = RelationalDatabaseConnectorConfig.CONFIG_DEFINITION.edit()
@@ -296,7 +311,8 @@ public class As400ConnectorConfig extends RelationalDatabaseConnectorConfig {
                         As400OffsetContext.RECEIVER_LIBRARY_FIELD,
                         As400OffsetContext.PROCESSED_FIELD, TRANSACTIONAL_TRUNCATE, DCG_MODE, DCG_JOURNAL, DCG_KEY_MODE, DCG_TABLES, DCG_CONTROLLED, DCG_LIBRARIES,
                         DCG_WINDOW, DCG_RETENTION,
-                        DCG_BUFFER_TRANSACTIONS, DCG_BUFFER_ENTRIES, DCG_BUFFER_SAVEPOINTS, DCG_BUFFER_BYTES)
+                        DCG_BUFFER_TRANSACTIONS, DCG_BUFFER_ENTRIES, DCG_BUFFER_SAVEPOINTS, DCG_BUFFER_BYTES,
+                        TRUNCATE_BUFFER_STORAGE, TRUNCATE_BUFFER_DIRECTORY, TRUNCATE_BUFFER_CACHE, TRUNCATE_BUFFER_WRITE, TRUNCATE_BUFFER_DISK)
                 .create().configDef();
         return c;
     }

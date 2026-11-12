@@ -48,12 +48,18 @@ record As400BindingDefinition(TableIdentity identity, Table schema, List<As400Bi
     private static final int MAX_ROW_BYTES = 16 * 1024 * 1024;
     static final String KEY_MODE = "ibmi.output.key.mode";
     static final String RRN_COLUMN = "__IBMI_RRN";
+    private static final String EXCLUDED = "ibmi.output.excluded";
 
     As400BindingDefinition {
         Objects.requireNonNull(identity);
         Objects.requireNonNull(schema);
         codecs = List.copyOf(codecs);
-        require(schema.id().equals(identity.tableId()) && !codecs.isEmpty() && codecs.size() <= 4096
+        var excludedAttribute = schema.attributeWithName(EXCLUDED);
+        boolean excluded = excludedAttribute != null;
+        require(!excluded || "true".equals(excludedAttribute.value()) && codecs.isEmpty() && schema.columns().isEmpty()
+                && schema.primaryKeyColumnNames().isEmpty() && schema.attributeWithName(KEY_MODE) == null,
+                "An excluded binding contains identity only, never a partial output schema");
+        require(schema.id().equals(identity.tableId()) && (excluded || !codecs.isEmpty()) && codecs.size() <= CompleteRowEntryDecoder.MAX_COLUMNS
                 && codecs.size() == schema.columns().size(), "Complete matching schema and physical codecs required");
         require(schema.attributes().stream().noneMatch(a -> a.name().startsWith(PREFIX)), "Reserved binding attributes in input schema");
         require(schema.attributes().stream().map(Attribute::name).distinct().count() == schema.attributes().size(), "Duplicate schema attributes");
@@ -74,15 +80,35 @@ record As400BindingDefinition(TableIdentity identity, Table schema, List<As400Bi
                         && schema.columns().get(i).scale().orElse(-1) == codecs.get(i).scale(), "Temporal schema and physical codec disagree");
             }
             bytes += codecs.get(i).decoder().getByteLength();
-            varying |= codecs.get(i).kind().equals("VARBINARY") || codecs.get(i).kind().equals("VARCHAR");
+            varying |= List.of("VARBINARY", "VARCHAR", "VARGRAPHIC").contains(codecs.get(i).kind());
         }
         String[] format = identity.recordFormat().split(":", -1);
         require(format.length == 5 && format[0].matches("[A-Z0-9_#$@]{1,10}") && format[1].matches("[0-9A-F]{13}")
-                && format[2].equals(Long.toString(bytes)) && format[3].equals(Integer.toString(codecs.size()))
-                && format[4].equals(Boolean.toString(varying)) && bytes <= MAX_ROW_BYTES, "Physical format and codecs disagree");
+                && format[2].matches("[1-9][0-9]{0,7}") && Integer.parseInt(format[2]) <= MAX_ROW_BYTES
+                && format[3].matches("[1-9][0-9]{0,3}") && Integer.parseInt(format[3]) <= CompleteRowEntryDecoder.MAX_COLUMNS
+                && List.of("true", "false").contains(format[4]), "Invalid native record format");
+        // SYSFILES can retain CONTAINS_VARYING_LENGTH=YES after the last
+        // varying column is dropped (observed with a four-byte INTEGER row).
+        // Preserve that native observation in the identity; derive decoding
+        // solely from the complete column descriptors and their exact lengths.
+        // A varying codec still requires the native varying capability.
+        require(excluded || format[2].equals(Long.toString(bytes)) && format[3].equals(Integer.toString(codecs.size()))
+                && (!varying || Boolean.parseBoolean(format[4])), "Physical format and codecs disagree");
+    }
+
+    static As400BindingDefinition excluded(TableIdentity identity) {
+        return new As400BindingDefinition(identity, Table.editor().tableId(identity.tableId())
+                .addAttribute(Attribute.editor().name(EXCLUDED).value("true").create()).create(), List.of());
+    }
+
+    boolean excluded() {
+        return schema.attributeWithName(EXCLUDED) != null;
     }
 
     TableBinding binding(int maximumRowBytes) {
+        if (excluded()) {
+            return new TableBinding(identity, null, false, true);
+        }
         boolean[] nullable = new boolean[codecs.size()];
         for (int i = 0; i < nullable.length; i++) {
             nullable[i] = schema.columns().get(i).isOptional();
@@ -160,11 +186,8 @@ record As400BindingDefinition(TableIdentity identity, Table schema, List<As400Bi
                 require(ccsid == 37 || ccsid == 500 || ccsid == 1140, "Unsupported temporal CCSID");
                 require(kind.equals("TIMESTAMP_ISO") ? scale <= 9 : scale == 0, "Unsupported temporal precision");
             }
-            else if (kind.equals("TEXT") || kind.equals("VARCHAR")) {
+            else if (kind.equals("TEXT") || kind.equals("VARCHAR") || kind.equals("VARGRAPHIC")) {
                 require(scale == 0 && ccsid > 0 && ccsid < 65535, "Explicit text CCSID required");
-                // Multibyte varying fields require separate native qualification.
-                require(!kind.equals("VARCHAR") || size <= Short.MAX_VALUE && (ccsid == 37 || ccsid == 500 || ccsid == 1140),
-                        "Unsupported varying field size or multibyte CCSID");
             }
             else {
                 require(ccsid == 0 && (kind.equals("PACKED") || kind.equals("ZONED") || scale == 0), "Unexpected codec parameters");
@@ -177,6 +200,7 @@ record As400BindingDefinition(TableIdentity identity, Table schema, List<As400Bi
                 case "PACKED", "ZONED" -> size <= 63;
                 case "BINARY", "TEXT" -> true;
                 case "VARBINARY", "VARCHAR" -> size <= Short.MAX_VALUE;
+                case "VARGRAPHIC" -> size <= Short.MAX_VALUE / 2;
                 case "DATE_ISO" -> size == 10;
                 case "TIME_ISO" -> size == 8;
                 case "TIMESTAMP_ISO" -> size == (scale == 0 ? 19 : 20 + scale);
@@ -198,6 +222,7 @@ record As400BindingDefinition(TableIdentity identity, Table schema, List<As400Bi
                 case "VARBINARY" -> new AS400VarBin(size);
                 case "TEXT" -> new AS400Text(size, ccsid);
                 case "VARCHAR" -> new AS400VarChar(size, 1, ccsid);
+                case "VARGRAPHIC" -> new AS400VarChar(size, 2, ccsid);
                 case "DATE_ISO" -> new AS400Temporal(AS400Temporal.Kind.DATE, 0, ccsid);
                 case "TIME_ISO" -> new AS400Temporal(AS400Temporal.Kind.TIME, 0, ccsid);
                 case "TIMESTAMP_ISO" -> new AS400Temporal(AS400Temporal.Kind.TIMESTAMP, scale, ccsid);
@@ -227,6 +252,7 @@ record As400BindingDefinition(TableIdentity identity, Table schema, List<As400Bi
                 case "VARBINARY" -> jdbcType == Types.VARBINARY;
                 case "TEXT" -> jdbcType == Types.CHAR || jdbcType == Types.NCHAR;
                 case "VARCHAR" -> jdbcType == Types.VARCHAR;
+                case "VARGRAPHIC" -> jdbcType == Types.NVARCHAR;
                 case "DATE_ISO" -> jdbcType == Types.DATE;
                 case "TIME_ISO" -> jdbcType == Types.TIME;
                 case "TIMESTAMP_ISO" -> jdbcType == Types.TIMESTAMP;

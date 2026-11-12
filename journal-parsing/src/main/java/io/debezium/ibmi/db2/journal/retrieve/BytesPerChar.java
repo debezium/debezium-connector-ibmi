@@ -18,7 +18,11 @@ import org.slf4j.LoggerFactory;
 public class BytesPerChar {
     /* @See com.fnz.db2.journal.data.types.AS400VarChar */
     private static final String GET_OCTET_LENGTH = "select table_name, system_table_name, column_name, system_column_name, length, character_octet_length FROM qsys2.SYSCOLUMNS where table_schema=? and (system_table_name = ? or table_name = ?)";
-    private final Map<String, Integer> octetLenghtMap = new HashMap<>();
+
+    private record ColumnName(String schema, String table, String column) {
+    }
+
+    private final Map<ColumnName, Integer> octetLenghtMap = new HashMap<>();
     private final Connect<Connection, SQLException> jdbcConnect;
     static final Logger log = LoggerFactory.getLogger(BytesPerChar.class);
 
@@ -27,7 +31,7 @@ public class BytesPerChar {
     }
 
     public Integer getBytesPerChar(String schema, String table, String columnName) {
-        final String canonicalName = String.format("%s.%s.%s", schema, table, columnName);
+        final ColumnName canonicalName = new ColumnName(schema, table, columnName);
         if (octetLenghtMap.containsKey(canonicalName)) {
             return octetLenghtMap.get(canonicalName);
         }
@@ -41,6 +45,10 @@ public class BytesPerChar {
             log.error("failed to fetch octet length", e);
             return -1;
         }
+    }
+
+    void clearTable(String schema, String table) {
+        octetLenghtMap.keySet().removeIf(name -> name.schema().equals(schema) && name.table().equals(table));
     }
 
     private void fetchAllOctetLengthForTable(String schema, String table) throws SQLException {
@@ -65,7 +73,7 @@ public class BytesPerChar {
     }
 
     public void add(String schema, String table, String column, int length, int octetLength) {
-        final String canonicalLongName = String.format("%s.%s.%s", schema, table, column);
+        final ColumnName canonicalLongName = new ColumnName(schema, table, column);
         int bytesPerChar = octetLength / length;
         bytesPerChar = (bytesPerChar < 1) ? 1 : bytesPerChar;
         log.debug("bytes per char {} {} {} {}", schema, table, column, bytesPerChar);

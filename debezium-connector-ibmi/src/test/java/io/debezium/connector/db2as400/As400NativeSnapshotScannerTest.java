@@ -34,6 +34,42 @@ class As400NativeSnapshotScannerTest {
     @TempDir
     Path directory;
 
+    @Test
+    void shouldSnapshotKeylessRowsInPhysicalOrderWithoutAddingAKeyColumn() throws Exception {
+        var original = new As400RecoveryTestSupport.Fixture(directory).definitions.get(0);
+        var definition = new As400BindingDefinition(original.identity(), original.schema().edit().setPrimaryKeyNames(List.of()).create(), original.codecs());
+        var connection = mock(Connection.class);
+        var statement = mock(Statement.class);
+        var rows = mock(ResultSet.class);
+        when(connection.createStatement(anyInt(), anyInt())).thenReturn(statement);
+        when(statement.executeQuery(anyString())).thenReturn(rows);
+        when(rows.next()).thenReturn(true, true, false);
+        when(rows.getObject(1)).thenReturn(7, 7);
+        var observed = new ArrayList<Object[]>();
+        var completed = new AtomicBoolean();
+        new As400NativeSnapshotScanner(connection, new Object(), () -> {
+        }, () -> {
+        }, s -> {
+        }, new As400SnapshotChunks.Limits(1, 1000, 100, 1000)).scan(List.of(definition), new As400SnapshotChunks.Consumer() {
+            @Override
+            public void chunk(io.debezium.relational.TableId table, List<As400TaskInitialization.Row> chunk) {
+                chunk.forEach(row -> observed.add(row.values().values()));
+            }
+
+            @Override
+            public void complete(io.debezium.relational.TableId table) {
+                completed.set(true);
+            }
+        });
+        assertThat(completed).isTrue();
+        assertThat(observed).hasSize(2).allSatisfy(row -> assertThat(row).containsExactly(7));
+        var query = org.mockito.ArgumentCaptor.forClass(String.class);
+        verify(statement).executeQuery(query.capture());
+        assertThat(query.getValue()).endsWith(" T ORDER BY RRN(T)").doesNotContain("CAST(RRN(T) AS BIGINT)");
+        verify(rows).close();
+        verify(statement).close();
+    }
+
     @ParameterizedTest
     @ValueSource(strings = { "valid-gaps", "duplicate", "reordered", "zero", "null", "negative" })
     void rrnSnapshotUsesNativeRecordNumbersAndRejectsAmbiguousIdentity(String scenario) throws Exception {

@@ -73,6 +73,10 @@ public class EntryHeader {
         return recordInfo;
     }
 
+    public BigInteger getRelativeRecordNumber() {
+        return recordInfo.recordNumber();
+    }
+
     /** The opaque ten-byte object JID is hex encoded without text conversion or trimming. */
     public record RecordInfo(BigInteger recordNumber, BigInteger threadId, String jobName, String jobUser, String jobNumber,
             String objectJournalId, char objectNameIndicator, String objectType, String systemName,

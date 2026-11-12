@@ -25,19 +25,23 @@ live.CLASS = CLASS
 
 
 class Experiment(live.LiveExperiment):
-    def __init__(self, directory, capture, fault='none'):
+    def __init__(self, directory, capture, fault='none', delivery='eos'):
         live.handoff.barrier.BarrierExperiment.__init__(self, directory)
         self.capture, self.fixture, self.library = capture, capture.fixture, capture.library
         self.egress = self.prefix + '-native'
         self.children, self.log_threads, self.logs = [], [], {}
         self.writer_actor = None
         self.writer_stop = None
-        if fault not in ['none', 'pending', 'barrier', 'migration']:
+        if fault not in ['none', 'pending', 'barrier', 'migration', 'discovery']:
             raise ValueError('Unknown automatic task fault')
         self.fault = fault
+        if delivery not in ['eos', 'source-offsets']:
+            raise ValueError('Unknown automatic task delivery contract')
+        self.source_offsets = delivery == 'source-offsets'
         addresses = {r[4][0] for r in socket.getaddrinfo(self.fixture.target.host, None, socket.AF_INET, socket.SOCK_STREAM)}
         if len(addresses) != 1:
             raise ValueError('Exact isolated native address required')
+        self.fixture.redactions.update(addresses)
         self.native_host = self.fixture.target.host + ':' + addresses.pop()
 
     def stage(self):
@@ -56,12 +60,25 @@ class Experiment(live.LiveExperiment):
                            native_proof='Fresh isolated fixture; operator retention and fixed schema obligations remain')
         self.report['fault'] = self.fault
         self.report['binding_authority'] = 'Version-5 immutable candidates selected by the fenced Connect checkpoint; no activation-history append'
+        if self.source_offsets:
+            self.report.update(binding_authority='Version-5 immutable candidates selected by acknowledged ordinary source offsets; no activation-history append',
+                               delivery_contract='At least once; nontransactional WorkerSourceTask; no broker fencing',
+                               public_admission_changed=False)
         self.report['plugin_sha256'] = {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in self.plugin.iterdir()}
-        self.report['harness_sha256'][str(Path(__file__).relative_to(live.handoff.ROOT))] = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
+        self.report['harness_sha256'][str(Path(__file__).resolve().relative_to(live.handoff.ROOT))] = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
         self.save()
 
     def rest(self, worker, endpoint, payload=None, tolerate=False):
+        if self.source_offsets and payload and isinstance(payload, dict) and payload.get('config', {}).get('connector.class') == CLASS:
+            payload['config']['probe.source.offsets'] = 'true'
         return live.handoff.barrier.BarrierExperiment.rest(self, worker, endpoint, payload, tolerate=tolerate)
+
+    def container(self, name, args):
+        config = self.directory / (name + '.properties')
+        if self.source_offsets and config.exists():
+            with config.open('a') as stream:
+                stream.write('exactly.once.source.support=disabled\n')
+        return super().container(name, args)
 
     def progressed(self, sequence, label):
         self.report.setdefault('checkpoint_targets', {})[label] = str(sequence)
@@ -99,8 +116,8 @@ class Experiment(live.LiveExperiment):
 
     def writer_output(self, progress, label):
         def committed():
-            rows = [r for r in self.table_records('A', label) if r['key']['ID'] >= 1000]
-            return rows if rows and [r['value']['after']['ID'] for r in rows] == progress else None
+            rows = [r for r in self.table_records('A', label) if r['value'] and r['value']['op'] != 'r' and r['key']['ID'] >= 1000]
+            return rows if rows and all(r['value']['op'] == 'c' for r in rows) and [r['value']['after']['ID'] for r in rows] == progress else None
         return base.wait_for(label, committed, 150)
 
     def inserted(self, table, key, label):
@@ -186,6 +203,8 @@ class Experiment(live.LiveExperiment):
         first = self.start_worker('automatic', 'w1')
         if self.fault == 'pending':
             (self.control / 'automatic.hold-pending').touch()
+        elif self.fault == 'discovery':
+            (self.control / 'automatic.hold-phase').write_text('native-boundary')
         elif self.fault in ['barrier', 'migration']:
             (self.control / 'automatic.hold-phase').write_text('handoff-acknowledged' if self.fault == 'barrier' else 'migration-ready')
         self.create_automatic(first, anchor)
@@ -225,6 +244,37 @@ class Experiment(live.LiveExperiment):
                        == [(500, 'c'), (500, 'd'), (500, None), (501, 'c'), (501, 'd'), (501, None)], 'control/')
             exp.execute(transaction, 'rollback')
             self.close_session(transaction)
+            if self.fault == 'discovery':
+                self.task_marker('native-boundary')
+                mutation = exp.connection()
+                try:
+                    exp.execute(mutation, 'held-discovery-row', f'INSERT INTO {self.library}.A VALUES (550)')
+                finally:
+                    self.close_session(mutation)
+                row = self.inserted('A', 550, 'held-discovery-row')
+                sequence = int(row['value']['source']['sequence'])
+
+                def legacy_saved():
+                    offset = self.checkpoint(self.observer_container, 'automatic', 'held-discovery')
+                    return offset if int(offset.get('offset.event_sequence', -1)) >= sequence else None
+
+                saved = base.wait_for('legacy delivery during held discovery', legacy_saved, 90)
+                self.check('Held background control discovery permits durable legacy output without activation',
+                           'offset.version' not in saved and 'handoff.version' not in saved
+                           and not self.records(self.observer_container, 'bindings-automatic', 'held-discovery-history'), 'control/')
+                # Stop while the collector still owns its raw/index captures.
+                # Completed drain must clean them without publishing a candidate.
+                self.request(first, 'automatic', 'PUT', '/stop')
+                self.task_marker('drained')
+                scratch = self.command('docker', 'exec', first, 'sh', '-c',
+                                       'find /tmp -maxdepth 1 -type d \\( -name "ibmi-journal-*" -o -name "ibmi-truncate-*" \\) -print')
+                self.check('Stopped background discovery drains and removes scratch without changing binding history',
+                           not scratch.strip() and not self.records(self.observer_container, 'bindings-automatic', 'stopped-discovery-history'),
+                           'control/')
+                self.command('docker', 'kill', first)
+                (self.control / 'automatic.hold-phase').unlink()
+                first = self.start_worker('automatic', 'discovery-replacement')
+                self.request(first, 'automatic', 'PUT', '/resume')
             if self.fault == 'pending':
                 pending = self.task_marker('pending')
                 # Make the restart idle deterministically: the old task has
@@ -304,7 +354,8 @@ class Experiment(live.LiveExperiment):
         self.command('docker', 'kill', first)
         second = self.start_worker('automatic', 'w2')
         recovered = self.task_marker('recovered', 'automatic-w2')
-        self.check('Replacement recovers native F/W without a controller bundle', json.loads(recovered.read_text())['checkpoint'] == saved, str(recovered))
+        self.check('Replacement recovers native F/W without a controller bundle',
+                   json.loads(recovered.read_text())['checkpoint'] == {k: v for k, v in saved.items() if not k.startswith('delivery.')}, str(recovered))
         start = self.point()
         exp.execute(transaction, 'rollback')
         self.progressed(self.terminal(start, transaction[1], 'RB', 'rollback'), 'rollback')
@@ -334,7 +385,8 @@ class Experiment(live.LiveExperiment):
         self.check('Missing offset rejects without output or binding-history changes',
                    all(self.table_records(table, 'after-missing-' + table) == records for table, records in before_missing.items())
                    and self.records(self.observer_container, 'bindings-automatic', 'history-after-missing') == history_before, 'control/')
-        self.fixture.verify_rows({'A': sorted([1, 2, 3, *progress, 202]), 'B': [201], 'M': [1, 2, 3], 'U': [1, 2, 3]})
+        self.fixture.verify_rows({'A': sorted([1, 2, 3, *progress, 202] + ([550] if self.fault == 'discovery' else [])),
+                                  'B': [201], 'M': [1, 2, 3], 'U': [1, 2, 3]})
         self.report['status'] = 'passed'
         self.save()
 
@@ -369,8 +421,8 @@ class Experiment(live.LiveExperiment):
 
 
 def main():
-    if len(sys.argv) not in [3, 4]:
-        raise SystemExit('Usage: dcg-automatic-task-probe.py NEW_DIRECTORY DCNCdddd [none|pending|barrier|migration]; isolated IBM i writes and local Kafka')
+    if len(sys.argv) not in [3, 4, 5]:
+        raise SystemExit('Usage: dcg-automatic-task-probe.py NEW_DIRECTORY DCNCdddd [none|pending|barrier|migration|discovery] [eos|source-offsets]; isolated IBM i writes and local Kafka')
     import pyodbc
     pyodbc.pooling = False
     root = Path(sys.argv[1]).resolve()
@@ -379,7 +431,7 @@ def main():
     experiment = None
     try:
         capture.fixture.setup()
-        experiment = Experiment(root / 'connect', capture, sys.argv[3] if len(sys.argv) == 4 else 'none')
+        experiment = Experiment(root / 'connect', capture, sys.argv[3] if len(sys.argv) >= 4 else 'none', sys.argv[4] if len(sys.argv) == 5 else 'eos')
         experiment.stage()
         experiment.start_broker()
         experiment.observer()

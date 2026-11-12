@@ -12,6 +12,7 @@ import java.math.BigInteger;
 import java.time.Instant;
 import java.util.List;
 
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
@@ -45,8 +46,13 @@ class As400TransactionBufferTest {
     private static final TableIdentity OTHER = new TableIdentity(new TableId("DB", "LIB", "OTHER"), "OTHER", "OTHER", "1112030405060708090a", "1b1c1d1e1f2021222324",
             "FMT2");
     private static final RecordIdentity RECORD = record(TABLE, "JOB/THREAD", 1);
-    private As400TransactionBuffer buffer = buffer(new Limits(10, 100, 20, 1024));
+    private As400TransactionBuffer buffer;
     private long sequence;
+
+    @BeforeEach
+    void initializeBuffer() {
+        buffer = buffer(new Limits(10, 100, 20, 1024));
+    }
 
     @Test
     void publishesClearAndReloadOnlyAtCommitInOperationOrder() throws Exception {
@@ -546,8 +552,12 @@ class As400TransactionBufferTest {
         return (byte[]) image.values()[0];
     }
 
-    private static As400TransactionBuffer buffer(Limits limits) {
-        return new As400TransactionBuffer("LIB/JRN/incarnation1", limits);
+    private As400TransactionBuffer buffer(Limits limits) {
+        return new As400TransactionBuffer("LIB/JRN/incarnation1", limits, spill());
+    }
+
+    protected As400SpillStore spill() {
+        return null;
     }
 
     private JournalPosition next() {

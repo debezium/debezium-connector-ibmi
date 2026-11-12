@@ -7,6 +7,7 @@ package io.debezium.connector.db2as400;
 
 import static io.debezium.connector.db2as400.SourceInfo.RECEIVER_KEY;
 import static io.debezium.connector.db2as400.SourceInfo.RECEIVER_LIBRARY_KEY;
+import static io.debezium.connector.db2as400.SourceInfo.RRN_KEY;
 import static io.debezium.connector.db2as400.SourceInfo.SEQUENCE_KEY;
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -39,6 +40,7 @@ public class SourceInfoTest {
         source.setReceiver("RECV008");
         source.setReceiverLib("RCV_LIB");
         source.setSequence("82");
+        source.setRrn("4");
     }
 
     @Test
@@ -49,6 +51,7 @@ public class SourceInfoTest {
         assertThat(record.getString(RECEIVER_KEY)).isEqualTo("RECV008");
         assertThat(record.getString(RECEIVER_LIBRARY_KEY)).isEqualTo("RCV_LIB");
         assertThat(record.getString(SEQUENCE_KEY)).isEqualTo("82");
+        assertThat(record.getString(RRN_KEY)).isEqualTo("4");
         assertThat(record.getInt64("ts_ms")).isEqualTo(123_456L);
     }
 
@@ -68,6 +71,7 @@ public class SourceInfoTest {
                 .field("ts_ns", Schema.OPTIONAL_INT64_SCHEMA)
                 .field(RECEIVER_KEY, Schema.OPTIONAL_STRING_SCHEMA)
                 .field(RECEIVER_LIBRARY_KEY, Schema.OPTIONAL_STRING_SCHEMA)
+                .field(RRN_KEY, Schema.OPTIONAL_STRING_SCHEMA)
                 .build();
 
         VerifyRecord.assertConnectSchemasAreEqual(null, source.struct().schema(), schema);

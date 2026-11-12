@@ -41,10 +41,12 @@ class As400RecoveryTaskTest {
     @TempDir
     Path directory;
 
-    @Test
-    void actualTaskResumesAndWaitsForDurableCallbacksBeforeReadingAgain() throws Exception {
+    @ParameterizedTest
+    @ValueSource(booleans = { false, true })
+    void actualTaskResumesAndWaitsForDurableCallbacksBeforeReadingAgain(boolean disk) throws Exception {
         Map<String, String> initial = As400RecoveryTaskFixture.initialize(new Fixture(directory));
         try (var first = new Running(directory, initial, initial)) {
+            first.input.storage = storage(disk);
             first.start();
             List<SourceRecord> batch = first.throughCheckpoint("42");
             assertThat(As400RecoveryTestSupport.data(batch)).containsExactly("c:DCOC1107.A:8");
@@ -62,6 +64,7 @@ class As400RecoveryTaskTest {
             await(() -> first.input.reads.get() > 1);
             assertThat(first.task.recoveredOffset()).isEqualTo(first.durable.get());
             try (var replacement = new Running(directory, initial, first.durable.get())) {
+                replacement.input.storage = storage(disk);
                 replacement.input.tail = 64;
                 replacement.start();
                 var rest = replacement.throughCheckpoint("59");
@@ -73,11 +76,13 @@ class As400RecoveryTaskTest {
         }
     }
 
-    @Test
-    void interruptedClearBatchReplaysWholeBatchFromPreviousDurableWInFreshTask() throws Exception {
+    @ParameterizedTest
+    @ValueSource(booleans = { false, true })
+    void interruptedClearBatchReplaysWholeBatchFromPreviousDurableWInFreshTask(boolean disk) throws Exception {
         Map<String, String> initial = As400RecoveryTaskFixture.initialize(new Fixture(directory));
         Map<String, ?> saved;
         try (var first = new Running(directory, initial, initial)) {
+            first.input.storage = storage(disk);
             first.input.tail = 44;
             first.start();
             List<SourceRecord> prefix = new ArrayList<>();
@@ -90,12 +95,17 @@ class As400RecoveryTaskTest {
             assertThat(saved.get("replay_from.sequence")).isEqualTo("31");
         }
         try (var replacement = new Running(directory, initial, saved)) {
+            replacement.input.storage = storage(disk);
             replacement.input.tail = 64;
             replacement.start();
             var replay = replacement.throughCheckpoint("59");
             assertThat(As400RecoveryTestSupport.data(replay)).containsExactly("t:DCOC1107.B", "c:DCOC1107.B:100", "c:DCOC1107.A:9");
             replacement.ack(replay);
         }
+    }
+
+    private As400SpillStore.Settings storage(boolean disk) {
+        return disk ? new As400SpillStore.Settings(directory, 1, 16, 8 * 1024 * 1024) : null;
     }
 
     @ParameterizedTest
@@ -140,7 +150,7 @@ class As400RecoveryTaskTest {
     }
 
     @ParameterizedTest
-    @ValueSource(strings = { "missing-readback", "dropped-record", "wrong-topic", "wrong-partition", "changed-session", "skipped-prefix" })
+    @ValueSource(strings = { "missing-readback", "dropped-record", "wrong-topic", "unknown-partition", "changed-session", "skipped-prefix" })
     void uncertainAcknowledgementFailsClosedAtActualTaskBoundary(String fault) throws Exception {
         var initial = As400RecoveryTaskFixture.initialize(new Fixture(directory));
         try (var run = new Running(directory, initial, initial)) {
@@ -161,7 +171,7 @@ class As400RecoveryTaskTest {
                 var record = batch.get(0);
                 RecordMetadata metadata = fault.equals("dropped-record") ? null
                         : new RecordMetadata(
-                                new TopicPartition(fault.equals("wrong-topic") ? "wrong" : record.topic(), fault.equals("wrong-partition") ? 1 : 0), 0, 0, 0, 1, 1);
+                                new TopicPartition(fault.equals("wrong-topic") ? "wrong" : record.topic(), fault.equals("unknown-partition") ? -1 : 0), 0, 0, 0, 1, 1);
                 assertThrows(Exception.class, () -> run.task.commitRecord(record, metadata));
             }
             await(() -> run.input.stopped.get());
@@ -305,6 +315,7 @@ class As400RecoveryTaskTest {
 
     static Map<String, String> properties() {
         return Configuration.create().with("name", "local-recovery").with("topic.prefix", "test")
+                .with("connector.class", As400RpcConnector.class.getName())
                 .with("database.hostname", "no-live-ibmi.invalid").with("database.user", "fixture").with("database.password", "fixture")
                 .with("database.dbname", "DB").with("database.schema", "DCOC1107").with("skipped.operations", "none")
                 .with("max.batch.size", 1).with("max.queue.size", 64).with("poll.interval.ms", 10).with("heartbeat.interval.ms", 3600000)

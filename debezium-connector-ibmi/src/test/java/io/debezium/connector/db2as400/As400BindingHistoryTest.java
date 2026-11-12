@@ -42,6 +42,24 @@ class As400BindingHistoryTest {
     Path directory;
 
     @Test
+    void shouldRecoverMoreThanOneThousandExcludedIdentitiesFromDurableHistory() throws Exception {
+        var fixture = new Fixture(directory);
+        var original = fixture.definitions.get(0).identity();
+        fixture.definitions.clear();
+        for (int i = 0; i < 1040; i++) {
+            String file = String.format(java.util.Locale.ROOT, "F%04d", i);
+            var identity = new As400TransactionBuffer.TableIdentity(new io.debezium.relational.TableId(null, "LIB", file), file, file,
+                    String.format(java.util.Locale.ROOT, "%020x", 2L * i + 100), String.format(java.util.Locale.ROOT, "%020x", 2L * i + 101),
+                    original.recordFormat());
+            fixture.definitions.add(As400BindingDefinition.excluded(identity));
+        }
+        var saved = fixture.initialize();
+        var recovered = new Fixture(directory).history().recover(saved, fixture.journalIdentity, Fixture.POLICY);
+        assertThat(recovered.definitions()).containsExactlyElementsOf(fixture.definitions);
+        assertThat(recovered.resolver(1024).resolve("F1039", "LIB").excluded()).isTrue();
+    }
+
+    @Test
     void freshHistoryAndReaderInstancesPublishOtherTableBeforeNativeClearTerminal() throws Exception {
         Fixture f = new Fixture(directory);
         Map<String, String> saved = f.initialize();

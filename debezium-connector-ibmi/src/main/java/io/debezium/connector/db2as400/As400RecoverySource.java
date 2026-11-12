@@ -51,10 +51,12 @@ final class As400RecoverySource implements StreamingChangeEventSource<As400Parti
     private final As400TaskRecovery input;
     private final As400ConnectorConfig config;
     private volatile As400RecoveryOffsetContext offset;
+    private volatile As400OffsetContext snapshotOnlyContext;
     private final As400TaskInitialization initialization;
     private final As400OffsetContext legacy;
     private final Map<String, ?> legacyOffset;
     private final As400OffsetContext startupContext;
+    private boolean ordinarySnapshot;
     private volatile boolean handoffInProgress;
     private volatile SourceRecord handoffCommitBoundary;
     private final Object initializationState = new Object();
@@ -66,8 +68,9 @@ final class As400RecoverySource implements StreamingChangeEventSource<As400Parti
     private final TopicNamingStrategy<TableId> topics;
     private final DebeziumHeaderProducer headers;
     private final Supplier<Map<String, ?>> durable;
+    private final Supplier<Map<String, ?>> deliveryOffset;
     private final JournalReadLifecycle admission = new JournalReadLifecycle();
-    private final As400RecoveryAcknowledgements acknowledgements = new As400RecoveryAcknowledgements();
+    private final As400RecoveryAcknowledgements acknowledgements;
     private final AtomicBoolean cancelRequested = new AtomicBoolean();
     private final As400AsyncCleanup cleanup = new As400AsyncCleanup("ibmi-source-close");
     private final CompletableFuture<Void> cancellation = new CompletableFuture<>();
@@ -78,6 +81,25 @@ final class As400RecoverySource implements StreamingChangeEventSource<As400Parti
     private StreamingChangeEventSourceMetrics<As400Partition> metrics;
     private SourceRecord lastEnqueued;
     private int streamingChunkRecords;
+    private List<io.debezium.pipeline.notification.channels.NotificationChannel> notificationChannels = List.of();
+    private As400BufferedSignals signals;
+    private io.debezium.connector.common.CdcSourceTaskContext<As400ConnectorConfig> taskContext;
+    private volatile As400BatchDispatcher preparedOutput;
+    private NotificationService<As400Partition, As400OffsetContext> incrementalNotifications;
+    private java.util.function.Consumer<io.debezium.pipeline.EventDispatcher<As400Partition, TableId>> signalRegistration;
+
+    void signalRegistration(java.util.function.Consumer<io.debezium.pipeline.EventDispatcher<As400Partition, TableId>> register) {
+        signalRegistration = register;
+    }
+
+    void signals(As400BufferedSignals processor, io.debezium.connector.common.CdcSourceTaskContext<As400ConnectorConfig> context) {
+        signals = processor;
+        taskContext = context;
+    }
+
+    void notifications(List<io.debezium.pipeline.notification.channels.NotificationChannel> channels) {
+        notificationChannels = List.copyOf(channels);
+    }
 
     As400RecoverySource(As400TaskRecovery input, As400TaskInitialization initialization, As400ConnectorConfig config, As400RecoveryOffsetContext offset,
                         ChangeEventQueue<DataChangeEvent> queue, ErrorHandler errors, TopicNamingStrategy<TableId> topics,
@@ -94,7 +116,11 @@ final class As400RecoverySource implements StreamingChangeEventSource<As400Parti
         this.legacy = legacy;
         this.legacyOffset = legacy == null ? null : Map.copyOf(legacyOffset);
         this.startupContext = legacy == null ? offset : legacy;
-        this.handoffInProgress = legacy != null;
+        this.ordinarySnapshot = input instanceof As400TaskHandoff handoff && handoff.snapshotRequired();
+        if (ordinarySnapshot && (initialization != null || offset != null)) {
+            throw new IllegalArgumentException("Ordinary first start cannot replace native initialization or recovery");
+        }
+        this.handoffInProgress = legacy != null || ordinarySnapshot;
         this.input = input;
         this.initialization = initialization;
         this.config = config;
@@ -103,7 +129,12 @@ final class As400RecoverySource implements StreamingChangeEventSource<As400Parti
         this.errors = errors;
         this.topics = topics;
         this.headers = headers;
-        this.durable = durable;
+        this.deliveryOffset = durable;
+        this.durable = () -> As400DeliveryOffset.strip(durable.get());
+        var routing = As400TopicRouting.from(config.getConfig().asMap());
+        this.acknowledgements = input.sourceOffsetAcknowledgements()
+                ? new As400RecoveryAcknowledgements(durable.get(), routing)
+                : new As400RecoveryAcknowledgements(routing);
     }
 
     void metrics(StreamingChangeEventSourceMetrics<As400Partition> metrics) {
@@ -125,19 +156,19 @@ final class As400RecoverySource implements StreamingChangeEventSource<As400Parti
     }
 
     boolean shouldCommitPoll(List<SourceRecord> records) {
-        return !handoffInProgress || records.stream().anyMatch(record -> record == handoffCommitBoundary);
+        return !handoffInProgress || records.stream().anyMatch(record -> acknowledgements.isDeliveryOf(record, handoffCommitBoundary));
     }
 
-    private void initializeHandoff() throws Exception {
+    private void initializeHandoff(ChangeEventSourceContext context, SnapshotProgressListener<As400Partition> listener) throws Exception {
         try (var lease = admission.enter()) {
             check();
             // Preserve the exact serialized legacy barrier, including handoff
             // fields which the ordinary legacy OffsetContext intentionally omits.
             Map<String, ?> saved = durable.get();
-            if (!legacyOffset.equals(saved)) {
+            if (!java.util.Objects.equals(legacyOffset, saved)) {
                 throw new IllegalStateException("Legacy handoff lost its starting offset");
             }
-            var initial = ((As400TaskHandoff) input).handoff(saved, new As400TaskHandoff.Output() {
+            var output = new As400TaskHandoff.Output() {
                 @Override
                 public void emit(SourceRecord record) throws Exception {
                     enqueue(record);
@@ -163,7 +194,24 @@ final class As400RecoverySource implements StreamingChangeEventSource<As400Parti
                     handoffCommitBoundary = null;
                     return receipt;
                 }
-            });
+            };
+            var handoff = (As400TaskHandoff) input;
+            if (ordinarySnapshot) {
+                saved = handoff.snapshot(context, legacy, listener, notificationChannels, output);
+                check();
+                if (!saved.equals(durable.get())) {
+                    throw new IllegalStateException("Ordinary snapshot must finish durably before online handoff");
+                }
+            }
+            if (snapshotOnly()) {
+                snapshotOnlyContext = new As400OffsetContext.Loader(config).load(saved);
+                return; // Snapshot-only mode cannot acquire or publish a migration boundary.
+            }
+            @SuppressWarnings("unchecked")
+            var changes = listener instanceof DataChangeEventListener<?> data ? (DataChangeEventListener<As400Partition>) data
+                    : DataChangeEventListener.<As400Partition> NO_OP();
+            var handoffSignals = signals == null ? null : new As400TaskHandoff.Signals(signals, signalRegistration, listener, changes, notificationChannels);
+            var initial = handoff.handoff(saved, output, handoffSignals);
             check();
             if (!initial.toOffset().equals(durable.get())) {
                 throw new IllegalStateException("Handoff did not install its exact durable F/W");
@@ -176,13 +224,13 @@ final class As400RecoverySource implements StreamingChangeEventSource<As400Parti
     private void prepare() throws Exception {
         try (var lease = admission.enter()) {
             check();
-            if (!offset.getOffset().equals(durable.get())) {
+            if (!offset.getOffset().equals(As400FullSnapshotState.base(durable.get()))) {
                 throw new IllegalStateException("Durable F/W changed before history recovery");
             }
             var recovered = input.recover(offset.getOffset());
             check();
             if (!recovered.journalIdentity().equals(input.journalIdentity()) || !recovered.fingerprint().equals(input.fingerprint())
-                    || !offset.getOffset().equals(durable.get())) {
+                    || !offset.getOffset().equals(As400FullSnapshotState.base(durable.get()))) {
                 throw new IllegalStateException("Recovery requires matching initialized history and durable F/W");
             }
             recovered.requireStartupOrigin(offset.getOffset(), input.allowLegacyHandoffRecovery());
@@ -436,12 +484,22 @@ final class As400RecoverySource implements StreamingChangeEventSource<As400Parti
             if (previous != offset || !partition.equals(input.partition()) || history == null) {
                 throw new IllegalStateException("Streaming requires the coordinator's recovered context");
             }
-            try (var output = new As400BatchDispatcher(config, partition, this, topics, headers, Clock.system(), input.runtimeLimits().outputRecords(), true);
+            try (var output = preparedOutput == null
+                    ? new As400BatchDispatcher(config, partition, this, topics, headers, Clock.system(), input.runtimeLimits().outputRecords(), true)
+                    : preparedOutput;
                     var active = new As400ContinuousRuntime(offset.getOffset(), history, input, output, this::enqueue,
                             partition.getSourcePartition(), () -> {
-                            }, input.runtimeLimits())) {
+                            }, input.runtimeLimits(), definition -> {
+                                output.schemaChanged(definition);
+                                schemas.refresh(definition);
+                            })) {
                 output.eventDispatcher().setEventListener(metrics);
                 runtime = active;
+                boolean asynchronous = input.sourceOffsetAcknowledgements();
+                if (asynchronous) {
+                    acknowledgements.startStreaming();
+                }
+                Map<String, ?> published = offset.getOffset();
                 if (initialization != null) {
                     synchronized (initializationState) {
                         check();
@@ -454,8 +512,8 @@ final class As400RecoverySource implements StreamingChangeEventSource<As400Parti
                 }
                 while (context.isRunning() && !admission.isStopped()) {
                     check();
-                    var saved = durable.get();
-                    var progress = active.poll(saved);
+                    var saved = asynchronous ? acknowledgements.committedOffset() : durable.get();
+                    var progress = asynchronous ? active.poll(published, saved) : active.poll(saved);
                     check();
                     if (metrics instanceof As400StreamingChangeEventSourceMetrics journalMetrics) {
                         progress.scan().ifPresent(journalMetrics::setScanPosition);
@@ -464,18 +522,21 @@ final class As400RecoverySource implements StreamingChangeEventSource<As400Parti
                             journalMetrics.setLastProcessedMs(System.currentTimeMillis());
                         }
                     }
-                    if (!progress.deferred() && active.publishCheckpoint(output, progress.entries() > 0 || !progress.checkpoint().equals(saved))) {
+                    if (!progress.deferred() && active.publishCheckpoint(output, progress.entries() > 0 || !progress.checkpoint().equals(published))) {
                         SourceRecord barrier = lastEnqueued;
                         if (!barrier.sourceOffset().equals(progress.checkpoint())) {
                             throw new IllegalStateException("Checkpoint barrier differs from completed output");
                         }
-                        awaitDurable(barrier);
-                        streamingChunkRecords = 0;
-                        offset.acknowledged(barrier.sourceOffset());
-                        if (metrics instanceof As400StreamingChangeEventSourceMetrics journalMetrics) {
-                            journalMetrics.setDurablePositions(barrier.sourceOffset());
+                        if (!asynchronous) {
+                            awaitDurable(barrier);
+                            streamingChunkRecords = 0;
+                            offset.acknowledged(barrier.sourceOffset());
+                            if (metrics instanceof As400StreamingChangeEventSourceMetrics journalMetrics) {
+                                journalMetrics.setDurablePositions(barrier.sourceOffset());
+                            }
                         }
                     }
+                    published = progress.checkpoint();
                     Thread.sleep(Math.max(1, config.getPollInterval().toMillis()));
                 }
             }
@@ -515,19 +576,23 @@ final class As400RecoverySource implements StreamingChangeEventSource<As400Parti
         if (!record.sourcePartition().equals(input.partition().getSourcePartition())) {
             throw new IllegalStateException("Unexpected source partition");
         }
-        // Bound retained acknowledgements even inside a large committed source
-        // transaction. Its records still carry the previous completed W, so a
-        // crash here replays the whole batch. Do not retire without offset readback.
+        // Bound retained records even during a large source transaction. In the
+        // source-offset contract delivery releases memory, never the durable F/W.
+        // A crash before offset flush replays from the saved checkpoint.
         if (runtime != null && streamingChunkRecords >= 256) {
-            awaitDurable(lastEnqueued);
-            offset.acknowledged(lastEnqueued.sourceOffset());
-            if (metrics instanceof As400StreamingChangeEventSourceMetrics journalMetrics) {
-                journalMetrics.setDurablePositions(lastEnqueued.sourceOffset());
+            if (input.sourceOffsetAcknowledgements()) {
+                acknowledgements.awaitDeliveredAndRetire(lastEnqueued, this::checkForPoll);
+            }
+            else {
+                awaitDurable(lastEnqueued);
+                offset.acknowledged(lastEnqueued.sourceOffset());
+                if (metrics instanceof As400StreamingChangeEventSourceMetrics journalMetrics) {
+                    journalMetrics.setDurablePositions(lastEnqueued.sourceOffset());
+                }
             }
             streamingChunkRecords = 0;
         }
-        acknowledgements.register(record);
-        queue.enqueue(new DataChangeEvent(record));
+        queue.enqueue(new DataChangeEvent(acknowledgements.register(record)));
         check();
         lastEnqueued = record;
         if (runtime != null) {
@@ -541,8 +606,7 @@ final class As400RecoverySource implements StreamingChangeEventSource<As400Parti
         if (!record.sourcePartition().equals(input.partition().getSourcePartition())) {
             throw new IllegalStateException("Unexpected snapshot source partition");
         }
-        acknowledgements.register(record, true);
-        queue.enqueue(new DataChangeEvent(record));
+        queue.enqueue(new DataChangeEvent(acknowledgements.register(record, true)));
         checkForPoll();
         lastEnqueued = record;
     }
@@ -584,7 +648,14 @@ final class As400RecoverySource implements StreamingChangeEventSource<As400Parti
             }
             synchronized (initializationState) {
                 check();
-                acknowledgements.committed();
+                acknowledgements.committed(deliveryOffset.get());
+                if (runtime != null && input.sourceOffsetAcknowledgements()) {
+                    var saved = acknowledgements.committedOffset();
+                    offset.acknowledged(saved);
+                    if (metrics instanceof As400StreamingChangeEventSourceMetrics journalMetrics) {
+                        journalMetrics.setDurablePositions(saved);
+                    }
+                }
             }
         }
         catch (Exception e) {
@@ -666,6 +737,12 @@ final class As400RecoverySource implements StreamingChangeEventSource<As400Parti
                 admission.awaitDrained();
                 cancellation.join();
                 input.close();
+                if (preparedOutput != null) {
+                    preparedOutput.close();
+                }
+                if (incrementalNotifications != null) {
+                    incrementalNotifications.stop();
+                }
                 if (cancellationFailure != null) {
                     throw new IllegalStateException("Source cancellation failed", cancellationFailure);
                 }
@@ -680,7 +757,39 @@ final class As400RecoverySource implements StreamingChangeEventSource<As400Parti
 
     @Override
     public As400OffsetContext getOffsetContext() {
-        return offset;
+        return snapshotOnlyContext == null ? offset : snapshotOnlyContext;
+    }
+
+    private boolean snapshotOnly() {
+        return !config.getServiceRegistry().getService(io.debezium.snapshot.SnapshotterService.class).getSnapshotter().shouldStream();
+    }
+
+    private void resnapshot(ChangeEventSourceContext context, SnapshotProgressListener<As400Partition> listener) throws Exception {
+        try (var lease = admission.enter()) {
+            check();
+            var completed = input.fullSnapshot(As400Checkpoint.fromOffset(offset.getOffset(), input.journalIdentity(), input.fingerprint()),
+                    history, context, listener, notificationChannels, new As400TaskHandoff.Output() {
+                        @Override
+                        public void emit(SourceRecord record) throws Exception {
+                            enqueue(record);
+                        }
+
+                        @Override
+                        public void barrier(SourceRecord record) throws Exception {
+                            enqueue(record);
+                        }
+
+                        @Override
+                        public String acknowledge(SourceRecord record) throws Exception {
+                            return awaitDurable(record);
+                        }
+                    }, As400FullSnapshotState.pending(durable.get()));
+            if (!completed.toOffset().equals(durable.get())) {
+                throw new IllegalStateException("Requested snapshot has no exact durable completion checkpoint");
+            }
+            offset.acknowledged(completed.toOffset());
+            prepare();
+        }
     }
 
     @Override
@@ -693,7 +802,16 @@ final class As400RecoverySource implements StreamingChangeEventSource<As400Parti
                 if (previous != startupContext) {
                     throw new IllegalStateException("Coordinator context differs from admitted startup mode");
                 }
-                return new SnapshottingTask(false, initialization != null, List.of(), Map.of(), false);
+                var snapshotter = config.getServiceRegistry().getService(io.debezium.snapshot.SnapshotterService.class).getSnapshotter();
+                boolean pending = As400FullSnapshotState.pending(durable.get());
+                boolean requested = input.allowLegacyHandoffRecovery() && snapshotter.shouldSnapshotData(previous != null,
+                        pending || previous != null && !(previous instanceof As400RecoveryOffsetContext) && !previous.isSnapshotComplete());
+                if (pending && !requested) {
+                    throw new IllegalArgumentException("Cannot skip an interrupted requested snapshot");
+                }
+                ordinarySnapshot |= legacy != null && requested;
+                return new SnapshottingTask(ordinarySnapshot || requested, initialization != null || requested,
+                        List.of(), Map.of(), false);
             }
 
             @Override
@@ -708,12 +826,26 @@ final class As400RecoverySource implements StreamingChangeEventSource<As400Parti
                         listener.snapshotStarted(partition);
                         initialize(listener);
                     }
-                    if (legacy != null) {
-                        initializeHandoff();
+                    if (legacy != null || ordinarySnapshot) {
+                        initializeHandoff(context, listener);
+                    }
+                    if (snapshotOnlyContext != null) {
+                        if (ordinarySnapshot) {
+                            return SnapshotResult.completed(snapshotOnlyContext);
+                        }
+                        listener.snapshotSkipped(partition);
+                        return SnapshotResult.skipped(snapshotOnlyContext);
                     }
                     prepare();
+                    if (startupContext instanceof As400RecoveryOffsetContext && task.snapshotData() && input.allowLegacyHandoffRecovery()) {
+                        resnapshot(context, listener);
+                        return SnapshotResult.completed(offset);
+                    }
                     if (initialization != null) {
                         listener.snapshotCompleted(partition);
+                        return SnapshotResult.completed(offset);
+                    }
+                    if (ordinarySnapshot) {
                         return SnapshotResult.completed(offset);
                     }
                     listener.snapshotSkipped(partition);
@@ -746,7 +878,43 @@ final class As400RecoverySource implements StreamingChangeEventSource<As400Parti
                                                                                                                                               SnapshotProgressListener<As400Partition> progress,
                                                                                                                                               DataChangeEventListener<As400Partition> changes,
                                                                                                                                               NotificationService<As400Partition, As400OffsetContext> notifications) {
-        return Optional.empty();
+        if (config.getSignalingDataCollectionIds().isEmpty()) {
+            if (!As400IncrementalSnapshotState.fields(offset.getOffset()).isEmpty()) {
+                throw new IllegalArgumentException("An unfinished incremental snapshot requires its signaling configuration");
+            }
+            return Optional.empty();
+        }
+        try {
+            check();
+            if (signals == null || preparedOutput != null || history == null) {
+                throw new IllegalStateException("Incremental snapshot requires recovered bindings and one signal processor");
+            }
+            requireSignalingBindings(config, history.definitions());
+            preparedOutput = new As400BatchDispatcher(config, input.partition(), this, topics, headers, Clock.system(),
+                    input.runtimeLimits().outputRecords(), true, signals);
+            var connection = input.incrementalSnapshotConnection(config);
+            var snapshotSchemas = new As400DatabaseSchema(config, connection, topics, config.schemaNameAdjuster(),
+                    As400NativeTableSchemas.converterRegistry(config), taskContext);
+            history.definitions().stream().filter(definition -> !definition.excluded()).forEach(definition -> snapshotSchemas.forwardSchema(definition.outputTable()));
+            incrementalNotifications = new NotificationService<>(notificationChannels, config, io.debezium.schema.SchemaFactory.get(),
+                    preparedOutput.eventDispatcher()::enqueueNotification);
+            var snapshot = new As400BufferedIncrementalSnapshot(config, connection, preparedOutput.eventDispatcher(), snapshotSchemas,
+                    Clock.system(), progress, changes, incrementalNotifications);
+            preparedOutput.incrementalSnapshot(snapshot, As400Checkpoint.fromOffset(offset.getOffset(), input.journalIdentity(), input.fingerprint()));
+            return Optional.of(snapshot);
+        }
+        catch (Exception failure) {
+            close();
+            throw new IllegalStateException("Could not initialize buffered incremental snapshot", failure);
+        }
+    }
+
+    static void requireSignalingBindings(As400ConnectorConfig config, List<As400BindingDefinition> definitions) {
+        for (String signal : config.getSignalingDataCollectionIds()) {
+            if (definitions.stream().noneMatch(definition -> !definition.excluded() && definition.schema().id().toString().equals(signal))) {
+                throw new IllegalArgumentException("Incremental snapshot signal table has no recovered journal binding: " + signal);
+            }
+        }
     }
 
     @Override

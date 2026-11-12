@@ -92,12 +92,22 @@ final class As400SourceNormalizer {
                     throw new IllegalArgumentException("Unsupported cycle-zero source operation");
                 }
                 return autocommit.accept(source, table.identity(), record(header, table.identity()),
-                        As400RowData.copyOf(table.values(header, data, offset), maximumRowBytes), completedReplay);
+                        table.materialize(header, data, offset, maximumRowBytes), completedReplay);
             }
             if (header.getJournalCode() == 'D' && header.getEntryType().equals("CG")) {
                 var clear = clears.decode(header, data, offset);
                 if (!clear.clearsRows()) {
-                    throw new IllegalArgumentException("Unsupported transactional D/CG schema change");
+                    TableBinding binding = table(header, clear.file(), clear.library(), clear.member(), ObjectKind.FILE);
+                    buffer.requireIdleTable(binding.identity());
+                    if (autocommit != null) {
+                        autocommit.requireIdleTable(binding.identity());
+                    }
+                    if (clear.changeType() != '0') {
+                        throw new IllegalArgumentException("Unsupported transactional D/CG schema change");
+                    }
+                    tables.schemaChange(new RawJournalPage.Entry(currentPosition, header,
+                            java.util.Arrays.copyOfRange(data, offset, offset + header.getEndOffset())));
+                    return Optional.empty();
                 }
                 if (!header.getFile().equals(clear.file()) || !header.getLibrary().equals(clear.library())
                         || (!header.getMember().isEmpty() && !header.getMember().equals(clear.member()))) {
@@ -118,8 +128,7 @@ final class As400SourceNormalizer {
                 buffer.compensation(source);
                 return Optional.empty();
             }
-            Object[] decoded = table.values(header, data, offset);
-            As400RowData values = As400RowData.copyOf(decoded, maximumRowBytes);
+            As400RowData values = table.materialize(header, data, offset, maximumRowBytes);
             switch (header.getEntryType()) {
                 case "PT", "PX" -> buffer.insert(source, record, values);
                 case "UB" -> buffer.beforeImage(source, record, values);
@@ -232,24 +241,108 @@ final class As400SourceNormalizer {
      */
     interface TableResolver {
         TableBinding resolve(String physicalFile, String library) throws Exception;
+
+        default boolean allowsSchemaChange(JournalPosition opening) {
+            return false;
+        }
+
+        default boolean creationLifecycle(RawJournalPage.Entry entry) throws Exception {
+            return false;
+        }
+
+        default void schemaChange(RawJournalPage.Entry entry) throws Exception {
+            throw new IllegalArgumentException("Unsupported transactional D/CG schema change");
+        }
+
+        default As400Checkpoint schemaCheckpoint(As400Checkpoint checkpoint) {
+            if (!checkpoint.schemaState().equals(As400SchemaState.EMPTY)) {
+                throw new IllegalArgumentException("Schema history requires an admitted schema timeline");
+            }
+            return checkpoint;
+        }
     }
 
-    record TableBinding(TableIdentity identity, CompleteRowEntryDecoder decoder, boolean rrnKey) {
+    record TableBinding(TableIdentity identity, CompleteRowEntryDecoder decoder, boolean rrnKey, boolean excluded) {
         TableBinding(TableIdentity identity, CompleteRowEntryDecoder decoder) {
-            this(identity, decoder, false);
+            this(identity, decoder, false, false);
+        }
+
+        TableBinding(TableIdentity identity, CompleteRowEntryDecoder decoder, boolean rrnKey) {
+            this(identity, decoder, rrnKey, false);
         }
 
         Object[] values(EntryHeader header, byte[] data, int offset) throws java.io.IOException {
+            if (excluded) {
+                throw new IllegalStateException("Excluded binding cannot decode output columns");
+            }
             Object[] physical = decoder.decode(header, data, offset);
             return rrnKey ? As400BindingDefinition.withRrn(physical, header.getRecordInfo().recordNumber()) : physical;
         }
 
         TableBinding {
             Objects.requireNonNull(identity);
-            Objects.requireNonNull(decoder);
+            if (!excluded) {
+                Objects.requireNonNull(decoder);
+            }
+            if (excluded && (decoder != null || rrnKey)) {
+                throw new IllegalArgumentException("Excluded identity and complete output decoder are distinct bindings");
+            }
             name(identity.tableId().schema(), 10);
             name(identity.physicalFile(), 10);
             name(identity.member(), 10);
+        }
+
+        As400RowData materialize(EntryHeader header, byte[] data, int offset, long maximumBytes) throws java.io.IOException {
+            if (!excluded) {
+                return As400RowData.copyOf(values(header, data, offset), maximumBytes);
+            }
+            validateExcludedRow(header, data, offset);
+            return As400RowData.excluded();
+        }
+
+        void validateExcludedRow(EntryHeader header, byte[] data, int offset) throws java.io.IOException {
+            // No value codecs or nullable guesses for excluded files. Retain the
+            // real row/clear effects, pairing and savepoints, and still reject an
+            // incomplete physical image or a changed pinned format.
+            if (header.getJournalCode() != 'R' || !FORWARD.contains(header.getEntryType()) || header.getControlInfo() == null
+                    || (header.getControlInfo().flags() & 0x3f) != 0 || header.getPointerHandle() != 0
+                    || (header.getEntryType().equals("UB") || header.getEntryType().equals("DL")) && header.getControlInfo().indicatorFlag() != '1') {
+                throw new java.io.IOException("Incomplete or unsupported excluded row image");
+            }
+            String[] format = identity.recordFormat().split(":", -1);
+            int length = Integer.parseInt(format[2]), fields = Integer.parseInt(format[3]);
+            int prefix = (int) header.getEntrySpecificDataOffset(), end = header.getEndOffset();
+            if (offset < 0 || (long) offset + end > data.length || prefix < 236 || (long) prefix + 16 + length > end) {
+                throw new java.io.IOException("Incomplete excluded row payload");
+            }
+            int declared = 0;
+            for (int i = 0; i < 5; i++) {
+                int digit = Byte.toUnsignedInt(data[offset + prefix + i]);
+                if (digit < 0xf0 || digit > 0xf9) {
+                    throw new java.io.IOException("Invalid excluded row length");
+                }
+                declared = declared * 10 + digit - 0xf0;
+            }
+            if (declared != length) {
+                throw new java.io.IOException("Excluded row differs from pinned physical format");
+            }
+            int map = header.getNullValueOffest();
+            if (map != 0) {
+                if (map < 236 || (long) map + 4 > end) {
+                    throw new java.io.IOException("Incomplete excluded null map");
+                }
+                int count = java.nio.ByteBuffer.wrap(data, offset + map, 4).getInt();
+                if (count != 0 && count != fields || (long) map + 4 + count > end
+                        || map < prefix + 16 + length && (long) map + 4 + count > prefix) {
+                    throw new java.io.IOException("Invalid excluded null map bounds");
+                }
+                for (int i = 0; i < count; i++) {
+                    int value = Byte.toUnsignedInt(data[offset + map + 4 + i]);
+                    if (value != 0xf0 && value != 0xf1) {
+                        throw new java.io.IOException("Defaulted or invalid excluded null indicator");
+                    }
+                }
+            }
         }
     }
 

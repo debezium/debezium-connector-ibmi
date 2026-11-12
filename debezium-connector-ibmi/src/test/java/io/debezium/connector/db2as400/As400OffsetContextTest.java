@@ -14,6 +14,8 @@ import java.util.Map;
 
 import org.apache.kafka.connect.data.Struct;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import io.debezium.config.CommonConnectorConfig;
 import io.debezium.config.Configuration;
@@ -165,5 +167,35 @@ public class As400OffsetContextTest {
         assertThat(offsetContext.getSourceInfo().getString("sequence"))
                 .as("event() (snapshot) stamps source.sequence from the processed offset by design")
                 .isEqualTo(CHECKPOINT.toString());
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = { "PT", "UP", "DL" })
+    void shouldKeepUnsignedRowNumberWithItsEventWithoutChangingTheCheckpoint(String type) {
+        var context = new As400OffsetContext(newConfig(), newPosition(CHECKPOINT));
+        var rrn = new BigInteger("18446744073709551615");
+        var row = entryWithRrn('R', type, rrn);
+        context.updateSourceInfo(row);
+        var record = context.recordContext(row, newPosition(CHECKPOINT));
+        assertThat(context.getSourceInfo().getString("rrn")).isEqualTo(rrn.toString());
+        assertThat(record.getSourceInfo().getString("rrn")).isEqualTo(rrn.toString());
+        assertThat(record.getSourceInfo().getString("receiver")).isEqualTo("RECV009");
+        assertThat(record.getOffset()).doesNotContainKey("rrn");
+        assertThat(record.getOffset().get(As400OffsetContext.EVENT_SEQUENCE)).isEqualTo(CHECKPOINT.toString());
+        // A non-row header can carry a count in the same native field.
+        context.updateSourceInfo(entryWithRrn('F', "CR", BigInteger.TEN));
+        assertThat(context.getSourceInfo().getString("rrn")).isNull();
+        context.updateSourceInfo(entryWithRrn('D', "CG", BigInteger.TEN));
+        assertThat(context.getSourceInfo().getString("rrn")).isNull();
+        context.updateSourceInfo(row);
+        context.event(new TableId("MYDB", "MYSCHEMA", "MYTABLE"), Instant.EPOCH);
+        assertThat(context.getSourceInfo().getString("rrn")).isNull();
+        assertThat(record.getSourceInfo().getString("rrn")).isEqualTo(rrn.toString());
+    }
+
+    private EntryHeader entryWithRrn(char code, String type, BigInteger rrn) {
+        return new EntryHeader(-1, -1, -1L, ENTRY_SEQUENCE, BigInteger.TWO, Instant.ofEpochSecond(200_000L), code, type, "OBJECT", BigInteger.TEN,
+                -1, -1, "RECV009", "RCV_LIB", EntryHeader.ControlInfo.UNKNOWN,
+                new EntryHeader.RecordInfo(rrn, null, "", "", "", "", '0', "", "", "", "", ""));
     }
 }

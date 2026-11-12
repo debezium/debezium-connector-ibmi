@@ -7,6 +7,7 @@ package io.debezium.connector.db2as400;
 
 import java.math.BigInteger;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -43,30 +44,55 @@ final class As400ControlInventory {
     record Start(As400SourceMetadata source, Producer producer) {
     }
 
+    private static final As400SpillStore.Codec<Start> START = As400SpillCodec.codec((out, value) -> {
+        As400SpillCodec.source(out, value.source());
+        var p = value.producer();
+        As400SpillCodec.string(out, p.system());
+        As400SpillCodec.string(out, p.job());
+        As400SpillCodec.string(out, p.user());
+        As400SpillCodec.string(out, p.number());
+        As400SpillCodec.integer(out, p.thread());
+    }, in -> new Start(As400SpillCodec.source(in), new Producer(As400SpillCodec.string(in), As400SpillCodec.string(in),
+            As400SpillCodec.string(in), As400SpillCodec.string(in), As400SpillCodec.integer(in))));
+
     record Maintenance(JournalPosition position, String type, String contentDigest) {
     }
 
+    private static final As400SpillStore.Codec<Maintenance> MAINTENANCE = As400SpillCodec.codec((out, value) -> {
+        As400SpillCodec.position(out, value.position());
+        As400SpillCodec.string(out, value.type());
+        As400SpillCodec.string(out, value.contentDigest());
+    }, in -> new Maintenance(As400SpillCodec.position(in), As400SpillCodec.string(in), As400SpillCodec.string(in)));
+
     record Inventory(Map<BigInteger, Start> openAtLower, Map<BigInteger, Start> openThrough,
-            Map<BigInteger, JournalPosition> terminals, Map<BigInteger, JournalPosition> completedBeforeHistory, List<Maintenance> maintenance) {
+            Map<BigInteger, JournalPosition> terminals, Map<BigInteger, JournalPosition> completedBeforeHistory, List<Maintenance> maintenance,
+            As400HandoffWork owner) {
         Inventory {
-            openAtLower = Map.copyOf(openAtLower);
-            openThrough = Map.copyOf(openThrough);
-            terminals = Map.copyOf(terminals);
-            completedBeforeHistory = Map.copyOf(completedBeforeHistory);
-            maintenance = List.copyOf(maintenance);
+            openAtLower = owner == null ? Map.copyOf(openAtLower) : Collections.unmodifiableMap(openAtLower);
+            openThrough = owner == null ? Map.copyOf(openThrough) : Collections.unmodifiableMap(openThrough);
+            terminals = owner == null ? Map.copyOf(terminals) : Collections.unmodifiableMap(terminals);
+            completedBeforeHistory = owner == null ? Map.copyOf(completedBeforeHistory) : Collections.unmodifiableMap(completedBeforeHistory);
+            maintenance = owner == null ? List.copyOf(maintenance) : Collections.unmodifiableList(maintenance);
         }
     }
 
     static Inventory reconstruct(List<RawJournalPage.Entry> history, As400JournalOrder order, String journal,
                                  JournalPosition from, JournalPosition lower, JournalPosition through)
             throws Exception {
-        require(history != null && history.size() <= MAX_ENTRIES, "Bounded C/J history required");
+        return reconstruct(history, order, journal, from, lower, through, null);
+    }
+
+    static Inventory reconstruct(List<RawJournalPage.Entry> history, As400JournalOrder order, String journal,
+                                 JournalPosition from, JournalPosition lower, JournalPosition through, As400HandoffWork work)
+            throws Exception {
+        require(history != null && (work == null ? history.size() <= MAX_ENTRIES : history instanceof As400JournalCapture.Entries),
+                "Bounded owned C/J history required");
         require(order.compare(from, lower) <= 0 && order.compare(lower, through) <= 0, "Observation lies outside native history");
-        var starts = new LinkedHashMap<BigInteger, Start>();
-        var open = new LinkedHashMap<BigInteger, Start>();
-        var terminals = new LinkedHashMap<BigInteger, JournalPosition>();
-        var completedBeforeHistory = new LinkedHashMap<BigInteger, JournalPosition>();
-        var maintenance = new ArrayList<Maintenance>();
+        Map<BigInteger, Start> starts = work == null ? new LinkedHashMap<>() : work.map(As400SpillCodec.INTEGER, START);
+        Map<BigInteger, Start> open = work == null ? new LinkedHashMap<>() : work.map(As400SpillCodec.INTEGER, START);
+        Map<BigInteger, JournalPosition> terminals = work == null ? new LinkedHashMap<>() : work.map(As400SpillCodec.INTEGER, As400SpillCodec.POSITION);
+        Map<BigInteger, JournalPosition> completedBeforeHistory = work == null ? new LinkedHashMap<>() : work.map(As400SpillCodec.INTEGER, As400SpillCodec.POSITION);
+        List<Maintenance> maintenance = work == null ? new ArrayList<>() : work.list(MAINTENANCE);
         Map<BigInteger, Start> atLower = null;
         var headers = new EntryHeaderDecoder(RawJournalPage.METADATA_CCSID);
         var controls = new TransactionControlEntryDecoder();
@@ -74,11 +100,15 @@ final class As400ControlInventory {
         long bytes = 0;
         // Reuse the normal transaction control state machine. Empty batches are
         // consumed locally; this class has no sink, acknowledgement or checkpoint.
-        try (var buffer = new As400TransactionBuffer(journal,
-                new As400TransactionBuffer.Limits(128, MAX_ENTRIES, 2048, MAX_BYTES))) {
+        try (var scratch = work == null ? null : work.transactionStore();
+                var buffer = new As400TransactionBuffer(journal,
+                        work == null ? new As400TransactionBuffer.Limits(128, MAX_ENTRIES, 2048, MAX_BYTES) : work.limits().transactions(), scratch)) {
             for (RawJournalPage.Entry entry : history) {
+                if (work != null) {
+                    work.check();
+                }
                 byte[] data = entry.data();
-                require((bytes += data.length) <= MAX_BYTES, "C/J history exceeds byte budget");
+                require(data.length <= 1024 * 1024 && (work != null || (bytes += data.length) <= MAX_BYTES), "C/J history exceeds byte budget");
                 var position = entry.position();
                 require(order.compare(from, position) <= 0 && order.compare(position, through) <= 0,
                         "Control lies outside captured native history");
@@ -86,7 +116,7 @@ final class As400ControlInventory {
                         "Repeated, reset or unordered C/J history");
                 previous = position;
                 if (atLower == null && order.compare(position, lower) >= 0) {
-                    atLower = Map.copyOf(open);
+                    atLower = work == null ? Map.copyOf(open) : work.snapshot(open, As400SpillCodec.INTEGER, START);
                 }
                 var header = headers.decode(data, 0);
                 // Maintenance can legitimately have flags that ordinary rows do
@@ -144,9 +174,14 @@ final class As400ControlInventory {
                     open.remove(cycle);
                 }
             }
-            require(buffer.usage().transactions() == open.size() && open.keySet().stream().allMatch(buffer::hasTransaction),
-                    "Control projection disagrees with transaction state");
-            return new Inventory(atLower == null ? open : atLower, open, terminals, completedBeforeHistory, maintenance);
+            require(buffer.usage().transactions() == open.size(), "Control projection disagrees with transaction state");
+            for (var cycle : open.keySet()) {
+                if (work != null) {
+                    work.check();
+                }
+                require(buffer.hasTransaction(cycle), "Control projection disagrees with transaction state");
+            }
+            return new Inventory(atLower == null ? open : atLower, open, terminals, completedBeforeHistory, maintenance, work);
         }
     }
 

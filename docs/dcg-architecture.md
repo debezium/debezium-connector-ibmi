@@ -70,17 +70,26 @@ The reader keeps three different positions:
 | W | Last completed output boundary | Yes |
 
 An open transaction can keep F behind W while unrelated output progresses.
-`As400ReplayCoordinator` rebuilds the in-memory state from retained journal
+`As400ReplayCoordinator` rebuilds working state from retained journal
 history starting at F. Already completed output through W remains suppressed;
 the scan cursor alone cannot authorize progress. Offsets also bind journal and
 receiver incarnations and a versioned capture fingerprint. Immutable binding
 history supplies the matching schema and initialization context.
 
-The normal task/coordinator publishes through its queue and dispatcher. Kafka
-Connect durable offsets and source producer fencing provide acknowledgement and
-replacement ownership; the ordinary publication path has no custom owner
-registry or receipt database. The required connector transaction boundary and
-runtime capabilities are checked before initialization side effects.
+The normal task/coordinator publishes through its queue and dispatcher. Online
+startup selects its acknowledgement contract from the actual task context.
+Distributed Connect with source transactions retains connector-managed transaction
+boundaries and broker fencing. A task without that capability instead confirms
+the exact delivered prefix from its durable source offset store. Delivery
+callbacks alone cannot advance durable F/W. Streaming can continue between
+offset flushes, but startup and handoff still wait for their durable barriers.
+
+Ordinary source offsets do not provide broker fencing or atomic output/offset
+commits. Embedded applications must preserve acknowledgement order and prevent
+independently overlapping connector instances. Neither path uses a custom owner
+registry or receipt database. Runtime requirements are checked before native
+startup side effects. See the [compatibility evidence](dcg-compatibility-baseline.md)
+for standalone/Engine qualification and the remaining Server/history gates.
 
 Delivery is whole-batch **at least once**, not source exactly once. If delivery
 stops after a committed prefix, recovery can repeat the complete batch. Missing,

@@ -95,9 +95,11 @@ record As400LegacyHandoff(As400Checkpoint initial, Map<String, String> barrier, 
 
     static Map<String, String> strings(Map<String, ?> input) {
         require(input != null && !input.isEmpty() && input.size() <= 64, "Bounded nonempty offset required");
+        var snapshot = As400IncrementalSnapshotState.fields(input);
         var fields = new TreeMap<String, String>();
         input.forEach((key, value) -> {
-            require(key != null && key.length() <= 128 && value instanceof String && ((String) value).length() <= 512, "Malformed legacy offset field");
+            require(key != null && key.length() <= 128 && value instanceof String
+                    && (((String) value).length() <= 512 || snapshot.containsKey(key)), "Malformed legacy offset field");
             fields.put(key, (String) value);
         });
         return Map.copyOf(fields);
@@ -114,7 +116,7 @@ record As400LegacyHandoff(As400Checkpoint initial, Map<String, String> barrier, 
                 && "true".equals(legacy.get("snapshot_completed")) && !legacy.containsKey("snapshot"), "Completed legacy stream required");
         require(!legacy.containsKey(VERSION) || "true".equals(legacy.get("offset.processed")), "Handoff barrier must be fully processed");
         require(!legacy.containsKey(FINGERPRINT) || legacy.containsKey(VERSION)
-                && legacy.get(FINGERPRINT).matches("v1:[0-9a-f]{64}"), "Incomplete handoff binding selection");
+                && legacy.get(FINGERPRINT).matches("v[12]:[0-9a-f]{64}"), "Incomplete handoff binding selection");
         require(legacy.getOrDefault("offset.event_sequence", "").matches("[1-9][0-9]{0,19}"), "Malformed legacy sequence");
         var position = new JournalPosition(new BigInteger(legacy.get("offset.event_sequence")),
                 new JournalReceiver(legacy.get("offset.receiver"), legacy.get("offset.receiver_library")));

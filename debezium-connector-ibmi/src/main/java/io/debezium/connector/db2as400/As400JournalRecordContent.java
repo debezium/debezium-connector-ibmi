@@ -16,6 +16,7 @@ import java.util.HexFormat;
 
 import com.ibm.as400.access.AS400Text;
 
+import io.debezium.ibmi.db2.journal.retrieve.FileCreationEntryDecoder;
 import io.debezium.ibmi.db2.journal.retrieve.JournalPosition;
 import io.debezium.ibmi.db2.journal.retrieve.RawJournalPage;
 import io.debezium.ibmi.db2.journal.retrieve.rjne0200.EntryHeader;
@@ -48,7 +49,9 @@ final class As400JournalRecordContent {
         require(raw.length >= 236 && raw.length <= 1024 * 1024, "Bounded RJNE0200 copy required");
         var header = new EntryHeaderDecoder(RawJournalPage.METADATA_CCSID).decode(raw, 0);
         var input = ByteBuffer.wrap(raw);
-        require(input.getInt(0) == 0 && input.getInt(12) == 0 && input.getInt(16) == 0 && header.getPointerHandle() == 0,
+        boolean creation = header.getJournalCode() == 'D' && header.getEntryType().equals("CT");
+        byte[] creationMetadata = creation ? FileCreationEntryDecoder.metadata(header, raw, 0) : null;
+        require(input.getInt(0) == 0 && input.getInt(12) == 0 && input.getInt(16) == 0 && (header.getPointerHandle() == 0 || creation),
                 "Owned inline copy without XA/LUW required");
         require(header.getSequenceNumber().equals(position.offset()), "Entry position differs from native sequence");
         var spans = new ArrayList<Span>();
@@ -60,7 +63,8 @@ final class As400JournalRecordContent {
             require(text.toObject(raw, receiver).toString().trim().equals(position.receiver().name())
                     && text.toObject(raw, receiver + 10).toString().trim().equals(position.receiver().library())
                     && text.toObject(raw, receiver + 20).toString().trim().equals("*SYSBAS")
-                    && Short.toUnsignedInt(input.getShort(receiver + 30)) == 1, "Different or unsupported receiver context");
+                    && As400OperatorJournalEvidence.systemBasicAsp(java.math.BigInteger.valueOf(Short.toUnsignedInt(input.getShort(receiver + 30)))),
+                    "Different or unsupported receiver context");
         }
         byte[] nulls = null;
         int nullOffset = input.getInt(4);
@@ -81,6 +85,16 @@ final class As400JournalRecordContent {
             }
             int length = span(spans, dataOffset, 16L + count, raw.length);
             specific = Arrays.copyOfRange(raw, dataOffset, dataOffset + length);
+            if (creation) {
+                // Creation's internal apply image is not used to reconstruct a
+                // schema. Pin its documented metadata and native identities;
+                // reserved fields may contain job-local pointers/handles.
+                specific = new byte[FileCreationEntryDecoder.METADATA_BYTES];
+                System.arraycopy(creationMetadata, 0, specific, 0, 60);
+                specific[108] = creationMetadata[108];
+                System.arraycopy(creationMetadata, 124, specific, 124, 10);
+                System.arraycopy(creationMetadata, 142, specific, 142, 2);
+            }
         }
         spans.sort(Comparator.comparingInt(Span::start));
         int end = 0;
@@ -94,12 +108,20 @@ final class As400JournalRecordContent {
         var bytes = new ByteArrayOutputStream();
         try (var out = new DataOutputStream(bytes)) {
             // Preserve the established comparison format used by retained evidence.
-            out.writeUTF("fixture-rjne0200-content-v1");
+            out.writeUTF(creation ? "ibmi-native-creation-metadata-v1" : "fixture-rjne0200-content-v1");
             out.writeUTF(position.receiver().library());
             out.writeUTF(position.receiver().name());
             // Preserve every fixed source field, including reserved bytes, flags,
             // producer identity, timestamps, JIDs and nested level.
-            out.write(raw, 24, 236 - 24);
+            if (creation) {
+                byte[] fixed = Arrays.copyOfRange(raw, 24, 236);
+                ByteBuffer.wrap(fixed).putInt(72 - 24, 0);
+                fixed[218 - 24] &= ~0x20;
+                out.write(fixed);
+            }
+            else {
+                out.write(raw, 24, 236 - 24);
+            }
             section(out, nulls);
             section(out, specific);
         }

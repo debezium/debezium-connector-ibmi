@@ -34,6 +34,8 @@ def percentile(values, fraction):
 
 
 class Experiment(public.Experiment):
+    timed_rounds = 7
+
     def __init__(self, directory, capture, args):
         super().__init__(directory, capture)
         self.args = args
@@ -72,8 +74,11 @@ class Experiment(public.Experiment):
 ''')
         self.report.update(scope='Identical bounded native workload and continuous read_committed observer; ordinary packaged worker',
                            mode=self.args.mode, version=self.args.label, rows_per_burst=self.args.rows,
+                           buffer_storage=self.args.buffer_storage,
+                           failure_handling=self.args.failure_handling,
+                           inherited_worker_defaults=self.args.worker_defaults,
                            migration_enabled=self.args.mode == 'transactional', backlog_rows=self.args.backlog_rows,
-                           warmup_rounds=2, measured_rounds=5, samples=self.samples, measurements=self.measurements,
+                           warmup_rounds=2, measured_rounds=max(0, self.timed_rounds-2), samples=self.samples, measurements=self.measurements,
                            distribution_sha256=hashlib.sha256(self.args.distribution.read_bytes()).hexdigest(),
                            plugin_sha256={str(p.relative_to(self.plugin)): hashlib.sha256(p.read_bytes()).hexdigest()
                                           for p in (self.plugin / 'ibmi').iterdir()},
@@ -97,6 +102,13 @@ class Experiment(public.Experiment):
 
     def configuration(self, enabled):
         config = super().configuration(enabled)
+        config['event.converting.failure.handling.mode'] = self.args.failure_handling
+        if self.args.worker_defaults:
+            for key in ['key.converter', 'value.converter', 'key.converter.schemas.enable', 'value.converter.schemas.enable',
+                        'tasks.max', 'errors.tolerance']:
+                config.pop(key, None)
+        if enabled:
+            config['truncate.buffer.storage'] = self.args.buffer_storage
         if not enabled:
             config.pop('truncate.transactional.enabled', None)
             for key in list(config):
@@ -183,7 +195,7 @@ class Experiment(public.Experiment):
         record = {'scenario':scenario,'round':round_number,'warmup':round_number<2,'rows':len(rows),
                   'started_ms':started,'source_finished_ms':source_finished,'finished_ms':max(r['observed_ms'] for r in rows),
                   'source_sql_ms':source_finished-started,'elapsed_ms':elapsed,'rows_per_second':len(rows)*1000/elapsed,
-                  'p50_ms':statistics.median(latencies),'p95_ms':percentile(latencies,.95), **extra}
+                  'p50_ms':statistics.median(latencies),'p95_ms':percentile(latencies,.95),'p99_ms':percentile(latencies,.99), **extra}
         self.measurements.append(record); self.save()
         print(json.dumps(record), flush=True)
 
@@ -244,7 +256,7 @@ class Experiment(public.Experiment):
         self.children.append(self.observer_process)
         base.wait_for('continuous observer ready',lambda:(self.control/'performance-ready').exists(),30)
         session=self.capture.connection()
-        for round_number in range(7):
+        for round_number in range(self.timed_rounds):
             first=10000+round_number*1000
             self.burst(session,'A',first,'c',round_number)
             self.burst(session,'M',first,'c',round_number)
@@ -253,7 +265,7 @@ class Experiment(public.Experiment):
             for round_number in range(2):
                 self.backlog(worker, session, round_number)
         self.check('Every timed burst preserves exact keys and mixed values',
-                   len(self.measurements)==21+(2 if self.args.backlog_rows else 0),'control/performance-events.jsonl')
+                   len(self.measurements)==self.timed_rounds*3+(2 if self.args.backlog_rows else 0),'control/performance-events.jsonl')
         self.extended_workload(worker, session)
         self.close_session(session)
         self.stop_connector(worker)
@@ -292,6 +304,10 @@ def main(experiment_type=Experiment, configure_parser=None):
     parser.add_argument('--distribution',type=Path,required=True)
     parser.add_argument('--label',required=True); parser.add_argument('--mode',choices=['legacy','transactional'],default='legacy')
     parser.add_argument('--rows',type=int,default=250)
+    parser.add_argument('--buffer-storage',choices=['memory','disk'],default='memory')
+    parser.add_argument('--failure-handling', choices=['fail','warn','skip'], default='fail',
+                        help='Use the same ordinary row-error policy for baseline and candidate measurements')
+    parser.add_argument('--worker-defaults', action='store_true', help='Inherit worker converters and standard task/error defaults')
     parser.add_argument('--backlog-rows',type=int,default=0, help='Optional even backlog, split between A and M; two restart trials')
     parser.add_argument('--heap-histogram',action='store_true', help='After task stop and all measurements, request a full-GC histogram using host JDK jcmd')
     if configure_parser:
@@ -301,6 +317,8 @@ def main(experiment_type=Experiment, configure_parser=None):
         parser.error('Use an existing assembly ZIP and 50..500 rows per burst')
     if args.backlog_rows not in (0, 2000, 5000):
         parser.error('Backlog must be 0, 2000 or 5000 records')
+    if args.mode == 'legacy' and args.buffer_storage != 'memory':
+        parser.error('Disk transaction storage applies only to transactional mode')
     import pyodbc
     pyodbc.pooling=False
     args.directory=args.directory.resolve(); args.directory.mkdir(exist_ok=False)

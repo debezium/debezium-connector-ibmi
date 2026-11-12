@@ -54,6 +54,71 @@ class As400SourceNormalizerTest {
     private long sequence;
 
     @ParameterizedTest
+    @ValueSource(strings = { "transaction-row", "transaction-before", "autocommit-before" })
+    void shouldRejectSchemaRefreshBeforeReplacingABindingUsedByPendingRows(String pending) throws Exception {
+        var changes = new java.util.concurrent.atomic.AtomicInteger();
+        var resolver = new As400SourceNormalizer.TableResolver() {
+            @Override
+            public TableBinding resolve(String file, String library) {
+                return new TableBinding(table, decoder);
+            }
+
+            @Override
+            public void schemaChange(io.debezium.ibmi.db2.journal.retrieve.RawJournalPage.Entry entry) {
+                changes.incrementAndGet();
+            }
+        };
+        var autocommit = new As400AutocommitBuffer("LIB/JRN/incarnation", new Limits(10, 100, 20, 4096), buffer::usage);
+        normalizer = new As400SourceNormalizer(buffer, resolver, 1024, (source, control) -> SavepointRollback.UNRESOLVED, autocommit);
+        accept(entry('C', "SC", 10, new byte[0]));
+        accept(row(pending.equals("transaction-row") ? "PT" : "UB", pending.equals("autocommit-before") ? 0 : 10, 7));
+        var failure = assertThrows(NormalizationException.class, () -> accept(clear('0')));
+        assertThat(failure).hasStackTraceContaining(pending.equals("autocommit-before") ? "incomplete autocommit update" : "pending changes");
+        assertThat(changes).hasValue(0);
+        assertThrows(NormalizationException.class, () -> accept(entry('C', "CM", 10, new byte[0])));
+    }
+
+    @Test
+    void shouldRetainExcludedTransactionEffectsWithoutDecodingOrExposingValues() throws Exception {
+        var identity = new TableIdentity(table.tableId(), table.physicalFile(), table.member(), table.fileJournalId(), table.memberJournalId(),
+                "TEST:123456789ABCD:6:2:false");
+        normalizer = new As400SourceNormalizer(buffer, (file, library) -> As400BindingDefinition.excluded(identity).binding(1024), 1024);
+        accept(entry('C', "SC", 10, new byte[0]));
+        accept(row("PT", 10, 7));
+        accept(row("UB", 10, 7));
+        accept(row("UP", 10, 8));
+        accept(clear('8'));
+        accept(row("PX", 10, 9));
+        var batch = accept(entry('C', "CM", 10, new byte[0])).orElseThrow();
+        assertThat(batch.changes()).extracting(Change::operation).containsExactly(Operation.CREATE, Operation.UPDATE, Operation.TRUNCATE, Operation.CREATE);
+        assertThat(batch.changes()).allSatisfy(change -> assertThat(change.table()).isEqualTo(identity));
+        assertThrows(IllegalStateException.class, () -> batch.changes().get(0).after().values());
+        buffer.completeBatch(batch);
+        assertThat(buffer.oldestTransactionPosition()).isEmpty();
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = { "unpaired-update", "missing-start", "short-image", "wrong-member", "minimized", "rollback-forward" })
+    void shouldPreserveRecoveryGuardsForExcludedRows(String fault) throws Exception {
+        var identity = new TableIdentity(table.tableId(), table.physicalFile(), table.member(), table.fileJournalId(), table.memberJournalId(),
+                "TEST:123456789ABCD:6:2:false");
+        normalizer = new As400SourceNormalizer(buffer, (file, library) -> As400BindingDefinition.excluded(identity).binding(1024), 1024);
+        if (!fault.equals("missing-start")) {
+            accept(entry('C', "SC", 10, new byte[0]));
+        }
+        if (fault.equals("rollback-forward")) {
+            accept(entry('C', "R1", 10, new byte[0]));
+        }
+        var row = row(fault.equals("unpaired-update") ? "UP" : "PT", 10, 7);
+        switch (fault) {
+            case "short-image" -> text(row.bytes(), 240, 5, "00005");
+            case "wrong-member" -> text(row.bytes(), 177, 10, "OTHER");
+            case "minimized" -> row.bytes()[OFFSET + 218] = 8;
+        }
+        fails(row);
+    }
+
+    @ParameterizedTest
     @ValueSource(longs = { 0, 20 })
     void shouldRejectAnotherCyclesRowBeforePublicationWhenTheTableHasAnUncommittedClear(long cycle) throws Exception {
         var autocommit = new As400AutocommitBuffer("LIB/JRN/incarnation", new Limits(10, 100, 20, 4096), buffer::usage);

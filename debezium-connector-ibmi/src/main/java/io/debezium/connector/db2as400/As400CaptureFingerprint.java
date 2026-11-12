@@ -5,10 +5,11 @@
  */
 package io.debezium.connector.db2as400;
 
-import java.io.ByteArrayOutputStream;
 import java.io.DataOutputStream;
 import java.io.IOException;
+import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
+import java.security.DigestOutputStream;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
@@ -50,18 +51,65 @@ final class As400CaptureFingerprint {
         }
 
         String fingerprint(List<TableIdentity> tables) {
+            return fingerprint(tables, false);
+        }
+
+        /**
+         * New online histories pin source reconstruction independently from
+         * ordinary output reconfiguration. Older histories keep fingerprint().
+         * Unknown settings remain pinned; only known output-only choices move.
+         */
+        String recoveryFingerprint(List<TableIdentity> tables) {
+            return fingerprint(tables, true);
+        }
+
+        /** Complete retained schemas allow output selection to change without reinterpreting source bytes. */
+        String selectableFingerprint(List<TableIdentity> tables) {
+            return fingerprint(tables, true, true);
+        }
+
+        private Map<String, String> recoveryOutput() {
+            var retained = new TreeMap<>(output);
+            var aliases = java.util.Arrays.stream(output.getOrDefault("converters", "").split(",")).map(String::trim)
+                    .filter(alias -> !alias.isEmpty()).toList();
+            Set<String> mutable = Set.of("converters", "transforms", "predicates", "key.converter", "value.converter", "header.converter",
+                    "topic.naming.strategy", "topic.delimiter", "topic.heartbeat.prefix", "topic.transaction", "topic.heartbeat.name",
+                    "decimal.handling.mode", "binary.handling.mode", "time.precision.mode", "schema.name.adjustment.mode", "field.name.adjustment.mode",
+                    "trim.non.xml.charsequence.field.mode", "datatype.propagate.source.type", "message.key.columns", "skip.messages.without.change",
+                    "transaction.id.format");
+            // A converter alias can legally be named "history" or "temporal".
+            // It cannot erase connector-owned invariants with the same prefix.
+            Set<String> invariant = Set.of("version", "binding.catalog", "history.storage", "history.topic", "key.mode", "topic.prefix", "control.topic",
+                    "temporal.compatibility", "temporal.worker.zone", "temporal.worker.rules");
+            retained.keySet().removeIf(key -> !invariant.contains(key) && (mutable.contains(key) || key.startsWith("transforms.") || key.startsWith("predicates.")
+                    || key.startsWith("key.converter.") || key.startsWith("value.converter.") || key.startsWith("header.converter.")
+                    || key.startsWith("column.") || aliases.stream().anyMatch(alias -> key.startsWith(alias + "."))));
+            return retained;
+        }
+
+        private String fingerprint(List<TableIdentity> tables, boolean recovery) {
+            return fingerprint(tables, recovery, false);
+        }
+
+        private String fingerprint(List<TableIdentity> tables, boolean recovery, boolean selectable) {
             if (tables.isEmpty() || Set.copyOf(tables).size() != tables.size()) {
                 throw new IllegalArgumentException("Distinct captured table identities are required");
             }
             Map<String, String> fields = new TreeMap<>();
             flatten(fields, "filters", filters);
-            flatten(fields, "decoder", decoder);
+            var retainedDecoder = new TreeMap<>(decoder);
+            if (selectable) {
+                retainedDecoder.keySet().removeAll(Set.of("table.include.list", "table.exclude.list", "schema.include.list", "schema.exclude.list"));
+            }
+            flatten(fields, "decoder", retainedDecoder);
             flatten(fields, "schema", schema);
-            flatten(fields, "output", output);
+            flatten(fields, "output", recovery ? recoveryOutput() : output);
             flatten(fields, "partition", sourcePartition);
-            fields.put("transaction.metadata", Boolean.toString(transactionMetadata));
-            fields.put("tombstones", Boolean.toString(tombstones));
-            skippedOperations.forEach(op -> fields.put("skipped." + op, "true"));
+            if (!recovery) {
+                fields.put("transaction.metadata", Boolean.toString(transactionMetadata));
+                fields.put("tombstones", Boolean.toString(tombstones));
+                skippedOperations.forEach(op -> fields.put("skipped." + op, "true"));
+            }
             // Sort complete identity hashes, not ambiguous concatenated qualified names.
             List<String> identities = new ArrayList<>();
             for (TableIdentity table : tables) {
@@ -82,14 +130,14 @@ final class As400CaptureFingerprint {
             for (int i = 0; i < identities.size(); i++) {
                 fields.put("table." + i, identities.get(i));
             }
-            return "v1:" + hash("ibmi-capture-v1", fields);
+            return "v1:" + hash(selectable ? "ibmi-recovery-selection-v1" : recovery ? "ibmi-recovery-v1" : "ibmi-capture-v1", fields);
         }
     }
 
     static String hash(String domain, Map<String, String> fields) {
         try {
-            ByteArrayOutputStream bytes = new ByteArrayOutputStream();
-            try (DataOutputStream output = new DataOutputStream(bytes)) {
+            var digest = MessageDigest.getInstance("SHA-256");
+            try (DataOutputStream output = new DataOutputStream(new DigestOutputStream(OutputStream.nullOutputStream(), digest))) {
                 write(output, domain);
                 output.writeInt(fields.size());
                 for (var entry : new TreeMap<>(fields).entrySet()) {
@@ -97,7 +145,7 @@ final class As400CaptureFingerprint {
                     write(output, entry.getValue());
                 }
             }
-            return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(bytes.toByteArray()));
+            return HexFormat.of().formatHex(digest.digest());
         }
         catch (IOException | NoSuchAlgorithmException e) {
             throw new IllegalStateException("Cannot encode capture fingerprint", e);

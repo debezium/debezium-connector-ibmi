@@ -17,7 +17,11 @@ import org.slf4j.LoggerFactory;
 
 public class CcsidCache {
     private static final String GET_CCSID = "select table_name, system_table_name, column_name, system_column_name, ccsid FROM qsys2.SYSCOLUMNS where table_schema=? and (system_table_name = ? or table_name = ?)";
-    private final Map<String, Integer> ccsidMap = new HashMap<>();
+
+    private record ColumnName(String schema, String table, String column) {
+    }
+
+    private final Map<ColumnName, Integer> ccsidMap = new HashMap<>();
     private final Connect<Connection, SQLException> jdbcConnect;
     static final Logger log = LoggerFactory.getLogger(CcsidCache.class);
     private final int fromCcsid;
@@ -31,7 +35,7 @@ public class CcsidCache {
     }
 
     public Integer getCcsid(String schema, String table, String columnName) {
-        final String canonicalName = String.format("%s.%s.%s", schema, table, columnName);
+        final ColumnName canonicalName = new ColumnName(schema, table, columnName);
         if (ccsidMap.containsKey(canonicalName)) {
             return ccsidMap.get(canonicalName);
         }
@@ -47,6 +51,10 @@ public class CcsidCache {
         }
     }
 
+    void clearTable(String schema, String table) {
+        ccsidMap.keySet().removeIf(name -> name.schema().equals(schema) && name.table().equals(table));
+    }
+
     private void fetchAllCcsidForTable(String schema, String table) throws SQLException {
         final Connection con = jdbcConnect.connection();
         try (PreparedStatement ps = con.prepareStatement(GET_CCSID)) {
@@ -60,8 +68,8 @@ public class CcsidCache {
                     final String longcolumn = StringHelpers.safeTrim(rs.getString(3));
                     final String shortcolumn = StringHelpers.safeTrim(rs.getString(4));
                     final Object ccsidObj = rs.getObject(5);
-                    final String canonicalLongName = String.format("%s.%s.%s", schema, longTableName, longcolumn);
-                    final String canonicalShortName = String.format("%s.%s.%s", schema, shortTableName, shortcolumn);
+                    final ColumnName canonicalLongName = new ColumnName(schema, longTableName, longcolumn);
+                    final ColumnName canonicalShortName = new ColumnName(schema, shortTableName, shortcolumn);
                     int ccsid = (ccsidObj == null) ? -1 : (Integer) ccsidObj;
 
                     if (fromCcsid == ccsid && toCcsid != -1) {

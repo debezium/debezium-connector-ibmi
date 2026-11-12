@@ -41,7 +41,7 @@ public class As400SnapshotChangeEventSource
 
     private final As400ConnectorConfig connectorConfig;
     private final As400JdbcConnection jdbcConnection;
-    private final As400RpcConnection rpcConnection;
+    private final java.util.concurrent.Callable<JournalPosition> currentPosition;
     private final As400DatabaseSchema schema;
     protected final SnapshotterService snapshotterService;
 
@@ -52,11 +52,22 @@ public class As400SnapshotChangeEventSource
                                           NotificationService<As400Partition, As400OffsetContext> notificationService,
                                           SnapshotterService snapshotterService) {
 
+        this(connectorConfig, rpcConnection::getCurrentPosition, jdbcConnectionFactory, schema, dispatcher, clock,
+                snapshotProgressListener, notificationService, snapshotterService);
+    }
+
+    As400SnapshotChangeEventSource(As400ConnectorConfig connectorConfig, java.util.concurrent.Callable<JournalPosition> currentPosition,
+                                   MainConnectionProvidingConnectionFactory<As400JdbcConnection> jdbcConnectionFactory,
+                                   As400DatabaseSchema schema, EventDispatcher<As400Partition, TableId> dispatcher, Clock clock,
+                                   SnapshotProgressListener<As400Partition> snapshotProgressListener,
+                                   NotificationService<As400Partition, As400OffsetContext> notificationService,
+                                   SnapshotterService snapshotterService) {
+
         super(connectorConfig, jdbcConnectionFactory, schema, dispatcher, clock, snapshotProgressListener,
                 notificationService, snapshotterService);
 
         this.connectorConfig = connectorConfig;
-        this.rpcConnection = rpcConnection;
+        this.currentPosition = currentPosition;
         this.jdbcConnection = jdbcConnectionFactory.mainConnection();
         this.schema = schema;
         this.snapshotterService = snapshotterService;
@@ -122,7 +133,7 @@ public class As400SnapshotChangeEventSource
         }
         else {
             final Instant now = Instant.now();
-            final JournalPosition position = rpcConnection.getCurrentPosition();
+            final JournalPosition position = currentPosition.call();
             // set last entry to processed, so we don't process it again
             final JournalProcessedPosition processedPos = new JournalProcessedPosition(position, now, true);
             snapshotContext.offset = new As400OffsetContext(connectorConfig, processedPos);

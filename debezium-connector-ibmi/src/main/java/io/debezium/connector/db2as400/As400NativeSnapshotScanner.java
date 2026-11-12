@@ -43,9 +43,6 @@ final class As400NativeSnapshotScanner {
 
     void scan(List<As400BindingDefinition> definitions, As400SnapshotChunks.Consumer consumer) throws Exception {
         for (var definition : definitions) {
-            if (definition.outputTable().primaryKeyColumnNames().isEmpty()) {
-                throw new IllegalArgumentException("Qualified snapshot key ordering required");
-            }
             var temporalDecoders = definition.codecs().stream().map(c -> c.temporal()
                     ? (io.debezium.ibmi.db2.journal.data.types.AS400Temporal) c.decoder()
                     : null).toList();
@@ -60,6 +57,10 @@ final class As400NativeSnapshotScanner {
             String keys = definition.schema().primaryKeyColumnNames().stream().map(As400NativeSnapshotScanner::quote).collect(Collectors.joining(","));
             if (definition.usesRrn()) {
                 projection += ",CAST(RRN(T) AS BIGINT)";
+            }
+            if (definition.usesRrn() || keys.isEmpty()) {
+                // Physical order is stable under the qualified snapshot lock.
+                // It does not make the record number part of the public key.
                 keys = "RRN(T)";
             }
             long previousRrn = 0;
@@ -76,7 +77,7 @@ final class As400NativeSnapshotScanner {
                     // A configured max-row cutoff must never masquerade as EOF.
                     statement.setMaxRows(0);
                     rows = statement.executeQuery("SELECT " + projection + " FROM " + quote(definition.schema().id().schema()) + "."
-                            + quote(definition.identity().physicalFile()) + " T ORDER BY " + keys);
+                            + quote(definition.schema().id().table()) + " T ORDER BY " + keys);
                 }
                 boolean eof = false;
                 Row lookahead = null;

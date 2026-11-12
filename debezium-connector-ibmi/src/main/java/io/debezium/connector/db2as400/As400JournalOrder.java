@@ -65,6 +65,10 @@ final class As400JournalOrder {
         return incarnations.get(position.receiver());
     }
 
+    int receiverCount() {
+        return order.size();
+    }
+
     /** Single-owner extension from newly verified evidence; never replace or reorder an existing receiver. */
     void extendVerified(As400JournalOrder next, int maximumReceivers) {
         if (Thread.currentThread() != owner) {
@@ -120,7 +124,7 @@ final class As400JournalOrder {
         var names = order.keySet().stream().sorted(java.util.Comparator.comparingInt(order::get)).toList();
         var candidate = new As400JournalOrder(names, incarnations, ranges);
         // Validate the entire old overlap before any retirement or mutation.
-        candidate.extendVerified(next, order.size() + maximumRetained);
+        candidate.extendVerified(next, Math.addExact(order.size(), maximumRetained));
         startupAnchors.forEach(candidate::validate);
         var pins = startupAnchors.stream().map(JournalPosition::receiver).collect(java.util.stream.Collectors.toSet());
         var kept = candidate.order.keySet().stream().sorted(java.util.Comparator.comparingInt(candidate.order::get))

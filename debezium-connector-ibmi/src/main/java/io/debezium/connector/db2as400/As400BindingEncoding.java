@@ -49,7 +49,7 @@ final class As400BindingEncoding {
     }
 
     static List<As400BindingDefinition> decode(Array changes) {
-        require(changes != null && !changes.isEmpty() && changes.size() <= 1024, "Incomplete bounded binding list");
+        require(changes != null && !changes.isEmpty(), "Incomplete binding list");
         var definitions = new ArrayList<As400BindingDefinition>();
         for (var entry : changes) {
             Document change = entry.getValue().asDocument();

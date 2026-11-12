@@ -25,6 +25,13 @@ import io.debezium.ibmi.db2.journal.retrieve.JournalReceiver;
  */
 record As400ShortBoundaryProgram(JournalReceiver journal, List<Target> targets, String nonce, String scopeDigest) {
 
+    private static final int OBJECTS_PER_COMMAND = 50;
+    static final String PREPARE_BATCHES_SQL = "DECLARE GLOBAL TEMPORARY TABLE SESSION.DCGBATCH "
+            + "(BATCH INTEGER NOT NULL, HELD SMALLINT NOT NULL, ALLOCATE_COMMAND VARCHAR(4096) NOT NULL, "
+            + "RELEASE_COMMAND VARCHAR(4096) NOT NULL) ON COMMIT PRESERVE ROWS NOT LOGGED";
+
+    static final String INSERT_BATCH_SQL = "INSERT INTO SESSION.DCGBATCH VALUES(?, 0, ?, ?)";
+
     static final String PREPARE_SQL = "DECLARE GLOBAL TEMPORARY TABLE SESSION.DCGPULSE "
             + "(ATTEMPT CHAR(32), SCOPE_DIGEST CHAR(64), ACQUIRED TIMESTAMP(6), RELEASED TIMESTAMP(6)) "
             + "ON COMMIT PRESERVE ROWS NOT LOGGED";
@@ -41,10 +48,10 @@ record As400ShortBoundaryProgram(JournalReceiver journal, List<Target> targets, 
         name(journal.library());
         name(journal.name());
         targets = List.copyOf(targets);
-        require(!targets.isEmpty() && targets.size() <= 50
+        require(!targets.isEmpty()
                 && targets.equals(targets.stream().sorted(Comparator.comparing(Target::library).thenComparing(Target::file)).toList())
                 && targets.stream().map(t -> t.library() + "/" + t.file()).distinct().count() == targets.size(),
-                "One ordered bounded single-member scope required");
+                "One ordered single-member scope required");
         require(nonce != null && nonce.matches("[A-F0-9]{32}") && scopeDigest != null && scopeDigest.matches("[A-F0-9]{64}"),
                 "Fresh attempt and complete scope digest required");
     }
@@ -75,12 +82,16 @@ record As400ShortBoundaryProgram(JournalReceiver journal, List<Target> targets, 
     }
 
     String release() {
+        require(!batched(), "Batched allocations require their job-local release ledger");
         String objects = targets.stream().map(t -> "(" + t.library() + "/" + t.file() + " *FILE *EXCLRD " + t.member() + ")")
                 .collect(Collectors.joining(" "));
         return "DLCOBJ OBJ(" + objects + ") SCOPE(*JOB)";
     }
 
     String statement() {
+        if (batched()) {
+            return batchedStatement();
+        }
         String objects = targets.stream().map(t -> "(" + t.library() + "/" + t.file() + " *FILE *EXCLRD " + t.member() + ")")
                 .collect(Collectors.joining(" "));
         String allocate = "ALCOBJ OBJ(" + objects + ") WAIT(1) CONFLICT(*RQSRLS) SCOPE(*JOB)";
@@ -106,9 +117,93 @@ record As400ShortBoundaryProgram(JournalReceiver journal, List<Target> targets, 
         return String.join("\n", lines);
     }
 
+    boolean batched() {
+        return targets.size() > OBJECTS_PER_COMMAND;
+    }
+
+    record Allocation(String allocate, String release) {
+    }
+
+    int batchCount() {
+        return (targets.size() - 1) / OBJECTS_PER_COMMAND + 1;
+    }
+
+    Allocation allocationBatch(int index) {
+        require(index >= 0 && index < batchCount(), "Unknown allocation group");
+        int start = index * OBJECTS_PER_COMMAND;
+        String objects = targets.subList(start, start + Math.min(OBJECTS_PER_COMMAND, targets.size() - start)).stream()
+                .map(t -> "(" + t.library() + "/" + t.file() + " *FILE *EXCLRD " + t.member() + ")").collect(Collectors.joining(" "));
+        return new Allocation("ALCOBJ OBJ(" + objects + ") WAIT(" + (index == 0 ? 1 : 0) + ") CONFLICT(*RQSRLS) SCOPE(*JOB)",
+                "DLCOBJ OBJ(" + objects + ") SCOPE(*JOB)");
+    }
+
+    private String batchedStatement() {
+        var lines = new ArrayList<>(List.of("BEGIN NOT ATOMIC", "DECLARE FAILED SMALLINT DEFAULT 0;",
+                "DECLARE RELEASE_FAILED SMALLINT DEFAULT 0;", "DECLARE STARTED TIMESTAMP(6);", "DECLARE ACQUIRED TIMESTAMP(6);",
+                "DECLARE RELEASED TIMESTAMP(6);"));
+        // The caller has populated the job-local command ledger before this
+        // statement is submitted. Compilation and SQL text size do not grow
+        // with the number of files; no catalog query runs while locks are held.
+        lines.add("IF (SELECT COUNT(*) FROM SESSION.DCGBATCH) <> " + batchCount() + " THEN");
+        lines.add("SIGNAL SQLSTATE '75001' SET MESSAGE_TEXT='Incomplete allocation ledger';");
+        lines.add("END IF;");
+        lines.add("BEGIN");
+        lines.addAll(handlers("FAILED"));
+        lines.addAll(List.of("SET STARTED=CURRENT_TIMESTAMP;",
+                "FOR ALLOCATION AS AC CURSOR FOR SELECT BATCH AS BATCH_ID, ALLOCATE_COMMAND FROM SESSION.DCGBATCH ORDER BY BATCH DO",
+                "IF CURRENT_TIMESTAMP > STARTED + 1 SECOND THEN",
+                "SIGNAL SQLSTATE '75003' SET MESSAGE_TEXT='Allocation budget exhausted';", "END IF;",
+                "UPDATE SESSION.DCGBATCH SET HELD=1 WHERE BATCH=ALLOCATION.BATCH_ID;",
+                "CALL QSYS2.QCMDEXC(ALLOCATION.ALLOCATE_COMMAND);", "END FOR;"));
+        lines.addAll(List.of("IF CURRENT_TIMESTAMP > STARTED + 1 SECOND THEN",
+                "SIGNAL SQLSTATE '75003' SET MESSAGE_TEXT='Allocation budget exhausted';", "END IF;",
+                // Conservatively include time spent acquiring the earlier groups
+                // in the completed hold bound, not just the final all-held interval.
+                "SET ACQUIRED=STARTED;", "CALL QSYS2.QCMDEXC(" + literal(marker(payload(), false)) + ");", "END;"));
+        lines.addAll(batchRelease());
+        lines.addAll(List.of("SET RELEASED=CURRENT_TIMESTAMP;", "IF FAILED=1 THEN",
+                "SIGNAL SQLSTATE '75001' SET MESSAGE_TEXT='Pulse failed; independent drain required';", "END IF;",
+                "INSERT INTO SESSION.DCGPULSE VALUES(" + literal(nonce) + ", " + literal(scopeDigest) + ", ACQUIRED, RELEASED);", "END"));
+        return String.join("\n", lines);
+    }
+
+    String retryBatchRelease() {
+        require(batched(), "Batch release requires a batch ledger");
+        var lines = new ArrayList<>(List.of("BEGIN NOT ATOMIC", "DECLARE FAILED SMALLINT DEFAULT 0;", "DECLARE RELEASE_FAILED SMALLINT DEFAULT 0;"));
+        lines.addAll(batchRelease());
+        lines.add("END");
+        return String.join("\n", lines);
+    }
+
+    private List<String> batchRelease() {
+        var lines = new ArrayList<String>();
+        lines.add("FOR RELEASING AS RC CURSOR FOR SELECT BATCH AS BATCH_ID, RELEASE_COMMAND FROM SESSION.DCGBATCH ORDER BY BATCH DESC DO");
+        for (int attempt = 0; attempt < 3; attempt++) {
+            lines.addAll(List.of("SET RELEASE_FAILED=0;", "BEGIN"));
+            lines.addAll(handlers("RELEASE_FAILED"));
+            lines.addAll(List.of("IF EXISTS (SELECT 1 FROM SESSION.DCGBATCH WHERE BATCH=RELEASING.BATCH_ID AND HELD=1) THEN",
+                    "CALL QSYS2.QCMDEXC(RELEASING.RELEASE_COMMAND);",
+                    "UPDATE SESSION.DCGBATCH SET HELD=0 WHERE BATCH=RELEASING.BATCH_ID;", "END IF;", "END;",
+                    "IF RELEASE_FAILED=1 THEN", "SET FAILED=1;", "END IF;"));
+        }
+        lines.add("END FOR;");
+        lines.addAll(List.of("IF EXISTS (SELECT 1 FROM SESSION.DCGBATCH WHERE HELD=1) THEN",
+                "SIGNAL SQLSTATE '75002' SET MESSAGE_TEXT='Pulse release failed; independent drain required';", "END IF;"));
+        return lines;
+    }
+
     String programDigest() {
         try {
-            return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(statement().getBytes(StandardCharsets.US_ASCII)));
+            var digest = MessageDigest.getInstance("SHA-256");
+            digest.update(statement().getBytes(StandardCharsets.US_ASCII));
+            if (batched()) {
+                // Bind the prepared command data as well as the constant SQL.
+                for (int i = 0; i < batchCount(); i++) {
+                    var batch = allocationBatch(i);
+                    digest.update(("\n" + batch.allocate() + "\n" + batch.release()).getBytes(StandardCharsets.US_ASCII));
+                }
+            }
+            return HexFormat.of().formatHex(digest.digest());
         }
         catch (java.security.NoSuchAlgorithmException e) {
             throw new IllegalStateException(e);

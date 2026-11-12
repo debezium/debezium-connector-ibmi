@@ -64,6 +64,7 @@ class As400OperatorCutReaderTest {
         assertThat(cut.checkpoint().completedThrough()).isEqualTo(position(24));
         verify(f.transport).readRawPage(position(24), position(77), 100);
         verify(f.transport).readRawPage(position(78), position(81), 50);
+        verify(f.identities, org.mockito.Mockito.times(2)).collect(List.of(target(JOURNAL, Kind.JOURNAL), target(R1, Kind.RECEIVER), target(R2, Kind.RECEIVER)));
         assertThat(cut.entries().get(0).header().getSequenceNumber()).isEqualTo(BigInteger.valueOf(25));
     }
 
@@ -90,12 +91,13 @@ class As400OperatorCutReaderTest {
     }
 
     @ParameterizedTest
-    @ValueSource(strings = { "journal", "receiver", "fingerprint", "table", "range", "floor-after-w" })
+    @ValueSource(strings = { "journal", "journal-replaced", "receiver", "fingerprint", "table", "range", "floor-after-w" })
     void incompatibleOffsetsAndAssociationsRejectBeforeReadingHistory(String fault) throws Exception {
         Fixture f = new Fixture();
         var offset = new HashMap<String, String>(f.offset());
         switch (fault) {
             case "journal" -> offset.put("journal_identity", "other-journal");
+            case "journal-replaced" -> f.nativeObjects.put(target(JOURNAL, Kind.JOURNAL), new Identity(BigInteger.ONE, BigInteger.TEN, BigInteger.TWO));
             case "receiver" -> {
                 offset.put("replay_from.receiver_identity", "other-receiver");
                 offset.put("completed_through.receiver_identity", "other-receiver");
@@ -140,7 +142,8 @@ class As400OperatorCutReaderTest {
     }
 
     @ParameterizedTest
-    @ValueSource(strings = { "floor", "w", "failed-page", "changed-table", "changed-native", "changed-directory", "shrunk-tail", "page-bound", "entry-bound",
+    @ValueSource(strings = { "floor", "w", "failed-page", "changed-table", "changed-native", "changed-journal", "changed-directory", "shrunk-tail", "page-bound",
+            "entry-bound",
             "byte-bound" })
     void incompleteOrChangedCutNeverReturnsPartialEvidence(String fault) throws Exception {
         Fixture f = new Fixture();
@@ -153,11 +156,12 @@ class As400OperatorCutReaderTest {
             }
             case "failed-page" -> when(f.transport.readRawPage(position(78), position(81), 50)).thenThrow(new IllegalStateException("Partial"));
             case "changed-table" -> when(f.tables.collect(any())).thenReturn(f.observations, List.of());
-            case "changed-native" -> doAnswer(i -> {
+            case "changed-native", "changed-journal" -> doAnswer(i -> {
                 List<Target> targets = i.getArgument(0);
                 var result = new HashMap<>(f.nativeObjects);
-                if (++f.identityReads == 3) {
-                    result.put(target(R1, Kind.RECEIVER), new Identity(BigInteger.ONE, BigInteger.TEN, BigInteger.TWO));
+                if (++f.identityReads == 2) {
+                    result.put(fault.equals("changed-native") ? target(R1, Kind.RECEIVER) : target(JOURNAL, Kind.JOURNAL),
+                            new Identity(BigInteger.ONE, BigInteger.TEN, BigInteger.TWO));
                 }
                 return candidates(result, targets);
             }).when(f.identities).collect(any());

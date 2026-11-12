@@ -14,12 +14,18 @@ class As400ErrorHandler extends ErrorHandler {
         super(As400RpcConnector.class, config, queue, null);
     }
 
+    As400ErrorHandler(As400ConnectorConfig config, ChangeEventQueue<?> queue, ErrorHandler previous) {
+        super(As400RpcConnector.class, config, queue, previous);
+    }
+
     @Override
     protected boolean isRetriable(Throwable failure) {
         for (Throwable cause = failure; cause != null; cause = cause.getCause()) {
             if (cause instanceof As400StreamingChangeEventSource.RowProcessingException
                     || cause instanceof As400StreamingChangeEventSource.TruncateException
-                    || cause instanceof As400StreamingChangeEventSource.TransactionMetadataException) {
+                    || cause instanceof As400StreamingChangeEventSource.TransactionMetadataException
+                    || cause instanceof As400SpillStore.SpillException
+                    || cause instanceof As400JournalCapture.CaptureException) {
                 return false;
             }
         }

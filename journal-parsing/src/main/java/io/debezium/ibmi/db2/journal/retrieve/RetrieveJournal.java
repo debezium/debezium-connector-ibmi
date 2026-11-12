@@ -384,7 +384,7 @@ public class RetrieveJournal {
                             + Arrays.stream(spc.getMessageList()).map(AS400Message::getID).toList());
                 }
                 rawPage = RawJournalPage.decodeResult(parameters[0].getOutputData(), parameters[5].getOutputData(),
-                        range.start().asJournalPosition(), range.end(), rawEntryLimit);
+                        range.start().asJournalPosition(), range.end(), rawEntryLimit, handle -> releasePointer(spc, job, handle));
                 if (selection == RawSelection.CONTROLS
                         && rawPage.entries().stream().anyMatch(e -> e.header().getJournalCode() != 'C' && e.header().getJournalCode() != 'J')) {
                     throw new RetrieveJournalException("Control-history response contains an unrequested journal code");
@@ -433,6 +433,37 @@ public class RetrieveJournal {
             return RetrievalState.MoreDataAvailable;
         }
         return RetrievalState.Success;
+    }
+
+    private void releasePointer(ServiceProgramCall call, Job expectedJob, long handle) {
+        try {
+            lifecycle.checkOpen();
+            Job current = call.getServerJob();
+            if (!current.getName().equals(expectedJob.getName()) || !current.getUser().equals(expectedJob.getUser())
+                    || !current.getNumber().equals(expectedJob.getNumber())) {
+                throw new IllegalStateException("Pointer cleanup cannot move to another API job");
+            }
+            byte[] error = new byte[RawJournalPage.ERROR_BYTES];
+            java.nio.ByteBuffer.wrap(error).putInt(error.length);
+            var parameters = new ProgramParameter[]{
+                    new ProgramParameter(ProgramParameter.PASS_BY_REFERENCE, new com.ibm.as400.access.AS400UnsignedBin4().toBytes(handle)),
+                    new ProgramParameter(ProgramParameter.PASS_BY_REFERENCE, error, error.length)
+            };
+            call.setProgram(JournalInfoRetrieval.JOURNAL_SERVICE_LIB, parameters);
+            call.setProcedureName("QjoDeletePointerHandle");
+            call.setReturnValueFormat(ServiceProgramCall.NO_RETURN_VALUE);
+            lifecycle.checkOpen();
+            if (!call.run() || call.getMessageList().length != 0
+                    || java.nio.ByteBuffer.wrap(parameters[1].getOutputData()).getInt(4) != 0) {
+                throw new IllegalStateException("Creation metadata pointer cleanup failed");
+            }
+            lifecycle.checkOpen();
+        }
+        catch (Exception failure) {
+            // The caller ends this captured API job on every failed response;
+            // incomplete cleanup never permits publication or continuation.
+            throw new IllegalStateException("Cannot release native creation pointer", failure);
+        }
     }
 
     private RetrievalState reThrowIfFatal(JournalProcessedPosition retrievePosition, final ServiceProgramCall spc,

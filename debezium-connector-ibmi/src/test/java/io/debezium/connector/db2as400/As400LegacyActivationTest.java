@@ -352,7 +352,7 @@ class As400LegacyActivationTest {
         run.task.start(properties);
     }
 
-    static final class TransitionSource extends As400RecoveryTaskFixture implements As400TaskHandoff {
+    static class TransitionSource extends As400RecoveryTaskFixture implements As400TaskHandoff {
         final Map<String, String> initial;
         java.util.function.Supplier<Map<String, ?>> durable;
         volatile int handoffs;
@@ -369,7 +369,12 @@ class As400LegacyActivationTest {
 
         @Override
         public void checkQualified(io.debezium.config.Configuration configuration) {
-            As400RecoveryAcknowledgements.requireConnectorProfile(configuration.asMap());
+            if (sourceOffsetAcknowledgements()) {
+                super.checkQualified(configuration);
+            }
+            else {
+                As400RecoveryAcknowledgements.requireConnectorProfile(configuration.asMap());
+            }
             if (!qualified.get() || stopped.get()) {
                 throw new IllegalStateException("Controlled admission ended");
             }
@@ -391,7 +396,7 @@ class As400LegacyActivationTest {
                 barrier = As400LegacyHandoff.strings(legacy);
             }
             var activation = new As400LegacyHandoff(checkpoint, barrier, fixture.receiverIdentity);
-            fixture.history().recordLegacyHandoff(activation, Fixture.POLICY, order(fixture), durable);
+            fixture.history().recordLegacyHandoff(activation, Fixture.POLICY, order(fixture), () -> As400DeliveryOffset.strip(durable.get()));
             var marker = record(initial, "migration");
             output.barrier(marker);
             output.acknowledge(marker);

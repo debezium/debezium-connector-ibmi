@@ -55,6 +55,54 @@ class As400JdbcNativeIdentityEvidenceTest {
     private static final Limits LIMITS = new Limits(4, 5, 16);
     private static final List<String> IDENTIFIERS = List.of("FILE_SYSTEM_IDENTIFIER", "FILE_IDENTIFIER_NUMBER", "GENERATION_IDENTIFIER");
 
+    @ParameterizedTest
+    @ValueSource(booleans = { false, true })
+    void shouldKeepEachIdentityQueryExactAcrossLargeInventoriesAndRejectLateFailures(boolean lateFailure) throws Exception {
+        var db = new Fixture();
+        var targets = new ArrayList<Target>();
+        for (int i = 0; i < 1025; i++) {
+            var target = new Target("/QSYS.LIB/LIB.LIB/R" + i + ".JRNRCV", Kind.RECEIVER);
+            var row = new HashMap<>(db.row(RECEIVER));
+            row.put("PATH_NAME", target.path());
+            row.put("PATH_LENGTH", target.path().length());
+            row.put("FILE_IDENTIFIER_NUMBER", i + 1);
+            db.rows.put(target.path(), List.of(row));
+            targets.add(target);
+        }
+        if (lateFailure) {
+            db.row(targets.get(targets.size() - 1)).put("GENERATION_IDENTIFIER", null);
+        }
+        var reader = new As400JdbcNativeIdentityEvidence(db::open, new Limits(Integer.MAX_VALUE, 5, 16));
+        if (lateFailure) {
+            assertThrows(SQLException.class, () -> reader.collect(targets));
+        }
+        else {
+            var result = reader.collect(targets);
+            assertThat(result.objects()).hasSize(targets.size());
+            for (int i = 0; i < targets.size(); i++) {
+                assertThat(result.objects().get(targets.get(i)).file()).isEqualTo(BigInteger.valueOf(i + 1));
+            }
+        }
+        for (var call : db.calls) {
+            verify(call.statement).setMaxRows(2);
+            assertThat(call.parameters.get(1)).startsWith("/QSYS.LIB/LIB.LIB/R").endsWith(".JRNRCV");
+        }
+        assertThat(db.calls).hasSize(targets.size());
+        db.assertClosed();
+    }
+
+    @ParameterizedTest
+    @ValueSource(ints = { 1, 2, 32 })
+    void shouldCollectSystemAndBasicAspIdentitiesWithoutChangingTheirNativeTokens(int asp) throws Exception {
+        var baseline = new Fixture();
+        var original = collector(baseline).collect(TARGETS);
+        baseline.assertClosed();
+        var db = new Fixture();
+        TARGETS.forEach(target -> db.row(target).put("ASP_NUMBER", asp));
+        assertThat(collector(db).collect(TARGETS)).isEqualTo(original);
+        db.assertClosed();
+    }
+
     @Test
     void collectsExactOwnedCandidateTuplesUsingOnlyBoundedPreparedSelects() throws Exception {
         Fixture db = new Fixture();
@@ -83,6 +131,24 @@ class As400JdbcNativeIdentityEvidenceTest {
         verify(db.connection, never()).createStatement();
         verify(db.connection, never()).commit();
         verify(db.connection, never()).rollback();
+        db.assertClosed();
+    }
+
+    @Test
+    void shouldReobserveBorrowedConnectionWithoutClosingItOrCachingIdentity() throws Exception {
+        Fixture db = new Fixture();
+        var evidence = collector(db);
+        try (var connection = db.open()) {
+            var first = evidence.collectOn(connection, TARGETS);
+            db.row(JOURNAL).put("GENERATION_IDENTIFIER", "1");
+            var second = evidence.collectOn(connection, TARGETS);
+            assertThat(second).isNotEqualTo(first);
+            assertThat(first.objects().get(JOURNAL).generation()).isEqualTo(BigInteger.ZERO);
+            assertThat(second.objects().get(JOURNAL).generation()).isEqualTo(BigInteger.ONE);
+            assertThat(db.calls).hasSize(2 * TARGETS.size());
+            verify(connection, never()).close();
+        }
+        assertThat(db.opens).isEqualTo(1);
         db.assertClosed();
     }
 
@@ -133,7 +199,7 @@ class As400JdbcNativeIdentityEvidenceTest {
             case "null-length" -> row.put("PATH_LENGTH", null);
             case "type" -> row.put("OBJECT_TYPE", "*SYMLNK");
             case "null-type" -> row.put("OBJECT_TYPE", null);
-            case "asp" -> row.put("ASP_NUMBER", 2);
+            case "asp" -> row.put("ASP_NUMBER", 33);
             case "null-asp" -> row.put("ASP_NUMBER", null);
             case "remote" -> row.put("STORED_LOCAL", "NO");
             case "null-local" -> row.put("STORED_LOCAL", null);
@@ -203,7 +269,6 @@ class As400JdbcNativeIdentityEvidenceTest {
     @Test
     void limitsMustBeFinite() {
         assertThrows(IllegalArgumentException.class, () -> new Limits(0, 1, 1));
-        assertThrows(IllegalArgumentException.class, () -> new Limits(1025, 1, 1));
         assertThrows(IllegalArgumentException.class, () -> new Limits(1, 0, 1));
         assertThrows(IllegalArgumentException.class, () -> new Limits(1, 3601, 1));
         assertThrows(IllegalArgumentException.class, () -> new Limits(1, 1, 0));

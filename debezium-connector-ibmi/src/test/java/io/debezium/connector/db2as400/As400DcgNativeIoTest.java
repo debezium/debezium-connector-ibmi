@@ -30,6 +30,37 @@ import io.debezium.ibmi.db2.journal.retrieve.JournalReadLifecycle;
 class As400DcgNativeIoTest {
     @org.junit.jupiter.params.ParameterizedTest
     @org.junit.jupiter.params.provider.ValueSource(booleans = { false, true })
+    void shouldDiscoverAnOmittedDatabaseNameAndRejectAChangedServerOnReconnect(boolean omitted) throws Exception {
+        var properties = As400DcgConfigTest.onlineProperties();
+        if (omitted) {
+            properties.remove("database.dbname");
+        }
+        else {
+            properties.put("database.dbname", "");
+        }
+        var raw = mock(Connection.class);
+        var statement = mock(java.sql.Statement.class);
+        var rows = mock(ResultSet.class);
+        when(raw.createStatement()).thenReturn(statement);
+        when(statement.executeQuery("SELECT CURRENT_SERVER FROM SYSIBM.SYSDUMMY1")).thenReturn(rows);
+        when(rows.next()).thenReturn(true, false, true, false, true, false);
+        when(rows.getString(1)).thenReturn("TESTDB  ", "TESTDB", "OTHERDB");
+        try (var drivers = org.mockito.Mockito.mockConstruction(com.ibm.as400.access.AS400JDBCDriver.class,
+                (driver, context) -> when(driver.connect(org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.any())).thenReturn(raw));
+                var io = new As400DcgNativeIo(As400DcgConfig.onlineCandidate(Configuration.from(properties)))) {
+            for (int attempt = 0; attempt < 2; attempt++) {
+                try (var connection = io.connection(false)) {
+                    assertThat(io.server()).isEqualTo("TESTDB");
+                }
+            }
+            assertThat(assertThrows(SQLException.class, () -> io.connection(false)).getMessage()).contains("database identity differs");
+            assertThat(io.server()).isEqualTo("TESTDB");
+            verify(raw, org.mockito.Mockito.times(3)).close();
+        }
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(booleans = { false, true })
     void shouldBoundNativeCloseWithoutCertifyingHeldWorkOrReopeningAdmission(boolean heldCancellation) throws Exception {
         var held = new CountDownLatch(1);
         var release = new CountDownLatch(1);

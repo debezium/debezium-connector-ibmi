@@ -129,6 +129,36 @@ public class JdbcFileDecoder extends JournalFileEntryDecoder {
     public void clearCache(String systemTableName, String schema) {
         final String longTableName = getLongName(schema, systemTableName).orElse(systemTableName);
         schemaCache.clearCache(databaseName, schema, longTableName);
+        // A rebuilt structure must not retain the previous column encodings or
+        // byte widths. Invalidate both native and SQL aliases, including lookups
+        // made through the SQL name by the streaming schema-change handler.
+        systemToLongName.entrySet().removeIf(entry -> {
+            var name = entry.getKey();
+            if (name.schema().equals(schema) && (name.table().equals(systemTableName)
+                    || entry.getValue().orElse(name.table()).equals(longTableName))) {
+                clearColumnCaches(schema, name.table());
+                return true;
+            }
+            return false;
+        });
+        clearColumnCaches(schema, systemTableName);
+        clearColumnCaches(schema, longTableName);
+    }
+
+    private void clearColumnCaches(String schema, String table) {
+        ccsidCache.clearTable(schema, table);
+        octetLengthCache.clearTable(schema, table);
+    }
+
+    /**
+     * Logical JDBC descriptors shared by ordinary streaming and validated native
+     * acquisition. In particular, preserve the ordinary reader's zero scale for
+     * SQL NULL; physical codecs and recovery admission remain the caller's job.
+     */
+    public static Structure readColumnMetadata(ResultSet columns) throws SQLException {
+        return new Structure(columns.getString(4), columns.getString(6), columns.getInt(5),
+                columns.getInt(7), columns.getInt(9), isNullable(columns.getInt(11)),
+                columns.getInt(17), "YES".equalsIgnoreCase(columns.getString(23)));
     }
 
     /**
@@ -159,26 +189,13 @@ public class JdbcFileDecoder extends JournalFileEntryDecoder {
             final DatabaseMetaData metadata = con.getMetaData();
             try (ResultSet columnMetadata = metadata.getColumns(databaseCatalog, schema, longTableName, null)) {
                 while (columnMetadata.next()) {
-                    // @see
-                    // https://docs.oracle.com/en/java/javase/11/docs/api/java.sql/java/sql/DatabaseMetaData.html#getColumns(java.lang.String,java.lang.String,java.lang.String,java.lang.String)
-                    final String name = columnMetadata.getString(4);
-                    final String type = columnMetadata.getString(6);
-                    final int precision = columnMetadata.getInt(9);
-                    final int length = columnMetadata.getInt(7);
-                    final int jdcbType = columnMetadata.getInt(5);
-
-                    final boolean optional = isNullable(columnMetadata.getInt(11));
-                    final int octectLength = columnMetadata.getInt(16);
-                    final int position = columnMetadata.getInt(17);
-                    final boolean autoInc = "YES".equalsIgnoreCase(columnMetadata.getString(23));
-
-                    jdbcStructure
-                            .add(new Structure(name, type, jdcbType, length, precision, optional,
-                                    position, autoInc));
-                    final AS400DataType dataType = toDataType(schema, longTableName, name, type, length, precision);
+                    final Structure column = readColumnMetadata(columnMetadata);
+                    jdbcStructure.add(column);
+                    final AS400DataType dataType = toDataType(schema, longTableName, column.getName(), column.getType(), column.getLength(),
+                            column.getPrecision());
 
                     as400structure.add(dataType);
-                    octetLengthCache.add(schema, longTableName, name, length, octectLength);
+                    octetLengthCache.add(schema, longTableName, column.getName(), column.getLength(), columnMetadata.getInt(16));
                 }
                 final AS400Structure entryDetailStructure = new AS400Structure(
                         as400structure.toArray(new AS400DataType[as400structure.size()]));
@@ -240,11 +257,16 @@ public class JdbcFileDecoder extends JournalFileEntryDecoder {
     }
 
     private static final String GET_TABLE_NAME = "select table_name from qsys2.systables where table_schema=? AND system_table_name=?";
-    private final Map<String, Optional<String>> systemToLongName = new HashMap<>();
+
+    private record TableName(String schema, String table) {
+    }
+
+    private final Map<TableName, Optional<String>> systemToLongName = new HashMap<>();
 
     public Optional<String> getLongName(String schemaName, String systemName) {
-        if (systemToLongName.containsKey(systemName)) {
-            return systemToLongName.get(systemName);
+        var name = new TableName(schemaName, systemName);
+        if (systemToLongName.containsKey(name)) {
+            return systemToLongName.get(name);
         }
         else {
             try {
@@ -255,7 +277,7 @@ public class JdbcFileDecoder extends JournalFileEntryDecoder {
                     try (ResultSet rs = ps.executeQuery()) {
                         if (rs.next()) {
                             final Optional<String> longTableName = Optional.of(StringHelpers.safeTrim(rs.getString(1)));
-                            systemToLongName.put(systemName, longTableName);
+                            systemToLongName.put(name, longTableName);
                             return longTableName;
                         }
                     }
@@ -266,7 +288,7 @@ public class JdbcFileDecoder extends JournalFileEntryDecoder {
             }
         }
         log.warn("No long table name found for {}", systemName);
-        systemToLongName.put(systemName, Optional.<String> empty());
+        systemToLongName.put(name, Optional.<String> empty());
         return Optional.<String> empty();
     }
 
