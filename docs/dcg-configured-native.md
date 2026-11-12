@@ -30,10 +30,11 @@ control completion. A LAST row carries a pending offset, never early F/W.
   filtering never removes transaction controls or permits an unknown layout.
   The library itself may be journaled if named in `dcg.journaled.libraries`.
   Data areas/queues, IFS objects, access paths and remote journals are rejected.
-- Fixed table definitions with declared non-null primary keys, or explicit
+- Fixed table definitions with optional SQL primary keys or DDS physical-file keys, or explicit
   `dcg.key.mode=rrn` for native relative-record-number keys, and the strict native codecs:
   small/integer/big integers, real/double, boolean, decimal/numeric, supported
-  CCSID char/varchar and binary/varbinary, plus explicitly ISO DATE/TIME and
+  CCSID char/varchar, graphic/vargraphic, binary/varbinary and character
+  `FOR BIT DATA`, plus explicitly ISO DATE/TIME and
   TIMESTAMP(0–9). Temporal layouts require CCSID 37, 500 or 1140 and exact catalog
   storage/buffer lengths and precision. TIME preserves `24:00:00` as 24 hours;
   DATE/TIMESTAMP values have no timezone conversion. Timestamp precision above 9,
@@ -74,17 +75,26 @@ control completion. A LAST row carries a pending offset, never early F/W.
   This does not claim testing of every compatible worker release.
   Source exactly-once capability remains **UNSUPPORTED**: an interrupted committed
   source transaction can replay its complete output batch.
-- `heartbeat.interval.ms` must be positive (the ordinary default of zero is not
-  admitted here). Both `event.processing.failure.handling.mode` and
+- `heartbeat.interval.ms=0` disables public heartbeats. Recovery progress uses
+  `__debezium-truncate.<topic.prefix>` in that case, which must be precreated with
+  one partition. Both `event.processing.failure.handling.mode` and
   `event.converting.failure.handling.mode` must resolve to `fail`, and
-  `skip.messages.without.change` must be `false`. Admission checks these before
+  unchanged updates may be skipped with the ordinary `skip.messages.without.change`
+  setting. A skipped update still participates in transaction recovery and checkpoint
+  advancement. Admission checks processing/conversion modes before
   opening the operator plan, enrolling, reading native data or publishing a
   snapshot. Dispatcher construction retains the same checks as a second boundary.
-- Pre-created, distinct, single-partition data, transaction, heartbeat,
-  initialization and binding-history topics. Preserve this topology for the
+- Pre-created, distinct data, transaction, initialization and binding-history
+  topics, plus heartbeat when enabled or the control topic when disabled.
+  Binding history and control require one partition; initialization verifies
+  emptiness across every partition of each output topic. Data topics may retain
+  multiple partitions, with Kafka's usual absence of cross-partition ordering
+  between keyless truncates and keyed rows. Use one data partition when that
+  ordering is required. Preserve the internal topology for the
   connector's lifetime. The built-in `HostnamePrefixNamingScheme` (ordinary
   default) or `SchemaTopicNamingStrategy`, explicit Kafka
-  Connect key/value Converter classes, no SMTs, predicates, custom Debezium key/type
+  Connect key/value Converter classes, only qualified `RegexRouter` SMT chains,
+  no predicates or custom Debezium type
   converters, tolerated record errors or producer interceptors. Local converter
   contracts cover JSON with and without schemas and Avro with a mock registry;
   they do not qualify an external registry service. Converter serialization settings
@@ -94,7 +104,11 @@ control completion. A LAST row carries a pending offset, never early F/W.
   interceptors consistent across workers.
 - Native output uses the ordinary IBM i converter for character cleanup and
   `trim.non.xml.charsequence.field.mode` (default `both`). It preserves the chosen
-  `adaptive` (ordinary default) or `adaptive_time_microseconds` time precision.
+  `adaptive` (ordinary default), `adaptive_time_microseconds` or `connect` time precision.
+  Standard decimal modes, column filters/masking/truncation, custom
+  `message.key.columns`, schema/field name adjustment and tombstone selection use
+  the same Debezium schema builder as ordinary output. Binary conversion preserves
+  the ordinary connector's existing byte-output behavior.
   Effective defaults are pinned in history, just like explicit settings.
 - Worker and connector Kafka clients must use the intended Kafka cluster. Explicit
   producer/admin bootstrap overrides must match the history bootstrap. Kafka
@@ -175,9 +189,12 @@ subsequent credential rotation. Frozen pre-fix fixtures test both cases.
 
 ## Keys for native physical files
 
-`dcg.key.mode=primary-key` is the default and requires a usable declared SQL
-primary key on every captured file. A missing key rejects initialization; there
-is no implicit fallback to a guessed business key.
+`dcg.key.mode=primary-key` is the default and uses declared SQL primary keys when
+present, otherwise the same `QSYS.QADBKATR` physical-file key fallback as the
+ordinary reader. Completely read, empty key catalogs establish null keys.
+Keyless files' locked snapshot is ordered by physical RRN without adding that
+number to the output key or columns. Standard `message.key.columns` remains an
+explicit output override; it does not change physical row identity.
 
 Use `dcg.key.mode=rrn` explicitly when the captured files need physical row keys.
 This mode applies to every captured file in that connector. Each row key is a
@@ -299,7 +316,10 @@ minimization metadata. The event emits no record and does not advance W or alter
 an open transaction/lifecycle window. Other F/CB subtypes remain unsupported.
 See IBM's [object-level journal entry layout](https://www.ibm.com/docs/en/ssw_ibm_i_74/rzaki/rzakivarlength.htm).
 
-Configured buffering has explicit finite budgets:
+### Transaction working storage
+
+`truncate.buffer.storage=memory` retains the existing profile and its finite
+budgets:
 
 | Property | Default | Allowed range |
 | --- | ---: | ---: |
@@ -311,8 +331,9 @@ Configured buffering has explicit finite budgets:
 Entries include retained changes, before-images and table identities, not just
 rows. Bytes count owned source payloads and exclude Java objects, schemas and
 serialized output; choose JVM memory with that overhead in mind. Prepared output
-is bounded by twice the entry budget plus transaction markers, including delete
-tombstones. Live acknowledgement bookkeeping is retired after verified commits
+is bounded by four times the entry budget plus two transaction markers, including
+key-change delete/tombstone/create records and dispatcher heartbeats. Live
+acknowledgement bookkeeping is retired after verified commits
 in groups of at most 256 records even within a large batch. The batch records
 continue to carry the previous W; only completion permits W to advance. A crash
 can therefore repeat a clear and reload prefix. A consumer must process `op=t`
@@ -320,6 +341,46 @@ as a whole-table clear, use row keys for subsequent changes, and consume
 `read_committed` Kafka records in partition order. An upsert-only consumer is
 insufficient. The reference consumer in the probe is an oracle, not certification
 of a particular sink plugin.
+
+`truncate.buffer.storage=disk` stores transaction working data in private local
+files using the standalone, pure-Java H2 MVStore library. It spills transaction
+images and indexes, savepoints, autocommit before-images, lifecycle windows and
+prepared Connect output. Schemas are stored once in a dictionary with a bounded
+in-memory cache. The dispatcher drains one logical change at a time into this
+store; the coordinator still prepares the whole committed batch before publishing
+its first record. Preparation or storage failure cannot advance W.
+
+| Property | Disk-mode default | Meaning |
+| --- | ---: | --- |
+| `truncate.buffer.directory` | JVM temporary directory | Existing absolute writable local directory; each task creates a private child directory |
+| `truncate.buffer.cache.mb` | 8 | MVStore page cache in MiB; allowed 1–1,024 |
+| `truncate.buffer.write.kb` | 1,024 | Dirty-page flush threshold in KiB; allowed 16–65,536 |
+| `truncate.buffer.disk.max.bytes` | 10,737,418,240 | Stops when either encoded working data or physical spill-file size exceeds this budget |
+
+In disk mode, omitted `dcg.buffer.max.transactions` and
+`dcg.buffer.max.savepoints` use 2,147,483,645; omitted
+`dcg.buffer.max.entries` uses 536,870,911, which keeps the output expansion
+calculation within its integer representation. Omitted `dcg.buffer.max.bytes`
+uses the disk budget. Explicit values still apply; existing low memory-profile
+values are not automatically removed from a connector configuration. These
+integer representation bounds are not tested operating capacities. Disk space,
+throughput and retained journal history remain practical limits.
+
+The page-cache setting is not a total JVM memory cap. Dirty pages, one decoded
+record, a bounded schema cache, native read pages, table schemas and the existing
+output/acknowledgement queues also consume memory. Disk mode does not resolve
+the separate file inventory, binding history or receiver-chain size limits.
+
+Local files are disposable, never an authoritative checkpoint or a shared owner
+registry. A task restart creates a fresh store and rebuilds from acknowledged
+F/W and the retained journal. Graceful shutdown and failed processing remove only
+the current task's owned files. A killed process can leave an orphaned private
+directory; operators may remove it after confirming that its task has exited.
+Do not delete a live task's files. No cross-worker shared volume is required.
+Disk usage is checked at bounded flushes, so a flush can exceed the budget before
+the task stops. A full or unavailable filesystem also stops processing; it does
+not permit dropping records, advancing the recovery checkpoint or falling back
+to the legacy reader after migration.
 
 Stopping closes RPC/JDBC admission, requests active-call cancellation, drains the
 source and closes owned handles. A stop request is not proof of completed drain.

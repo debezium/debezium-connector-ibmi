@@ -14,6 +14,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.math.BigDecimal;
+import java.math.BigInteger;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
@@ -35,6 +36,109 @@ import org.junit.jupiter.params.provider.ValueSource;
 import io.debezium.ibmi.db2.journal.retrieve.JournalReceiver;
 
 class As400OperatorJournalEvidenceTest {
+    @ParameterizedTest
+    @ValueSource(ints = { 1, 2, 32 })
+    void shouldReadSystemBasicReceiversEvenWhenTheirStoragePoolDiffersFromTheJournal(int asp) throws Exception {
+        var f = new Fixture();
+        f.data.get(0).put("ASP_NUMBER", 32);
+        f.data.get(1).put("JOURNAL_RECEIVER_ASP_NUMBER", asp);
+        assertThat(f.collect().receivers()).hasSize(1);
+        f.closed();
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = { "before", "after", "unknown", "chained", "wrong-state", "wrong-code" })
+    void shouldDiscardTheEntireObservationWhenNativeMetadataReturnsAWarning(String fault) throws Exception {
+        var f = new Fixture();
+        var warning = new SQLWarning("Native metadata incomplete", fault.equals("wrong-state") ? "01000" : "01548",
+                fault.equals("wrong-code") ? 0 : 462);
+        if (fault.equals("chained")) {
+            warning.setNextWarning(new SQLWarning("Another warning"));
+        }
+        if (fault.equals("unknown")) {
+            warning = new SQLWarning("Unknown warning");
+        }
+        if (fault.equals("after")) {
+            when(f.statements.get(1).getWarnings()).thenReturn(null, null, warning);
+        }
+        else {
+            when(f.statements.get(0).getWarnings()).thenReturn(null, warning);
+        }
+        var failure = assertThrows(SQLException.class, f::collect);
+        if (List.of("before", "after").contains(fault)) {
+            assertThat((Throwable) failure).isInstanceOf(As400OperatorJournalEvidence.IncompleteObservationException.class);
+            assertThat(failure.getSQLState()).isEqualTo("01548");
+            assertThat(failure.getErrorCode()).isEqualTo(462);
+        }
+        else {
+            assertThat((Throwable) failure).isNotInstanceOf(As400OperatorJournalEvidence.IncompleteObservationException.class);
+        }
+        assertThat(failure.getCause()).isSameAs(warning);
+        int opened = fault.equals("after") ? 2 : 1;
+        for (int i = 0; i < opened; i++) {
+            verify(f.statements.get(i)).close();
+            verify(f.rows.get(i)).close();
+        }
+        f.closed();
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = { "valid", "missing", "extra", "duplicate", "changed-count", "changed-attachment", "missing-count", "fractional-count" })
+    void shouldUseTheObservedNativeCountAndRejectIncompleteOrChangedLargeDirectories(String fault) throws Exception {
+        int count = 5000;
+        var f = new Fixture();
+        var journal = f.data.get(0);
+        journal.put("NUMBER_JOURNAL_RECEIVERS", count);
+        journal.put("ATTACHED_JOURNAL_RECEIVER_NAME", "R" + (count - 1));
+        var after = new HashMap<>(journal);
+        if (fault.equals("changed-count")) {
+            after.put("NUMBER_JOURNAL_RECEIVERS", count + 1);
+        }
+        if (fault.equals("changed-attachment")) {
+            after.put("ATTACHED_JOURNAL_RECEIVER_NAME", "OTHER");
+        }
+        if (fault.equals("missing-count")) {
+            journal.remove("NUMBER_JOURNAL_RECEIVERS");
+        }
+        if (fault.equals("fractional-count")) {
+            journal.put("NUMBER_JOURNAL_RECEIVERS", "1.5");
+        }
+        f.append(after);
+        int returned = count + (fault.equals("extra") ? 1 : fault.equals("missing") ? -1 : 0);
+        var at = new AtomicInteger(-1);
+        when(f.rows.get(1).next()).thenAnswer(call -> at.incrementAndGet() < returned);
+        when(f.rows.get(1).getString(anyString())).thenAnswer(call -> {
+            String field = call.getArgument(0);
+            return switch (field) {
+                case "JOURNAL_RECEIVER_NAME" -> "R" + (fault.equals("duplicate") ? 0 : at.get());
+                case "STATUS" -> at.get() == count - 1 ? "ATTACHED" : "ONLINE";
+                case "PREVIOUS_JOURNAL_RECEIVER" -> at.get() == 0 ? null : "R" + (at.get() - 1);
+                case "PREVIOUS_JOURNAL_RECEIVER_LIBRARY" -> at.get() == 0 ? null : "LIB";
+                case "NEXT_JOURNAL_RECEIVER" -> at.get() == count - 1 ? null : "R" + (at.get() + 1);
+                case "NEXT_JOURNAL_RECEIVER_LIBRARY" -> at.get() == count - 1 ? null : "LIB";
+                default -> f.data.get(1).get(field);
+            };
+        });
+        when(f.rows.get(1).getBigDecimal(anyString())).thenAnswer(call -> switch ((String) call.getArgument(0)) {
+            case "FIRST_SEQUENCE_NUMBER" -> BigDecimal.valueOf(at.get() * 10L + 1);
+            case "LAST_SEQUENCE_NUMBER" -> BigDecimal.valueOf((at.get() + 1L) * 10);
+            default -> BigDecimal.ONE;
+        });
+        var collector = As400OperatorJournalEvidence.directory(() -> f.connection, new JournalReceiver("JRN", "LIB"));
+        if (fault.equals("valid")) {
+            var observed = collector.collect();
+            assertThat(observed.receivers()).hasSize(count);
+            assertThat(As400OperatorCutReader.chain(observed, new JournalReceiver("R0", "LIB"))).hasSize(count);
+            verify(f.statements.get(1)).setMaxRows(count + 1);
+            verify(f.statements.get(1)).setFetchSize(128);
+            f.closed();
+        }
+        else {
+            assertThrows(Exception.class, collector::collect);
+            verify(f.connection).close();
+        }
+    }
+
     @ParameterizedTest
     @ValueSource(strings = { "NO", "YES", "UNKNOWN", "null", "missing", "duplicate", "wrong-journal", "warning" })
     void shouldValidateRetentionOnTheExactDirectoryRowBeforeReadingReceivers(String fault) throws Exception {
@@ -63,6 +167,41 @@ class As400OperatorJournalEvidenceTest {
         verify(f.statements.get(0)).close();
         verify(f.rows.get(0)).close();
         verify(f.connection).close();
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = { false, true })
+    void shouldTraverseOnlyTheRequiredNativeChainAndRejectAnUnderreportedCount(boolean underreported) throws Exception {
+        var f = new Fixture();
+        int count = 129;
+        f.data.get(0).put("NUMBER_JOURNAL_RECEIVERS", underreported ? count - 1 : count);
+        f.data.get(0).put("ATTACHED_JOURNAL_RECEIVER_NAME", "R" + (count - 1));
+        for (int i = 0; i < count; i++) {
+            var row = i == 0 ? f.data.get(1) : new HashMap<>(f.data.get(1));
+            row.put("JOURNAL_RECEIVER_NAME", "R" + i);
+            row.put("STATUS", i == count - 1 ? "ATTACHED" : "ONLINE");
+            row.put("FIRST_SEQUENCE_NUMBER", i * 10L + 1);
+            row.put("LAST_SEQUENCE_NUMBER", (i + 1L) * 10);
+            row.put("PREVIOUS_JOURNAL_RECEIVER_LIBRARY", i == 0 ? null : "LIB");
+            row.put("PREVIOUS_JOURNAL_RECEIVER", i == 0 ? null : "R" + (i - 1));
+            row.put("NEXT_JOURNAL_RECEIVER_LIBRARY", i == count - 1 ? null : "LIB");
+            row.put("NEXT_JOURNAL_RECEIVER", i == count - 1 ? null : "R" + (i + 1));
+            if (i > 0) {
+                f.append(row);
+            }
+        }
+        var collector = As400OperatorJournalEvidence.retained(() -> f.connection, new JournalReceiver("JRN", "LIB"));
+        if (underreported) {
+            assertThrows(SQLException.class, () -> collector.collectFrom(new JournalReceiver("R0", "LIB")));
+        }
+        else {
+            var observed = collector.collectFrom(new JournalReceiver("R0", "LIB"));
+            assertThat(As400OperatorCutReader.chain(observed, new JournalReceiver("R0", "LIB"))).hasSize(count);
+            for (var statement : f.statements) {
+                verify(statement).setMaxRows(2);
+            }
+            f.closed();
+        }
     }
 
     @Test
@@ -192,7 +331,7 @@ class As400OperatorJournalEvidenceTest {
         }
         for (int row : List.of(0, 1)) {
             String asp = row == 0 ? "ASP_NUMBER" : "JOURNAL_RECEIVER_ASP_NUMBER";
-            for (Object value : new Object[]{ null, 0, 2, new BigDecimal("1.5") }) {
+            for (Object value : new Object[]{ null, 0, 33, new BigDecimal("1.5") }) {
                 values.add(Arguments.of(row, asp, value));
             }
         }
@@ -239,6 +378,31 @@ class As400OperatorJournalEvidenceTest {
             default -> throw new AssertionError(fault);
         }
         assertThrows(SQLException.class, f::collect);
+        f.closed();
+    }
+
+    @Test
+    void shouldReobserveReceiverTailOnBorrowedConnectionWithoutOwningItsClose() throws Exception {
+        var f = new Fixture();
+        f.append(f.data.get(0));
+        f.append(f.data.get(1));
+        var evidence = new As400OperatorJournalEvidence(() -> {
+            throw new AssertionError("Borrowed interval must not open another connection");
+        }, new JournalReceiver("JRN", "LIB"), new As400OperatorJournalEvidence.Limits(2, 5));
+        try (var connection = f.connection) {
+            var first = evidence.collectOn(connection);
+            f.data.get(1).put("LAST_SEQUENCE_NUMBER", 100);
+            var second = evidence.collectOn(connection);
+            assertThat(first.receivers().get(0).last()).isEqualTo(BigInteger.valueOf(99));
+            assertThat(second.receivers().get(0).last()).isEqualTo(BigInteger.valueOf(100));
+            verify(connection, never()).close();
+            for (var statement : f.statements) {
+                verify(statement).close();
+            }
+            for (var rows : f.rows) {
+                verify(rows).close();
+            }
+        }
         f.closed();
     }
 

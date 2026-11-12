@@ -109,6 +109,9 @@ public class As400ConnectorTask extends BaseSourceTask<As400Partition, As400Offs
     @Override
     protected ChangeEventSourceCoordinator<As400Partition, As400OffsetContext> start(Configuration config) {
         LOGGER.info("starting connector task {}", version());
+        if (recoverySource != null && !recoverySource.drained()) {
+            throw new org.apache.kafka.connect.errors.ConnectException("Previous recovery session has not drained; replacement admission is unsafe");
+        }
         configuredTransactions = null;
         if (As400DcgConfig.configured(config)) {
             try {
@@ -247,30 +250,42 @@ public class As400ConnectorTask extends BaseSourceTask<As400Partition, As400Offs
                                                                                            As400TaskInitialization initialization) {
         recoverySource = null;
         try {
-            if (configuredTransactions == null && input.allowLegacyHandoffRecovery() && "connector".equals(raw.getString("transaction.boundary"))) {
+            if (configuredTransactions == null && !input.sourceOffsetAcknowledgements()
+                    && input.allowLegacyHandoffRecovery() && "connector".equals(raw.getString("transaction.boundary"))) {
                 As400RecoveryAcknowledgements.requireConnectorProfile(raw.asMap());
                 configuredTransactions = java.util.Objects.requireNonNull(context.transactionContext(), "Connect transaction context required");
             }
-            As400DcgConfig.requireSnapshotMode(raw);
+            As400DcgConfig.requireSnapshotMode(raw, input.allowLegacyHandoffRecovery());
             As400BatchDispatcher.requireConfiguration(connectorConfig);
-            if (configuredTransactions == null) {
+            if (input.sourceOffsetAcknowledgements()) {
+                As400RecoveryAcknowledgements.requireSourceOffsetProfile(raw.asMap());
+                if (configuredTransactions != null) {
+                    throw new IllegalArgumentException("Conflicting recovery acknowledgement contracts");
+                }
+            }
+            else if (configuredTransactions == null) {
                 As400RecoveryAcknowledgements.requireProfile(raw.asMap());
             }
             input.checkQualified(raw);
-            if (!connectorConfig.getSignalingDataCollectionIds().isEmpty() || !raw.getString("signal.enabled.channels", "").isEmpty()) {
+            if (!input.allowLegacyHandoffRecovery()
+                    && (!connectorConfig.getSignalingDataCollectionIds().isEmpty() || !raw.getString("signal.enabled.channels", "").isEmpty())) {
                 throw new IllegalArgumentException("Recovery-only admission does not permit snapshot signals");
             }
             var legacyStart = new java.util.concurrent.atomic.AtomicReference<Map<String, ?>>();
             Offsets<As400Partition, As400OffsetContext> offsets = getPreviousOffsets(() -> Set.of(input.partition()),
                     saved -> {
+                        saved = As400DeliveryOffset.strip(saved);
+                        saved = As400FullSnapshotState.base(saved);
                         if (initialization != null) {
                             throw new IllegalArgumentException("Explicit first start requires absent offsets; pending initialization cannot resume");
                         }
                         if (input instanceof As400TaskHandoff && input.allowLegacyHandoffRecovery() && !saved.containsKey(As400Checkpoint.VERSION)) {
-                            if (configuredTransactions == null) {
-                                throw new IllegalArgumentException("Legacy handoff requires actual connector-managed transactions");
+                            if (configuredTransactions == null && !input.sourceOffsetAcknowledgements()) {
+                                throw new IllegalArgumentException("Legacy handoff requires an admitted durable acknowledgement contract");
                             }
-                            As400LegacyHandoff.startingPosition(As400LegacyHandoff.strings(saved));
+                            if (!((As400TaskHandoff) input).snapshotRequired()) {
+                                As400LegacyHandoff.startingPosition(As400LegacyHandoff.strings(saved));
+                            }
                             legacyStart.set(Map.copyOf(saved));
                             return new As400OffsetContext.Loader(connectorConfig).load(saved);
                         }
@@ -278,7 +293,7 @@ public class As400ConnectorTask extends BaseSourceTask<As400Partition, As400Offs
                     });
             As400OffsetContext previous = offsets.getTheOnlyOffset();
             As400RecoveryOffsetContext recovered = previous instanceof As400RecoveryOffsetContext saved ? saved : null;
-            if (previous == null && initialization == null) {
+            if (previous == null && initialization == null && !(input instanceof As400TaskHandoff handoff && handoff.snapshotRequired())) {
                 throw new IllegalArgumentException("Missing durable F/W: explicit initialization is required");
             }
             registerServiceProviders(connectorConfig.getServiceRegistry());
@@ -291,29 +306,44 @@ public class As400ConnectorTask extends BaseSourceTask<As400Partition, As400Offs
                     .queueProvider(connectorConfig.getServiceRegistry().tryGetService(QueueProviderService.class).getQueueProvider())
                     .pollInterval(connectorConfig.getPollInterval()).pollDispatchInterval(connectorConfig.getPollDispatchInterval())
                     .loggingContextSupplier(() -> taskContext.configureLoggingContext(CONTEXT_NAME)).build();
-            errorHandler = new As400ErrorHandler(connectorConfig, queue) {
-                @Override
-                protected boolean hasMoreRetries() {
-                    // Recovery/acknowledgement uncertainty needs fresh admission,
-                    // never BaseSourceTask's automatic reuse of a stopped session.
-                    return false;
-                }
-            };
+            errorHandler = new As400RecoveryErrorHandler(connectorConfig, queue, errorHandler, input.supportsTaskRestart());
             TopicNamingStrategy<TableId> topics = connectorConfig.getTopicNamingStrategy(As400ConnectorConfig.TOPIC_NAMING_STRATEGY, true);
             var headers = connectorConfig.getServiceRegistry().tryGetService(DebeziumHeaderProducer.class);
             var source = new As400RecoverySource(input, initialization, connectorConfig, recovered, queue, errorHandler, topics, headers,
                     () -> context.offsetStorageReader().offset(input.partition().getSourcePartition()), recovered == null ? previous : null, legacyStart.get());
             recoverySource = source;
+            source.notifications(getNotificationChannels());
+            var signals = connectorConfig.getSignalingDataCollectionIds().isEmpty() ? null
+                    : new As400BufferedSignals(connectorConfig, getAvailableSignalChannels(), offsets);
+            source.signals(signals, taskContext);
             connectorConfig.getBeanRegistry().add(StandardBeanNames.DATABASE_SCHEMA, source);
             var metadata = new As400EventMetadataProvider();
             var metricContext = new As400TaskContext(raw, connectorConfig, connectorConfig.getCustomMetricTags());
             var streamingMetrics = new As400StreamingChangeEventSourceMetrics(metricContext, queue, metadata, source::dataCollectionIds);
             source.metrics(streamingMetrics);
             var dispatcher = new EventDispatcher<As400Partition, TableId>(connectorConfig, topics, source, queue, id -> true,
-                    DataChangeEvent::new, metadata, connectorConfig.schemaNameAdjuster(), null, headers);
+                    DataChangeEvent::new, metadata, connectorConfig.schemaNameAdjuster(), signals, headers);
+            var snapshotter = connectorConfig.getServiceRegistry().tryGetService(SnapshotterService.class);
             var coordinator = new ChangeEventSourceCoordinator<As400Partition, As400OffsetContext>(offsets, errorHandler,
                     As400RpcConnector.class, connectorConfig, source, new As400ChangeEventSourceMetricsFactory(streamingMetrics),
-                    dispatcher, source, null, null, null) {
+                    dispatcher, source, signals, null, snapshotter) {
+                {
+                    source.signalRegistration(selected -> registerSignalActionsAndStartProcessor(signals, selected, this, connectorConfig));
+                }
+
+                @Override
+                protected void streamEvents(io.debezium.pipeline.source.spi.ChangeEventSource.ChangeEventSourceContext context,
+                                            As400Partition partition, As400OffsetContext offset)
+                        throws InterruptedException {
+                    if (!snapshotter.getSnapshotter().shouldStream()) {
+                        // Do not initialize snapshot watermarks or the native
+                        // reader for an explicitly snapshot-only task.
+                        source.close();
+                        return;
+                    }
+                    super.streamEvents(context, partition, offset);
+                }
+
                 @Override
                 public synchronized void stop() throws InterruptedException {
                     // BaseSourceTask stops its coordinator before doStop. Close

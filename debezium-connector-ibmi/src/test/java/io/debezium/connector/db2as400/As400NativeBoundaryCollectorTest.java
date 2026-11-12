@@ -38,6 +38,45 @@ import io.debezium.ibmi.db2.journal.retrieve.rjne0200.EntryHeaderDecoder;
 
 /** Replays native bytes; only the external acquisitions and pulse execution are controlled. */
 class As400NativeBoundaryCollectorTest {
+    @org.junit.jupiter.api.io.TempDir
+    java.nio.file.Path scratch;
+
+    @ParameterizedTest
+    @ValueSource(strings = { "complete", "gap", "repeated", "backward", "empty", "short", "overshoot", "foreign", "failure", "stopped", "close-failure" })
+    void shouldPageLargeAuditsWithoutLosingContinuityOrLeakingScratch(String mode) throws Exception {
+        var f = new Fixture("");
+        f.extraRows = 4096;
+        f.pageSize = 400;
+        f.pageFault = mode;
+        var released = new java.util.concurrent.atomic.AtomicInteger();
+        f.captures = () -> new As400JournalCapture(scratch, 64 * 1024 * 1024, () -> {
+            if (f.stopped.get()) {
+                throw new IllegalStateException("Stopped");
+            }
+        }, released::incrementAndGet);
+        try (var pulses = f.pulses()) {
+            if (mode.equals("complete")) {
+                try (var candidate = f.collector.collect().orElseThrow()) {
+                    assertThat(candidate.audit().entries()).hasSize(4124);
+                    assertThat(candidate.origin().offset()).isEqualTo(BigInteger.valueOf(72));
+                    assertThat(candidate.historyFloor().offset()).isEqualTo(BigInteger.valueOf(46));
+                    assertThat(candidate.audit().entries().get(4123).position().offset()).isEqualTo(BigInteger.valueOf(4180));
+                    assertThat(f.events.stream().filter("audit"::equals).count()).isEqualTo(11);
+                    try (var files = java.nio.file.Files.list(scratch)) {
+                        assertThat(files.count()).isEqualTo(1);
+                    }
+                }
+            }
+            else {
+                assertThrows(Exception.class, f.collector::collect);
+            }
+        }
+        assertThat(released).hasValue(1);
+        try (var files = java.nio.file.Files.list(scratch)) {
+            assertThat(files).isEmpty();
+        }
+    }
+
     @ParameterizedTest
     @ValueSource(strings = { "complete", "paged", "prepare", "missing-row-replay", "metadata", "missing-start", "missing-overlap", "empty", "backward-continuation",
             "changed-identity", "resume", "resume-missing-floor", "resume-changed-identity", "resume-missing-start",
@@ -209,11 +248,18 @@ class As400NativeBoundaryCollectorTest {
         final String fault;
         final AtomicBoolean stopped = new AtomicBoolean();
         As400ShortBoundaryProgram program;
+        int extraRows;
+        int pageSize = 1000;
+        String pageFault = "";
+        java.util.concurrent.Callable<As400JournalCapture> captures = () -> new As400JournalCapture(
+                java.nio.file.Path.of(System.getProperty("java.io.tmpdir")), 64 * 1024 * 1024, () -> {
+                }, () -> {
+                });
 
         Fixture(String fault) throws Exception {
             this.fault = fault;
             try (var stream = getClass().getResourceAsStream("/native-transactions/prospective-boundary.json")) {
-                boundary = As400OnlineFenceEvidenceTest.withUnverifiedAccessControlsForReplay(new ObjectMapper().readTree(stream).path("boundary"));
+                boundary = As400OnlineFenceEvidenceTest.withUnverifiedMetadataForReplay(new ObjectMapper().readTree(stream).path("boundary"));
             }
             var metadata = As400OnlineFenceEvidence.validateOffLock(boundary.path("before"));
             bindings = metadata.tables();
@@ -237,7 +283,8 @@ class As400NativeBoundaryCollectorTest {
             });
             var journals = mock(As400OperatorJournalEvidence.class);
             when(journals.collect()).thenReturn(directory(fault.equals("gap-before-opening") ? 55 : 57), directory(58), directory(60), directory(71), directory(73));
-            when(journals.collectFrom(any())).thenReturn(directory(fault.equals("gap-after-closing") ? 86 : fault.equals("writers-outside-markers") ? 85 : 84));
+            when(journals.collectFrom(any()))
+                    .thenAnswer(i -> directory(extraRows + (fault.equals("gap-after-closing") ? 86 : fault.equals("writers-outside-markers") ? 85 : 84)));
             var identities = mock(As400JdbcNativeIdentityEvidence.class);
             when(identities.collect(any())).thenReturn(window.before().identities());
             var pending = mock(As400PendingReceiverEvidence.class);
@@ -329,7 +376,36 @@ class As400NativeBoundaryCollectorTest {
                 if (fault.equals("gap-after-closing")) {
                     entries.add(at(entries.get(3), 86)); // 85 follows Z.
                 }
-                return new RetrieveJournal.AuditPage(entries, fault.equals("continuation") ? Optional.of(window.through()) : Optional.empty(), 16000);
+                if (extraRows > 0) {
+                    var closing = entries.remove(entries.size() - 1);
+                    for (int i = 0; i < extraRows; i++) {
+                        var row = at(entries.get(3), 84 + i);
+                        byte[] raw = row.data();
+                        java.nio.ByteBuffer.wrap(raw).putLong(64, 0);
+                        entries.add(new RawJournalPage.Entry(row.position(), new EntryHeaderDecoder().decode(raw, 0), raw));
+                    }
+                    entries.add(at(closing, 84 + extraRows));
+                }
+                JournalPosition next = invocation.getArgument(0);
+                int requested = Math.min(pageSize, invocation.getArgument(2));
+                var remaining = entries.stream().filter(e -> e.position().offset().compareTo(next.offset()) >= 0).toList();
+                var page = new ArrayList<>(remaining.subList(0, Math.min(requested, remaining.size())));
+                Optional<JournalPosition> continuation = remaining.size() > page.size() ? Optional.of(remaining.get(page.size()).position()) : Optional.empty();
+                if (next.offset().compareTo(window.from().offset()) > 0) {
+                    switch (pageFault) {
+                        case "gap" -> page.remove(4);
+                        case "repeated" -> page.add(0, at(page.get(0), next.offset().intValueExact() - 1));
+                        case "backward" -> continuation = Optional.of(next);
+                        case "overshoot" -> continuation = Optional.of(new JournalPosition(BigInteger.valueOf(9000), next.receiver()));
+                        case "foreign" -> continuation = Optional.of(new JournalPosition(BigInteger.valueOf(9000),
+                                new io.debezium.ibmi.db2.journal.retrieve.JournalReceiver("FOREIGN", "LIB")));
+                        case "empty" -> page.clear();
+                        case "short" -> continuation = Optional.empty();
+                        case "failure" -> throw new java.sql.SQLException("Later native page failed");
+                        case "stopped" -> stopped.set(true);
+                    }
+                }
+                return new RetrieveJournal.AuditPage(page, fault.equals("continuation") ? Optional.of(window.through()) : continuation, 16000);
             });
             collector = new As400NativeBoundaryCollector(journal, () -> {
                 var connection = mock(Connection.class);
@@ -339,11 +415,14 @@ class As400NativeBoundaryCollectorTest {
                 if (stopped.get()) {
                     throw new IllegalStateException("Terminal stop");
                 }
-            });
+            }, () -> captures.call());
         }
 
         org.mockito.MockedConstruction<As400NativeBoundaryPulse> pulses() {
             return mockConstruction(As400NativeBoundaryPulse.class, (pulse, context) -> {
+                if (pageFault.equals("close-failure")) {
+                    org.mockito.Mockito.doThrow(new java.sql.SQLException("Holder close failed")).when(pulse).close();
+                }
                 when(pulse.attempt(any())).thenAnswer(invocation -> {
                     events.add("pulse-returned");
                     program = invocation.getArgument(0);

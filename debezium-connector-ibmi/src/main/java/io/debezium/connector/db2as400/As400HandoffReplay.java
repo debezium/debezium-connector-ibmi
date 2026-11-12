@@ -6,6 +6,7 @@
 package io.debezium.connector.db2as400;
 
 import java.math.BigInteger;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -28,24 +29,35 @@ final class As400HandoffReplay {
 
     record Evidence(List<RawJournalPage.Entry> entries, List<As400BindingDefinition> definitions, As400JournalOrder order,
             String journal, String fingerprint, JournalPosition lower, JournalPosition upper, Set<BigInteger> inventory,
-            Map<String, String> partition) {
+            Map<String, String> partition, As400HandoffWork work) {
+        Evidence(List<RawJournalPage.Entry> entries, List<As400BindingDefinition> definitions, As400JournalOrder order,
+                 String journal, String fingerprint, JournalPosition lower, JournalPosition upper, Set<BigInteger> inventory,
+                 Map<String, String> partition) {
+            this(entries, definitions, order, journal, fingerprint, lower, upper, inventory, partition, null);
+        }
+
         Evidence {
-            require(entries != null && entries.size() <= 20_000, "Bounded retained history required");
-            entries = List.copyOf(entries); // RawJournalPage.Entry owns its bytes.
+            require(entries != null && (work == null ? entries.size() <= 20_000 : entries instanceof As400JournalCapture.Entries),
+                    "Bounded owned retained history required");
+            entries = As400JournalCapture.owned(entries); // RawJournalPage.Entry owns its bytes.
             definitions = List.copyOf(definitions);
-            inventory = Set.copyOf(inventory);
+            inventory = work == null ? Set.copyOf(inventory) : Collections.unmodifiableSet(inventory);
             partition = Map.copyOf(partition);
             long bytes = 0;
             for (var entry : entries) {
                 byte[] raw = entry.data();
-                require(raw.length <= 1024 * 1024 && (bytes += raw.length) <= MAX_BYTES, "Excessive retained history bytes");
+                require(raw.length <= 1024 * 1024 && (work != null || (bytes += raw.length) <= MAX_BYTES), "Excessive retained history bytes");
             }
         }
     }
 
-    record Candidate(As400Checkpoint checkpoint, JournalPosition scan, Set<BigInteger> openCycles) {
+    record Candidate(As400Checkpoint checkpoint, JournalPosition scan, Set<BigInteger> openCycles, As400HandoffWork owner) {
+        Candidate(As400Checkpoint checkpoint, JournalPosition scan, Set<BigInteger> openCycles) {
+            this(checkpoint, scan, openCycles, null);
+        }
+
         Candidate {
-            openCycles = Set.copyOf(openCycles);
+            openCycles = owner == null ? Set.copyOf(openCycles) : Collections.unmodifiableSet(openCycles);
         }
     }
 
@@ -53,8 +65,12 @@ final class As400HandoffReplay {
         private final Set<BigInteger> cycles;
 
         SelectedPrefixPending(Set<BigInteger> cycles) {
-            super("Open cycle has a selected legacy prefix; continue legacy publication before migration");
-            this.cycles = Set.copyOf(cycles);
+            this(cycles, "Open cycle has a selected legacy prefix; continue legacy publication before migration");
+        }
+
+        SelectedPrefixPending(Set<BigInteger> cycles, String reason) {
+            super(reason);
+            this.cycles = As400HandoffWork.diagnosticCycles(cycles);
         }
 
         Set<BigInteger> cycles() {
@@ -63,21 +79,33 @@ final class As400HandoffReplay {
     }
 
     static Candidate prepare(Evidence evidence, JournalPosition cut, As400ConnectorConfig config) throws Exception {
-        require(!config.shouldProvideTransactionMetadata(), "Legacy transaction metadata transition is outside this proof");
-        require(!evidence.entries().isEmpty() && evidence.entries().size() <= 20_000, "Bounded retained history required");
+        require(!evidence.entries().isEmpty(), "Retained history required");
+        var work = evidence.work();
         var order = evidence.order();
         require(order.compare(evidence.lower(), evidence.upper()) <= 0 && order.compare(evidence.upper(), cut) <= 0,
                 "Inventory bracket must precede the exact publication cut");
         for (JournalPosition anchor : List.of(evidence.lower(), evidence.upper(), cut)) {
             require(evidence.entries().stream().anyMatch(e -> e.position().equals(anchor)), "Missing inventory or publication anchor");
         }
-        var starts = new HashMap<BigInteger, JournalPosition>();
-        var open = new HashSet<BigInteger>();
-        var dirty = new HashSet<BigInteger>();
-        var required = new HashSet<>(evidence.inventory());
+        Map<BigInteger, JournalPosition> starts = work == null ? new HashMap<>() : work.map(As400SpillCodec.INTEGER, As400SpillCodec.POSITION);
+        Set<BigInteger> open = work == null ? new HashSet<>() : work.set(As400SpillCodec.INTEGER);
+        Set<BigInteger> dirty = work == null ? new HashSet<>() : work.set(As400SpillCodec.INTEGER);
+        Set<BigInteger> required = work == null ? new HashSet<>() : work.set(As400SpillCodec.INTEGER);
+        for (var cycle : evidence.inventory()) {
+            if (work != null) {
+                work.check();
+            }
+            required.add(cycle);
+        }
+        var selectedFiles = new HashSet<String>();
+        evidence.definitions().stream().filter(d -> config.getTableFilters().dataCollectionFilter().isIncluded(d.identity().tableId()))
+                .forEach(d -> selectedFiles.add(d.identity().tableId().schema() + "/" + d.identity().physicalFile()));
         JournalPosition floor = null, completed = null, previous = null;
         var controls = new TransactionControlEntryDecoder();
         for (RawJournalPage.Entry entry : evidence.entries()) {
+            if (work != null) {
+                work.check();
+            }
             require(previous == null || order.compare(previous, entry.position()) < 0, "Repeated or unordered retained entry");
             previous = entry.position();
             if (order.compare(entry.position(), cut) > 0) {
@@ -103,9 +131,7 @@ final class As400HandoffReplay {
             if (cycle.signum() > 0) {
                 require(starts.containsKey(cycle), "Missing retained original transaction start");
                 require(open.contains(cycle), "Work follows a completed transaction");
-                boolean selected = evidence.definitions().stream().anyMatch(d -> d.identity().physicalFile().equals(header.getFile())
-                        && d.identity().tableId().schema().equals(header.getLibrary())
-                        && config.getTableFilters().dataCollectionFilter().isIncluded(d.identity().tableId()));
+                boolean selected = selectedFiles.contains(header.getLibrary() + "/" + header.getFile());
                 if (selected && (header.getJournalCode() == 'R' || header.getJournalCode() == 'D' && header.getEntryType().equals("CG"))) {
                     dirty.add(cycle);
                 }
@@ -126,7 +152,12 @@ final class As400HandoffReplay {
                 completed = entry.position();
             }
         }
-        require(required.stream().allMatch(starts::containsKey), "Inventory cycle has no retained original start");
+        for (var cycle : required) {
+            if (work != null) {
+                work.check();
+            }
+            require(starts.containsKey(cycle), "Inventory cycle has no retained original start");
+        }
         if (floor == null && required.isEmpty()) {
             // A qualified interval may contain only autocommit work. Replay its
             // actual first record inclusively; never invent a C/SC or F-1 anchor.
@@ -140,9 +171,10 @@ final class As400HandoffReplay {
         // F is an actual retained record; never synthesize a closed F-1 anchor.
         var seed = new As400Checkpoint(evidence.journal(), evidence.fingerprint(), floor, true, completed,
                 order.incarnation(floor), order.incarnation(completed));
-        try (var replay = coordinator(evidence, seed.toOffset(), record -> {
-            throw new IllegalStateException("Candidate preparation must never publish");
-        })) {
+        try (var scratch = work == null ? null : work.transactionStore();
+                var replay = coordinator(evidence, seed.toOffset(), record -> {
+                    throw new IllegalStateException("Candidate preparation must never publish");
+                }, scratch)) {
             for (RawJournalPage.Entry entry : evidence.entries()) {
                 if (order.compare(entry.position(), floor) >= 0 && order.compare(entry.position(), cut) <= 0) {
                     byte[] raw = entry.data();
@@ -158,16 +190,25 @@ final class As400HandoffReplay {
             if (!dirty.isEmpty()) {
                 throw new SelectedPrefixPending(dirty);
             }
-            return new Candidate(replay.checkpoint(), cut, open);
+            if (config.shouldProvideTransactionMetadata() && !open.isEmpty()) {
+                // Legacy BEGIN metadata can precede any captured row, including
+                // a cycle touching only excluded files. Keep publishing its old
+                // metadata until the actual terminal; never invent a new BEGIN
+                // halfway through that sequence or strand the existing one.
+                throw new SelectedPrefixPending(open, "Open legacy transaction metadata; continue legacy publication before migration");
+            }
+            return new Candidate(replay.checkpoint(), cut, open, work);
         }
     }
 
     private static void validateEarlierContext(Evidence evidence, JournalPosition floor) throws Exception {
-        var limits = new As400TransactionBuffer.Limits(128, 40_000, 2048, MAX_BYTES);
+        var work = evidence.work();
+        var limits = work == null ? new As400TransactionBuffer.Limits(128, 40_000, 2048, MAX_BYTES) : work.limits().transactions();
         var bindings = new HashMap<String, As400SourceNormalizer.TableBinding>();
         evidence.definitions().forEach(d -> bindings.put(d.identity().tableId().schema() + "/" + d.identity().physicalFile(), d.binding(1024 * 1024)));
-        try (var transactions = new As400TransactionBuffer(evidence.journal(), limits);
-                var autocommit = new As400AutocommitBuffer(evidence.journal(), limits, transactions::usage)) {
+        try (var scratch = work == null ? null : work.transactionStore();
+                var transactions = new As400TransactionBuffer(evidence.journal(), limits, scratch);
+                var autocommit = new As400AutocommitBuffer(evidence.journal(), limits, transactions::usage, scratch)) {
             var normalizer = new As400SourceNormalizer(transactions, (file, library) -> bindings.get(library + "/" + file), 1024 * 1024,
                     As400SourceNormalizer.SavepointPolicy.consumingTargets(), autocommit);
             for (RawJournalPage.Entry entry : evidence.entries()) {
@@ -189,13 +230,23 @@ final class As400HandoffReplay {
     }
 
     static As400ReplayCoordinator coordinator(Evidence evidence, Map<String, ?> offset, As400ReplayCoordinator.RecordSink sink) {
+        require(evidence.work() == null, "Owned handoff replay requires its scoped working storage");
+        return coordinator(evidence, offset, sink, null);
+    }
+
+    private static As400ReplayCoordinator coordinator(Evidence evidence, Map<String, ?> offset, As400ReplayCoordinator.RecordSink sink,
+                                                      As400SpillStore scratch) {
         var bindings = new HashMap<String, As400SourceNormalizer.TableBinding>();
         evidence.definitions().forEach(d -> require(bindings.put(d.identity().tableId().schema() + "/" + d.identity().physicalFile(), d.binding(1024 * 1024)) == null,
                 "Duplicate historical binding"));
+        var limits = evidence.work() == null
+                ? new As400ContinuousRuntime.Limits(new As400TransactionBuffer.Limits(128, 40_000, 2048, MAX_BYTES),
+                        new As400JournalLifecycle.Limits(20_000, MAX_BYTES, 128, 2048, 1024, 4096), 20_000)
+                : evidence.work().limits();
         return new As400ReplayCoordinator(offset, evidence.journal(), evidence.fingerprint(), evidence.order(),
-                new As400TransactionBuffer.Limits(128, 40_000, 2048, MAX_BYTES), 1024 * 1024, 20_000,
+                limits.transactions(), 1024 * 1024, limits.outputRecords(),
                 (file, library) -> bindings.get(library + "/" + file), As400SourceNormalizer.SavepointPolicy.consumingTargets(), evidence.partition(), sink,
-                new As400JournalLifecycle.Limits(20_000, MAX_BYTES, 128, 2048, 1024, 4096), true);
+                limits.lifecycle(), true, scratch);
     }
 
     private static void require(boolean valid, String reason) {

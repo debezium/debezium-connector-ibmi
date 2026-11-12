@@ -5,6 +5,7 @@
  */
 package io.debezium.connector.db2as400;
 
+import java.sql.Connection;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -64,6 +65,7 @@ final class As400OperatorCutReader {
     private final List<TableIdentity> expectedTables;
     private final String fingerprint;
     private final As400BindingHistory.Recovered recovered;
+    private final As400JdbcConnectionFactory intervalConnections;
 
     As400OperatorCutReader(As400OperatorJournalEvidence journals, As400JdbcNativeIdentityEvidence identities,
                            As400OperatorTableEvidence tables, List<As400OperatorTableEvidence.Request> requests,
@@ -76,6 +78,7 @@ final class As400OperatorCutReader {
         this.limits = Objects.requireNonNull(limits);
         this.expectedTables = List.copyOf(expectedTables);
         recovered = null;
+        intervalConnections = null;
         fingerprint = policy.fingerprint(expectedTables);
         require(!this.requests.isEmpty() && this.requests.size() == this.expectedTables.size()
                 && this.requests.stream().distinct().count() == this.requests.size(), "Distinct matching captured tables required");
@@ -88,6 +91,13 @@ final class As400OperatorCutReader {
      */
     As400OperatorCutReader(As400OperatorJournalEvidence journals, As400JdbcNativeIdentityEvidence identities,
                            JournalReceiver journal, As400BindingHistory.Recovered recovered, RetrieveJournal reader, Limits limits) {
+        this(journals, identities, journal, recovered, reader, limits, null);
+    }
+
+    As400OperatorCutReader(As400OperatorJournalEvidence journals, As400JdbcNativeIdentityEvidence identities,
+                           JournalReceiver journal, As400BindingHistory.Recovered recovered, RetrieveJournal reader, Limits limits,
+                           As400JdbcConnectionFactory intervalConnections) {
+        this.intervalConnections = intervalConnections;
         this.journals = Objects.requireNonNull(journals);
         this.identities = Objects.requireNonNull(identities);
         this.recovered = Objects.requireNonNull(recovered);
@@ -117,26 +127,34 @@ final class As400OperatorCutReader {
 
     private Cut readInternal(Map<String, ?> offset, RawJournalPage.Entry scan, boolean prefix) throws Exception {
         // Refuse implicit first-start/legacy migration before any I/O.
-        if (offset == null || !"2".equals(offset.get(As400Checkpoint.VERSION))) {
+        if (offset == null || !offset.containsKey(As400Checkpoint.VERSION)) {
             throw new IllegalArgumentException("Ordinary resume requires an explicitly initialized F/W checkpoint");
         }
-        // Parse the durable floor before selecting exact metadata; identities are verified below.
-        JournalReceiver floor = prefix ? As400Checkpoint.fromOffset(offset, (String) offset.get("journal_identity"),
-                (String) offset.get("capture_fingerprint")).replayFrom().receiver() : null;
-        Observation before = prefix ? journals.collectFrom(floor) : journals.collect();
+        // Parse only to select exact metadata. The supplied identity is not proof:
+        // the combined journal/receiver sample below must match it before reads.
+        As400Checkpoint requested = As400Checkpoint.fromOffset(offset, (String) offset.get("journal_identity"), fingerprint);
+        // Share only this interval's qualified, non-transactional metadata
+        // connection. Both endpoints are queried afresh; no evidence is cached.
+        // A close failure prevents the otherwise verified cut from escaping.
+        try (Connection connection = intervalConnections == null ? null : Objects.requireNonNull(intervalConnections.open())) {
+            return readObserved(offset, scan, prefix, requested, connection);
+        }
+    }
+
+    private Cut readObserved(Map<String, ?> offset, RawJournalPage.Entry scan, boolean prefix, As400Checkpoint requested, Connection connection) throws Exception {
+        JournalReceiver floor = requested.replayFrom().receiver();
+        Observation before = observe(connection, prefix, floor);
         require(requests.stream().allMatch(request -> request.journal().equals(before.journal())), "Table and history journals differ");
         Target journalTarget = target(before.journal(), Kind.JOURNAL);
-        Candidates journalCandidate = identities.collect(List.of(journalTarget));
-        String journalIdentity = token(journalTarget, journalCandidate.objects().get(journalTarget));
-        require(recovered == null || recovered.journalIdentity().equals(journalIdentity), "Binding journal identity changed");
-        As400Checkpoint loaded = As400Checkpoint.fromOffset(offset, journalIdentity, fingerprint);
         // Ordinary snapshots retain W inside F's history; never invent a missing older anchor.
-        List<Receiver> chain = chain(before, loaded.replayFrom().receiver());
+        List<Receiver> chain = chain(before, floor);
         List<Target> targets = new ArrayList<>();
         targets.add(journalTarget);
         chain.forEach(r -> targets.add(target(r.name(), Kind.RECEIVER)));
-        Candidates nativeBefore = identities.collect(targets);
-        require(journalCandidate.objects().get(journalTarget).equals(nativeBefore.objects().get(journalTarget)), "Journal changed before retrieval");
+        Candidates nativeBefore = identify(connection, targets);
+        String journalIdentity = token(journalTarget, nativeBefore.objects().get(journalTarget));
+        require(recovered == null || recovered.journalIdentity().equals(journalIdentity), "Binding journal identity changed");
+        As400Checkpoint loaded = As400Checkpoint.fromOffset(offset, journalIdentity, fingerprint);
         List<As400OperatorTableEvidence.Observation> tableBefore = recovered == null ? tables.collect(requests) : List.of();
         require(recovered != null || tableBefore.stream().map(As400OperatorTableEvidence.Observation::tableIdentity).toList().equals(expectedTables),
                 "Captured file/member association or row format changed");
@@ -236,8 +254,8 @@ final class As400OperatorCutReader {
         if (recovered == null) {
             require(tableBefore.equals(tables.collect(requests)), "Native table observations changed during retrieval");
         }
-        require(nativeBefore.equals(identities.collect(targets)), "Journal or receiver object changed during retrieval");
-        Observation after = prefix ? journals.collectFrom(floor) : journals.collect();
+        require(nativeBefore.equals(identify(connection, targets)), "Journal or receiver object changed during retrieval");
+        Observation after = observe(connection, prefix, floor);
         stableCut(before, after, chain);
         List<RawJournalPage.Entry> replay = captured.stream().filter(entry -> {
             int comparison = qualified.order().compare(entry.position(), from);
@@ -246,6 +264,17 @@ final class As400OperatorCutReader {
         require(complete || !replay.isEmpty(), "Native prefix budget cannot admit progress after anchors");
         return new Cut(loaded, qualified.order(), complete ? tail : captured.get(captured.size() - 1).position(), replay,
                 tableBefore, Optional.ofNullable(recovered), complete);
+    }
+
+    private Observation observe(Connection connection, boolean prefix, JournalReceiver floor) throws java.sql.SQLException {
+        if (connection == null) {
+            return prefix ? journals.collectFrom(floor) : journals.collect();
+        }
+        return prefix ? journals.collectFromOn(connection, floor) : journals.collectOn(connection);
+    }
+
+    private Candidates identify(Connection connection, List<Target> targets) throws java.sql.SQLException {
+        return connection == null ? identities.collect(targets) : identities.collectOn(connection, targets);
     }
 
     static boolean sameScanAnchor(RawJournalPage.Entry expected, RawJournalPage.Entry actual) {

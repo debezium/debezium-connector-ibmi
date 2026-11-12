@@ -53,7 +53,7 @@ final class As400PendingReceiverEvidence {
     record Sample(JournalReceiver journal, JournalReceiver attached, List<Receiver> receivers) {
         Sample {
             receivers = List.copyOf(receivers);
-            require(!receivers.isEmpty() && receivers.size() <= 1023, "Bounded complete receiver directory required");
+            require(!receivers.isEmpty(), "Complete receiver directory required");
             var names = new HashSet<JournalReceiver>();
             Receiver previous = null;
             for (Receiver receiver : receivers) {
@@ -95,7 +95,7 @@ final class As400PendingReceiverEvidence {
         }
 
         JournalPosition floor(List<RawJournalPage.Entry> completeBracket) {
-            require(!completeBracket.isEmpty() && completeBracket.size() <= 20_000, "Bounded complete raw observation bracket required");
+            require(!completeBracket.isEmpty(), "Complete raw observation bracket required");
             BigInteger floor = completeBracket.get(0).position().offset();
             for (Receiver receiver : receivers) {
                 if (receiver.pending()) {
@@ -103,14 +103,15 @@ final class As400PendingReceiverEvidence {
                 }
             }
             var headers = new EntryHeaderDecoder(RawJournalPage.METADATA_CCSID);
+            var byName = new java.util.HashMap<JournalReceiver, Receiver>();
+            receivers.forEach(receiver -> byName.put(receiver.name(), receiver));
             BigInteger previous = null;
-            long bytes = 0;
             for (var entry : completeBracket) {
                 byte[] data = entry.data();
-                require((bytes += data.length) <= 64 * 1024 * 1024, "Observation bracket exceeds byte budget");
+                require(data.length <= 1024 * 1024, "Observation entry exceeds native byte budget");
                 var position = entry.position();
-                Receiver receiver = receivers.stream().filter(r -> r.name().equals(position.receiver())).findFirst()
-                        .orElseThrow(() -> new IllegalArgumentException("Bracket receiver absent from pending directory"));
+                Receiver receiver = byName.get(position.receiver());
+                require(receiver != null, "Bracket receiver absent from pending directory");
                 require(receiver.first().compareTo(position.offset()) <= 0
                         && (receiver.name().equals(attached) || position.offset().compareTo(receiver.last()) <= 0)
                         && (previous == null || previous.compareTo(position.offset()) < 0), "Unordered or out-of-range observation bracket");
@@ -143,7 +144,7 @@ final class As400PendingReceiverEvidence {
     As400PendingReceiverEvidence(As400JdbcConnectionFactory connections, JournalReceiver journal, int maximumReceivers, int timeout) {
         this.connections = Objects.requireNonNull(connections);
         this.journal = name(journal.library(), journal.name());
-        require(maximumReceivers > 0 && maximumReceivers <= 1023 && timeout > 0 && timeout <= 60, "Finite receiver discovery bounds required");
+        require(maximumReceivers > 0 && maximumReceivers < Integer.MAX_VALUE && timeout > 0 && timeout <= 60, "Finite receiver discovery bounds required");
         this.maximumReceivers = maximumReceivers;
         this.timeout = timeout;
     }
@@ -156,13 +157,14 @@ final class As400PendingReceiverEvidence {
             var receivers = new ArrayList<Receiver>();
             try (var statement = connection.prepareStatement(RECEIVERS_SQL)) {
                 statement.setQueryTimeout(timeout);
-                statement.setMaxRows(maximumReceivers + 1);
+                statement.setMaxRows(before.count() + 1);
+                statement.setFetchSize(Math.min(before.count() + 1, 128));
                 statement.setString(1, journal.library());
                 statement.setString(2, journal.name());
                 try (var rows = statement.executeQuery()) {
                     while (rows.next()) {
                         check();
-                        require(receivers.size() < maximumReceivers, "Receiver directory exceeds bound");
+                        require(receivers.size() < before.count(), "Receiver directory exceeds observed native count");
                         exactJournal(rows);
                         String pending = text(rows, "PENDING_TRANSACTIONS");
                         require(List.of("YES", "NO").contains(pending), "Unknown pending transaction state");

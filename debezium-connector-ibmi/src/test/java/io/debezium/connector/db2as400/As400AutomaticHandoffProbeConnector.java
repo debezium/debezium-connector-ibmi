@@ -91,14 +91,25 @@ public final class As400AutomaticHandoffProbeConnector extends As400ConnectOwner
 
         Session(As400ConnectorConfig config, SourceTaskContext context, CdcSourceTaskContext<As400ConnectorConfig> taskContext) throws Exception {
             super(config, context, taskContext, nativeRaw(config, context), new JournalReceiver("QSQJRN", config.getSchema()), policy(config),
-                    "bindings-automatic", "events-automatic-control", As400DcgConfig.onlineCandidate(config.getConfig()).runtimeLimits);
+                    "bindings-automatic", "events-automatic-control", As400DcgConfig.onlineCandidate(config.getConfig()).runtimeLimits,
+                    config.getConfig().getBoolean("probe.source.offsets", false));
             evidence = Path.of("/control/automatic-" + System.getenv("PROBE_WORKER") + "-" + java.util.UUID.randomUUID());
             Files.createDirectory(evidence);
         }
 
-        private static Configuration nativeRaw(As400ConnectorConfig config, SourceTaskContext context) {
+        private static Configuration nativeRaw(As400ConnectorConfig config, SourceTaskContext context) throws Exception {
             var admission = As400DcgConfig.onlineCandidate(config.getConfig());
-            admission.requireRuntime(context);
+            if (config.getConfig().getBoolean("probe.source.offsets", false)) {
+                Properties worker = new Properties();
+                try (var stream = Files.newInputStream(Path.of("/worker.properties"))) {
+                    worker.load(stream);
+                }
+                require("disabled".equals(worker.getProperty("exactly.once.source.support")) && context.transactionContext() == null,
+                        "Native source-offset experiment requires a worker without source transactions");
+            }
+            else {
+                admission.requireRuntime(context);
+            }
             require(admission.journal.equals(new JournalReceiver("QSQJRN", config.getSchema()))
                     && admission.historyTopic.equals("bindings-automatic"), "Exact isolated native and history targets required");
             return config.getConfig().edit().with(Configuration.from(credentials))

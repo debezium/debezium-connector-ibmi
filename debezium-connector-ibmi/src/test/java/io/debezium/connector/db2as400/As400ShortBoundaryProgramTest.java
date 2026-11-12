@@ -19,6 +19,35 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import io.debezium.ibmi.db2.journal.retrieve.JournalReceiver;
 
 class As400ShortBoundaryProgramTest {
+    @ParameterizedTest
+    @ValueSource(ints = { 51, 1040, 5000 })
+    void shouldBoundEachNativeCommandAndReleaseOnlyAttemptedBatches(int count) {
+        var targets = java.util.stream.IntStream.range(0, count).mapToObj(i -> new As400ShortBoundaryProgram.Target("LIB",
+                String.format(java.util.Locale.ROOT, "F%04d", i), "DATA")).toList();
+        var program = new As400ShortBoundaryProgram(new JournalReceiver("JRN", "LIB"), targets, "A".repeat(32), "B".repeat(64));
+        String sql = program.statement();
+        int objects = 0;
+        for (int i = 0; i < program.batchCount(); i++) {
+            var batch = program.allocationBatch(i);
+            int group = batch.allocate().split("\\*FILE", -1).length - 1;
+            assertThat(group).isBetween(1, 50);
+            assertThat(batch.allocate()).contains("WAIT(" + (i == 0 ? "1" : "0") + ")");
+            assertThat(batch.release().split("\\*FILE", -1).length - 1).isEqualTo(group);
+            assertThat(batch.allocate().length()).isLessThan(4096);
+            assertThat(batch.release().length()).isLessThan(4096);
+            objects += group;
+        }
+        assertThat(objects).isEqualTo(count);
+        assertThat(program.batchCount()).isEqualTo((count + 49) / 50);
+        assertThat(sql.length()).isLessThan(5000);
+        assertThat(sql).contains("STARTED + 1 SECOND", "SET ACQUIRED=STARTED;", "WHERE BATCH=RELEASING.BATCH_ID AND HELD=1",
+                "SET HELD=0 WHERE BATCH=RELEASING.BATCH_ID", "ORDER BY BATCH DESC", "SIGNAL SQLSTATE '75002'");
+        assertThat(sql.indexOf("SET HELD=1 WHERE BATCH=ALLOCATION.BATCH_ID")).isLessThan(sql.indexOf("QCMDEXC(ALLOCATION.ALLOCATE_COMMAND)"));
+        assertThat(sql.lastIndexOf("SIGNAL SQLSTATE '75002'")).isLessThan(sql.indexOf("INSERT INTO SESSION.DCGPULSE"));
+        assertThat(sql).doesNotContain("QSYS2.OBJECT", "QSYS2.JOURNAL", "QSYS2.SYS", "COMMIT", "ROLLBACK");
+        assertThat(program.retryBatchRelease()).contains("WHERE BATCH=RELEASING.BATCH_ID AND HELD=1").doesNotContain("ALCOBJ", "SNDJRNE", "INSERT");
+    }
+
     @Test
     void shouldRetainCapturedMarkerContractAndAddBoundedReleaseForPartialAllocation() throws Exception {
         try (var stream = getClass().getResourceAsStream("/native-transactions/prospective-boundary.json")) {

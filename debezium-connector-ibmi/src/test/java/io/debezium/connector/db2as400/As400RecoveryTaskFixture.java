@@ -11,6 +11,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 import java.math.BigInteger;
+import java.nio.ByteBuffer;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
@@ -28,6 +29,7 @@ import io.debezium.connector.db2as400.As400RecoveryTestSupport.Fixture;
 import io.debezium.ibmi.db2.journal.retrieve.JournalPosition;
 import io.debezium.ibmi.db2.journal.retrieve.RawJournalPage;
 import io.debezium.ibmi.db2.journal.retrieve.RetrieveJournal;
+import io.debezium.ibmi.db2.journal.retrieve.rjne0200.EntryHeaderDecoder;
 
 /** Local controlled I/O only. Actual task/coordinator/runtime/dispatcher are never replaced. */
 class As400RecoveryTaskFixture implements As400TaskRecovery {
@@ -43,11 +45,24 @@ class As400RecoveryTaskFixture implements As400TaskRecovery {
     volatile String hold = "";
     volatile long tail = 42;
     volatile String failure = "";
+    As400SpillStore.Settings storage;
+    boolean sourceOffsets;
     private As400OperatorCutReader reader;
 
     As400RecoveryTaskFixture(Path directory, String expectedFingerprint) throws Exception {
         fixture = new Fixture(directory);
         this.expectedFingerprint = expectedFingerprint;
+    }
+
+    @Override
+    public boolean sourceOffsetAcknowledgements() {
+        return sourceOffsets;
+    }
+
+    @Override
+    public As400ContinuousRuntime.Limits runtimeLimits() {
+        var limits = As400TaskRecovery.super.runtimeLimits();
+        return new As400ContinuousRuntime.Limits(limits.transactions(), limits.lifecycle(), limits.outputRecords(), limits.deferAttachmentRaces(), storage);
     }
 
     static Map<String, String> initialize(Fixture fixture) throws Exception {
@@ -72,7 +87,12 @@ class As400RecoveryTaskFixture implements As400TaskRecovery {
 
     @Override
     public void checkQualified(Configuration config) {
-        As400RecoveryAcknowledgements.requireProfile(config.asMap());
+        if (sourceOffsets) {
+            As400RecoveryAcknowledgements.requireSourceOffsetProfile(config.asMap());
+        }
+        else {
+            As400RecoveryAcknowledgements.requireProfile(config.asMap());
+        }
         if (!qualified.get() || stopped.get() || !"no-live-ibmi.invalid".equals(config.getString("database.hostname"))) {
             throw new IllegalStateException("Local qualified admission ended");
         }
@@ -102,6 +122,36 @@ class As400RecoveryTaskFixture implements As400TaskRecovery {
         });
         reader = new As400OperatorCutReader(journals, identities, Fixture.JOURNAL, history, transport, readerLimits());
         return history;
+    }
+
+    /** Synthetic load on captured row/control layouts, not new native evidence. */
+    void repeatedDeletes() {
+        byte[] row = fixture.entry(42).data();
+        byte[] start = fixture.entry(31).data();
+        byte[] commit = fixture.entry(59).data();
+        var anchor = fixture.entry(29);
+        fixture.entries.clear();
+        fixture.entries.add(anchor);
+        // Use one producer for the complete cycle; retain native object bindings.
+        for (byte[] control : new byte[][]{ start, commit }) {
+            System.arraycopy(row, 40, control, 40, 8);
+            System.arraycopy(row, 101, control, 101, 26);
+            System.arraycopy(row, 208, control, 208, 8);
+        }
+        fixture.entries.add(repeatedEntry(start, 30, "CSC"));
+        for (int i = 0; i < 300; i++) {
+            fixture.entries.add(repeatedEntry(row, 31 + 2 * i, "RPT"));
+            fixture.entries.add(repeatedEntry(row, 32 + 2 * i, "RDL"));
+        }
+        fixture.entries.add(repeatedEntry(commit, 631, "CCM"));
+    }
+
+    private static RawJournalPage.Entry repeatedEntry(byte[] template, long sequence, String type) {
+        byte[] raw = template.clone();
+        ByteBuffer.wrap(raw).putLong(24, sequence).putLong(64, 30);
+        new com.ibm.as400.access.AS400Text(3, 37).toBytes(type, raw, 98);
+        new com.ibm.as400.access.AS400Text(1, 37).toBytes(type.equals("RDL") ? "1" : "0", raw, 216);
+        return new RawJournalPage.Entry(Fixture.position(sequence), new EntryHeaderDecoder().decode(raw, 0), raw);
     }
 
     As400OperatorCutReader.Limits readerLimits() {

@@ -54,7 +54,7 @@ final class As400JdbcNativeIdentityEvidence {
         }
     }
 
-    /** First profile: explicit, canonical basic system names in system ASP 1 only. */
+    /** Explicit canonical names in QSYS.LIB, shared by the system and basic user ASPs. */
     record Target(String path, Kind kind) {
         Target {
             Objects.requireNonNull(path);
@@ -102,7 +102,7 @@ final class As400JdbcNativeIdentityEvidence {
 
     record Limits(int maximumObjects, int queryTimeoutSeconds, int maximumReadBytes) {
         Limits {
-            if (maximumObjects < 1 || maximumObjects > 1024 || queryTimeoutSeconds < 1 || queryTimeoutSeconds > 3600
+            if (maximumObjects < 1 || queryTimeoutSeconds < 1 || queryTimeoutSeconds > 3600
                     || maximumReadBytes < 1 || maximumReadBytes > 16 * 1024 * 1024) {
                 throw new IllegalArgumentException("Finite native evidence object, query-time and byte limits are required");
             }
@@ -132,6 +132,14 @@ final class As400JdbcNativeIdentityEvidence {
             readOnly(connection);
             return collect(connection, targets);
         }
+    }
+
+    /** Borrow the caller's qualified interval connection; close only our statements and results. */
+    Candidates collectOn(Connection connection, List<Target> requested) throws SQLException {
+        List<Target> targets = targets(requested);
+        interrupted();
+        readOnly(Objects.requireNonNull(connection));
+        return collect(connection, targets);
     }
 
     /** At most twice maximumObjects queries; nothing is returned on a mismatch or failed re-observation. */
@@ -223,7 +231,7 @@ final class As400JdbcNativeIdentityEvidence {
         String path = row.getString("PATH_NAME");
         if (!BigInteger.valueOf(target.path().length()).equals(pathLength) || !target.path().equals(path)
                 || !target.kind().objectType().equals(row.getString("OBJECT_TYPE"))
-                || !BigInteger.ONE.equals(number(row, "ASP_NUMBER")) || !"YES".equals(row.getString("STORED_LOCAL"))
+                || !As400OperatorJournalEvidence.systemBasicAsp(number(row, "ASP_NUMBER")) || !"YES".equals(row.getString("STORED_LOCAL"))
                 || !BigInteger.ZERO.equals(number(row, "HAS_SYMBOLIC_LINK"))) {
             throw new SQLException("Unexpected path, type, ASP, remote or symbolic native object");
         }

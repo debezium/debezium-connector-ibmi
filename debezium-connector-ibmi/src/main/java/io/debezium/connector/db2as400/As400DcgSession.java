@@ -247,7 +247,7 @@ final class As400DcgSession implements As400TaskInitialization, As400TaskRecover
         if (history.initialization().isEmpty() || !history.fingerprint().equals(fingerprint)) {
             throw new IllegalArgumentException("Recovered initialized binding history differs");
         }
-        reader = new As400OperatorCutReader(io.journals, io.identities, journal(), history, io.reader, io.cutLimits);
+        reader = new As400OperatorCutReader(io.journals, io.identities, journal(), history, io.reader, io.cutLimits, () -> io.connection(false));
         recovered = history;
         LOGGER.info("D/CG recovered initialized binding history for {} captured files", history.definitions().size());
         return history;
@@ -281,7 +281,11 @@ final class As400DcgSession implements As400TaskInitialization, As400TaskRecover
     }
 
     private void requireGeneration(boolean empty) {
-        As400KafkaTopicGate.require(config.raw, config.topics(), empty, this::checkRunning);
+        var ordered = new java.util.HashSet<>(java.util.Set.of(config.historyTopic));
+        if (new As400ConnectorConfig(config.raw).getHeartbeatInterval().isZero()) {
+            ordered.add(config.controlTopic());
+        }
+        As400KafkaTopicGate.require(config.raw, config.topics(), ordered, empty, this::checkRunning);
     }
 
     @Override

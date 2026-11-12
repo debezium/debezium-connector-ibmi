@@ -9,11 +9,13 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import java.util.List;
+import java.util.Map;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
@@ -21,21 +23,21 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 
 class As400OnlineFenceEvidenceTest {
     static As400OnlineFenceEvidence.Candidate replayMetadata(JsonNode captured) throws Exception {
-        return As400OnlineFenceEvidence.validateOffLock(withUnverifiedAccessControlsForReplay(captured));
+        return As400OnlineFenceEvidence.validateOffLock(withUnverifiedMetadataForReplay(captured));
     }
 
     /**
-     * Component-only assumption for old captures that predate the RCAC query.
+     * Component-only assumptions for captures that predate RCAC and JDBC output metadata.
      * Never edits or publishes the captured resources. The native validators and
      * command-line replay still reject those files without real control evidence.
      */
-    static <T extends JsonNode> T withUnverifiedAccessControlsForReplay(T original) {
+    static <T extends JsonNode> T withUnverifiedMetadataForReplay(T original) {
         T copy = original.deepCopy();
-        addUnverifiedControls(copy);
+        addUnverifiedMetadata(copy);
         return copy;
     }
 
-    private static void addUnverifiedControls(JsonNode node) {
+    private static void addUnverifiedMetadata(JsonNode node) {
         if (node.isObject() && node.path("queries").isArray() && node.path("targets").isArray()) {
             ArrayNode queries = (ArrayNode) node.get("queries");
             for (JsonNode target : node.get("targets")) {
@@ -47,15 +49,30 @@ class As400OnlineFenceEvidenceTest {
                 query.putArray("rows").addObject().put("TABLE_SCHEMA", library).put("SYSTEM_TABLE_SCHEMA", library)
                         .put("TABLE_NAME", file).put("SYSTEM_TABLE_NAME", file).put("CONTROL", " ");
             }
+            var jdbc = ((ObjectNode) node).putObject("jdbc_metadata").put("search_escape", "\\").put("synthetic_test_assumption", true);
+            var outputTables = jdbc.putArray("tables");
+            var mapper = new ObjectMapper();
+            for (var query : queries) {
+                if (query.path("name").asText().equals("columns")) {
+                    var output = outputTables.addObject().put("schema_pattern", query.get("parameters").get(0).asText().replace("_", "\\_"))
+                            .put("table_pattern", query.get("parameters").get(1).asText().replace("_", "\\_"));
+                    var rows = output.putArray("rows");
+                    for (var column : query.get("rows")) {
+                        Map<String, Object> physical = mapper.convertValue(column, new TypeReference<>() {
+                        });
+                        rows.add(mapper.valueToTree(As400NativeBindingAcquisitionTest.jdbcColumn(physical)));
+                    }
+                }
+            }
             return;
         }
         if (node.isContainerNode()) {
-            node.forEach(As400OnlineFenceEvidenceTest::addUnverifiedControls);
+            node.forEach(As400OnlineFenceEvidenceTest::addUnverifiedMetadata);
         }
     }
 
     static ObjectNode fixture() throws Exception {
-        return withUnverifiedAccessControlsForReplay((ObjectNode) new ObjectMapper()
+        return withUnverifiedMetadataForReplay((ObjectNode) new ObjectMapper()
                 .readTree(As400OnlineFenceEvidenceTest.class.getResourceAsStream("/native-transactions/automatic-fence-metadata.json")));
     }
 
@@ -64,6 +81,14 @@ class As400OnlineFenceEvidenceTest {
         var raw = new ObjectMapper().readTree(getClass().getResourceAsStream("/native-transactions/automatic-fence-metadata.json"));
         assertThat(assertThrows(Exception.class, () -> As400OnlineFenceEvidence.validate(raw)))
                 .hasStackTraceContaining("Native validator requested uncaptured evidence");
+    }
+
+    @Test
+    void shouldRejectHistoricalCaptureWithoutJdbcOutputEvidence() throws Exception {
+        var data = fixture();
+        data.remove("jdbc_metadata");
+        assertThat(assertThrows(Exception.class, () -> As400OnlineFenceEvidence.validate(data)))
+                .hasStackTraceContaining("Native validator requested uncaptured JDBC output evidence");
     }
 
     @Test
@@ -83,7 +108,7 @@ class As400OnlineFenceEvidenceTest {
 
     @Test
     void offLockMetadataCannotMasqueradeAsLockedEvidence() throws Exception {
-        ObjectNode data = withUnverifiedAccessControlsForReplay((ObjectNode) new ObjectMapper()
+        ObjectNode data = withUnverifiedMetadataForReplay((ObjectNode) new ObjectMapper()
                 .readTree(getClass().getResourceAsStream("/native-transactions/automatic-fence-native-scope.json")));
         assertThrows(IllegalArgumentException.class, () -> As400OnlineFenceEvidence.validateOffLock(data));
         data.put("profile", As400OnlineFenceEvidence.OFFLOCK_PROFILE).put("status", "observed").put("outside_lock", true);

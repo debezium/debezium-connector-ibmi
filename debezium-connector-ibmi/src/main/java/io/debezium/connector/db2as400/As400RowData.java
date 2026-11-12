@@ -11,7 +11,8 @@ import java.sql.Timestamp;
 
 /** Owns complete column values; never retains driver locators, streams, or arbitrary mutable objects. */
 final class As400RowData {
-    static final int MAX_COLUMNS = 4096;
+    // Materialized output can append the explicitly configured RRN key.
+    static final int MAX_COLUMNS = io.debezium.ibmi.db2.journal.retrieve.CompleteRowEntryDecoder.MAX_COLUMNS + 1;
     private final Object[] values;
     private final long payloadBytes;
 
@@ -36,11 +37,23 @@ final class As400RowData {
     }
 
     Object[] values() {
+        if (values == null) {
+            throw new IllegalStateException("Excluded row has no publishable values");
+        }
         return copy(values);
+    }
+
+    /** Keep transaction/record effects without retaining or exposing excluded column values. */
+    static As400RowData excluded() {
+        return new As400RowData(null, 0);
     }
 
     long payloadBytes() {
         return payloadBytes;
+    }
+
+    boolean included() {
+        return values != null;
     }
 
     private static long size(Object value) {

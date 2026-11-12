@@ -7,7 +7,9 @@ package io.debezium.connector.db2as400;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -20,6 +22,7 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.SQLWarning;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -38,7 +41,7 @@ class As400OperatorTableEvidenceTest {
     private static final As400OperatorTableEvidence.Request REQUEST = new As400OperatorTableEvidence.Request(new JournalReceiver("QSQJRN", "LIB"), "LIB", "A");
 
     @Test
-    void obtainsDistinctPairedJournalIdentifiersAndPhysicalFormatWithoutProducingStrictProof() throws Exception {
+    void shouldObtainDistinctPairedJournalIdentifiersAndPhysicalFormatWithoutProducingStrictProof() throws Exception {
         Fixture f = new Fixture();
         var observation = f.collect().get(0);
         assertThat(observation.tableIdentity().fileJournalId()).isEqualTo("e9400014bcfbce3e0003");
@@ -49,11 +52,14 @@ class As400OperatorTableEvidenceTest {
         verify(f.statements.get(0)).setString(2, "A");
         verify(f.statements.get(2)).setString(1, "/QSYS.LIB/LIB.LIB/A.FILE");
         verify(f.statements.get(2)).setString(2, "*FILE");
-        verify(f.statements.get(3)).setString(1, "/QSYS.LIB/LIB.LIB/A.FILE/A.MBR");
-        verify(f.statements.get(3)).setString(2, "*MBR");
+        verify(f.statements.get(2)).setString(3, "/QSYS.LIB/LIB.LIB/A.FILE/A.MBR");
+        verify(f.statements.get(2)).setString(4, "*MBR");
+        verify(f.statements.get(0)).setMaxRows(2);
+        verify(f.statements.get(1)).setMaxRows(2);
+        verify(f.statements.get(2)).setMaxRows(3);
+        verify(f.statements.get(2)).setFetchSize(3);
         for (var statement : f.statements) {
             verify(statement).setQueryTimeout(5);
-            verify(statement).setMaxRows(2);
             verify(statement).close();
             verify(statement, never()).executeUpdate();
         }
@@ -71,7 +77,7 @@ class As400OperatorTableEvidenceTest {
             }
         }
         for (String column : List.of("TABLE_SCHEMA", "TABLE_NAME", "SYSTEM_TABLE_MEMBER")) {
-            cases.add(Arguments.of(0, column, column.equals("SYSTEM_TABLE_MEMBER") ? "*FIRST" : "OTHER"));
+            cases.add(Arguments.of(0, column, column.equals("SYSTEM_TABLE_MEMBER") ? "*FIRST" : column.equals("TABLE_NAME") ? "" : "OTHER"));
             cases.add(Arguments.of(0, column, null));
         }
         for (String column : List.of("NUMBER_MEMBERS", "NUMBER_RECORD_FORMATS")) {
@@ -85,7 +91,7 @@ class As400OperatorTableEvidenceTest {
         }
         cases.add(Arguments.of(1, "CONTAINS_LOB", "YES"));
         cases.add(Arguments.of(1, "RECORD_LENGTH", 0));
-        cases.add(Arguments.of(1, "NUMBER_FIELDS", 4097));
+        cases.add(Arguments.of(1, "NUMBER_FIELDS", 8001));
         for (int row : List.of(2, 3)) {
             for (String column : List.of("PATH_NAME", "PATH_LENGTH", "OBJECT_TYPE", "ASP_NUMBER", "STORED_LOCAL", "HAS_SYMBOLIC_LINK",
                     "JOURNALED", "JOURNAL_LIBRARY", "JOURNAL_NAME", "OBJECT_JID", "FILE_SYSTEM_IDENTIFIER", "FILE_IDENTIFIER_NUMBER", "GENERATION_IDENTIFIER")) {
@@ -93,7 +99,8 @@ class As400OperatorTableEvidenceTest {
             }
             cases.add(Arguments.of(row, "PATH_NAME", "/QSYS.LIB/LIB.LIB/OTHER.FILE"));
             cases.add(Arguments.of(row, "OBJECT_TYPE", row == 2 ? "*MBR" : "*FILE"));
-            cases.add(Arguments.of(row, "ASP_NUMBER", 2));
+            cases.add(Arguments.of(row, "ASP_NUMBER", 0));
+            cases.add(Arguments.of(row, "ASP_NUMBER", 33));
             cases.add(Arguments.of(row, "STORED_LOCAL", "NO"));
             cases.add(Arguments.of(row, "HAS_SYMBOLIC_LINK", 1));
             cases.add(Arguments.of(row, "JOURNALED", "NO"));
@@ -109,8 +116,32 @@ class As400OperatorTableEvidenceTest {
     }
 
     @ParameterizedTest
+    @ValueSource(ints = { 1, 2, 32 })
+    void shouldRetainFileAndMemberBindingsInTheSystemOrBasicAspNamespace(int asp) throws Exception {
+        var fixture = new Fixture();
+        fixture.data.get(2).put("ASP_NUMBER", asp);
+        fixture.data.get(3).put("ASP_NUMBER", asp);
+        var observed = fixture.collect().get(0);
+        assertThat(observed.tableIdentity().member()).isEqualTo("A");
+        assertThat(observed.fileObject().identity()).isNotEqualTo(observed.memberObject().identity());
+        fixture.closed();
+    }
+
+    @Test
+    void shouldResolveTheSqlTableNameFromTheExactPhysicalFileObservation() throws Exception {
+        var fixture = new Fixture();
+        fixture.data.get(0).put("TABLE_NAME", "LONG_ORDER_TABLE");
+        var table = fixture.collect().get(0);
+        assertThat(table.table().table()).isEqualTo("LONG_ORDER_TABLE");
+        assertThat(table.tableIdentity().physicalFile()).isEqualTo("A");
+        assertThat(table.tableIdentity().member()).isEqualTo("A");
+        assertThat(table.fileObject().target().path()).isEqualTo("/QSYS.LIB/LIB.LIB/A.FILE");
+        fixture.closed();
+    }
+
+    @ParameterizedTest
     @MethodSource("mismatches")
-    void rejectsIncompleteAndMismatchedBindings(int row, String column, Object value) throws Exception {
+    void shouldRejectIncompleteAndMismatchedBindings(int row, String column, Object value) throws Exception {
         Fixture f = new Fixture();
         f.data.get(row).put(column, value);
         assertThrows(SQLException.class, f::collect);
@@ -118,8 +149,8 @@ class As400OperatorTableEvidenceTest {
     }
 
     @ParameterizedTest
-    @ValueSource(ints = { 0, 1, 2, 3 })
-    void rejectsDuplicateMissingWarningAndFailedQueries(int fault) throws Exception {
+    @ValueSource(ints = { 0, 1, 2 })
+    void shouldRejectDuplicateMissingWarningAndFailedQueries(int fault) throws Exception {
         for (String type : List.of("missing", "duplicate", "warning", "failure")) {
             Fixture f = new Fixture();
             if (type.equals("missing")) {
@@ -140,7 +171,7 @@ class As400OperatorTableEvidenceTest {
     }
 
     @Test
-    void rejectsIdenticalNativeObjectsAndReadOnlyRefusal() throws Exception {
+    void shouldRejectIdenticalNativeObjectsAndReadOnlyRefusal() throws Exception {
         Fixture f = new Fixture();
         for (String key : List.of("FILE_SYSTEM_IDENTIFIER", "FILE_IDENTIFIER_NUMBER", "GENERATION_IDENTIFIER")) {
             f.data.get(3).put(key, f.data.get(2).get(key));
@@ -152,6 +183,190 @@ class As400OperatorTableEvidenceTest {
         assertThrows(SQLException.class, f::collect);
         verify(f.connection, never()).prepareStatement(anyString());
         f.closed();
+    }
+
+    @Test
+    void shouldReadBoundedCatalogAndObjectBatchesAcrossLibrariesWithoutChangingRequestOrder() throws Exception {
+        var fixture = new BatchFixture();
+        var requests = new ArrayList<As400OperatorTableEvidence.Request>();
+        for (int i = 0; i < 51; i++) {
+            requests.add(new As400OperatorTableEvidence.Request(REQUEST.journal(), "LIB", "T" + i));
+        }
+        requests.add(new As400OperatorTableEvidence.Request(REQUEST.journal(), "OTHER", "T0"));
+        var observations = fixture.collect(requests);
+        assertThat(observations).extracting(As400OperatorTableEvidence.Observation::request).containsExactlyElementsOf(requests);
+        assertThat(observations).allSatisfy(observation -> {
+            assertThat(observation.member()).isEqualTo(observation.request().file());
+            assertThat(observation.fileObject().target().path()).isEqualTo("/QSYS.LIB/" + observation.request().library() + ".LIB/"
+                    + observation.request().file() + ".FILE");
+        });
+        assertThat(fixture.catalogBatches).containsExactly(50, 1, 1, 50, 1, 1);
+        assertThat(fixture.objectBatches).containsExactly(16, 16, 16, 16, 16, 16, 8);
+        assertThat(fixture.statements).hasSize(13);
+        fixture.closed();
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = { "missing", "duplicate", "foreign", "library", "warning", "failure" })
+    void shouldRejectIncompleteOrAmbiguousCatalogBatchBeforeReadingObjects(String fault) throws Exception {
+        for (String query : List.of("SYSPARTITIONSTAT", "SYSFILES")) {
+            var fixture = new BatchFixture();
+            fixture.fault = fault;
+            fixture.faultQuery = query;
+            assertThrows(SQLException.class, () -> fixture.collect(List.of(REQUEST,
+                    new As400OperatorTableEvidence.Request(REQUEST.journal(), "LIB", "B"))));
+            assertThat(fixture.objectQueries).isZero();
+            fixture.closed();
+        }
+    }
+
+    @Test
+    void shouldRejectConflictingJournalsForOnePhysicalFileBeforeOpeningAConnection() throws Exception {
+        var fixture = new BatchFixture();
+        // These requests straddle catalog batches but share an object batch.
+        // A target map must never silently replace one requested journal.
+        var requests = java.util.stream.IntStream.range(0, 51)
+                .mapToObj(i -> new As400OperatorTableEvidence.Request(i == 49 ? new JournalReceiver("OTHER", "LIB") : REQUEST.journal(),
+                        "LIB", "T" + Math.min(i, 49)))
+                .toList();
+        assertThrows(IllegalArgumentException.class, () -> fixture.collect(requests));
+        org.mockito.Mockito.verifyNoInteractions(fixture.connection);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = { "missing", "duplicate", "foreign", "type", "journal", "warning", "late-warning", "failure", "interrupted" })
+    void shouldRejectIncompleteOrAmbiguousObjectBatchWithoutStartingAnotherBatch(String fault) throws Exception {
+        var fixture = new BatchFixture();
+        fixture.fault = fault;
+        fixture.faultQuery = "IFS_OBJECT_STATISTICS";
+        var requests = java.util.stream.IntStream.range(0, 9)
+                .mapToObj(i -> new As400OperatorTableEvidence.Request(REQUEST.journal(), "LIB", "T" + i)).toList();
+        try {
+            assertThrows(SQLException.class, () -> fixture.collect(requests));
+            assertThat(fixture.objectBatches).containsExactly(16);
+            fixture.closed();
+        }
+        finally {
+            Thread.interrupted();
+        }
+    }
+
+    static class BatchFixture {
+        final Connection connection = mock(Connection.class);
+        final List<PreparedStatement> statements = new ArrayList<>();
+        final List<ResultSet> results = new ArrayList<>();
+        final List<Integer> catalogBatches = new ArrayList<>();
+        final List<Integer> objectBatches = new ArrayList<>();
+        String fault = "";
+        String faultQuery = "";
+        int objectQueries;
+
+        BatchFixture() throws Exception {
+            var template = new Fixture().data;
+            when(connection.isReadOnly()).thenReturn(true);
+            when(connection.prepareStatement(anyString())).thenAnswer(call -> {
+                String sql = call.getArgument(0);
+                var statement = mock(PreparedStatement.class);
+                statements.add(statement);
+                var parameters = new HashMap<Integer, String>();
+                doAnswer(binding -> {
+                    parameters.put(binding.getArgument(0), binding.getArgument(1));
+                    return null;
+                }).when(statement).setString(anyInt(), anyString());
+                when(statement.executeQuery()).thenAnswer(execution -> {
+                    var values = new ArrayList<Map<String, Object>>();
+                    boolean catalog = !sql.contains("IFS_OBJECT_STATISTICS");
+                    if (catalog) {
+                        int count = parameters.size() - 1;
+                        assertThat(count).isBetween(1, 50);
+                        verify(statement).setMaxRows(count + 1);
+                        catalogBatches.add(count);
+                        for (int i = 0; i < count; i++) {
+                            var value = new HashMap<>(template.get(sql.contains("SYSPARTITIONSTAT") ? 0 : 1));
+                            value.put("SYSTEM_TABLE_SCHEMA", parameters.get(1));
+                            value.put("TABLE_SCHEMA", parameters.get(1));
+                            value.put("SYSTEM_TABLE_NAME", parameters.get(i + 2));
+                            value.put("TABLE_NAME", parameters.get(i + 2));
+                            value.put("SYSTEM_TABLE_MEMBER", parameters.get(i + 2));
+                            values.add(value);
+                        }
+                        Collections.reverse(values); // Catalog row order is not a binding rule.
+                    }
+                    else {
+                        objectQueries++;
+                        int count = parameters.size() / 2;
+                        assertThat(count).isBetween(1, 16);
+                        assertThat(sql.split("UNION ALL", -1)).hasSize(count);
+                        verify(statement).setMaxRows(count + 1);
+                        verify(statement).setFetchSize(count + 1);
+                        objectBatches.add(count);
+                        for (int i = 0; i < count; i++) {
+                            var value = new HashMap<>(template.get(parameters.get(i * 2 + 2).equals("*FILE") ? 2 : 3));
+                            value.put("PATH_NAME", parameters.get(i * 2 + 1));
+                            value.put("PATH_LENGTH", parameters.get(i * 2 + 1).length());
+                            values.add(value);
+                        }
+                        Collections.reverse(values); // UNION result order is not a binding rule either.
+                    }
+                    boolean faulty = sql.contains(faultQuery);
+                    if (faulty) {
+                        switch (fault) {
+                            case "missing" -> values.remove(0);
+                            case "duplicate" -> values.add(values.get(0));
+                            case "foreign" -> values.get(0).put(catalog ? "SYSTEM_TABLE_NAME" : "PATH_NAME", "UNKNOWN");
+                            case "library" -> values.get(0).put("SYSTEM_TABLE_SCHEMA", "UNKNOWN");
+                            case "type" -> values.get(0).put("OBJECT_TYPE", "*FILE");
+                            case "journal" -> values.get(0).put("JOURNAL_NAME", "OTHER");
+                            case "failure" -> throw new SQLException("Catalog unavailable");
+                            default -> {
+                            }
+                        }
+                    }
+                    var rows = mock(ResultSet.class);
+                    results.add(rows);
+                    var index = new AtomicInteger(-1);
+                    when(rows.next()).thenAnswer(ignored -> {
+                        int current = index.incrementAndGet();
+                        if (faulty && fault.equals("interrupted") && current == values.size() - 1) {
+                            Thread.currentThread().interrupt();
+                        }
+                        return current < values.size();
+                    });
+                    when(rows.getString(anyString())).thenAnswer(field -> {
+                        Object value = values.get(index.get()).get(field.getArgument(0));
+                        return value == null ? null : value.toString();
+                    });
+                    when(rows.getBigDecimal(anyString())).thenAnswer(field -> {
+                        Object value = values.get(index.get()).get(field.getArgument(0));
+                        return value == null ? null : new BigDecimal(value.toString());
+                    });
+                    if (faulty && fault.equals("warning")) {
+                        when(rows.getWarnings()).thenReturn(new SQLWarning("Incomplete catalog"));
+                    }
+                    if (faulty && fault.equals("late-warning")) {
+                        when(rows.getWarnings()).thenAnswer(ignored -> index.get() >= values.size() ? new SQLWarning("Incomplete native object read") : null);
+                    }
+                    return rows;
+                });
+                return statement;
+            });
+        }
+
+        List<As400OperatorTableEvidence.Observation> collect(List<As400OperatorTableEvidence.Request> requests) throws SQLException {
+            return new As400OperatorTableEvidence(() -> connection, new As400OperatorTableEvidence.Limits(100, 5)).collect(requests);
+        }
+
+        void closed() throws Exception {
+            verify(connection).close();
+            for (var statement : statements) {
+                verify(statement).setQueryTimeout(5);
+                verify(statement).close();
+                verify(statement, never()).executeUpdate();
+            }
+            for (var result : results) {
+                verify(result).close();
+            }
+        }
     }
 
     static class Fixture {
@@ -180,13 +395,21 @@ class As400OperatorTableEvidenceTest {
                 data.add(object);
             }
             when(connection.isReadOnly()).thenReturn(true);
-            for (var row : data) {
+            for (int query = 0; query < 3; query++) {
+                var values = query < 2 ? List.of(data.get(query)) : data.subList(2, 4);
                 ResultSet result = mock(ResultSet.class);
                 PreparedStatement statement = mock(PreparedStatement.class);
                 when(statement.executeQuery()).thenReturn(result);
-                when(result.next()).thenReturn(true, false);
-                when(result.getString(anyString())).thenAnswer(i -> row.get(i.getArgument(0)) == null ? null : row.get(i.getArgument(0)).toString());
-                when(result.getBigDecimal(anyString())).thenAnswer(i -> row.get(i.getArgument(0)) == null ? null : new BigDecimal(row.get(i.getArgument(0)).toString()));
+                var index = new AtomicInteger(-1);
+                when(result.next()).thenAnswer(ignored -> index.incrementAndGet() < values.size());
+                when(result.getString(anyString())).thenAnswer(i -> {
+                    Object value = values.get(index.get()).get(i.getArgument(0));
+                    return value == null ? null : value.toString();
+                });
+                when(result.getBigDecimal(anyString())).thenAnswer(i -> {
+                    Object value = values.get(index.get()).get(i.getArgument(0));
+                    return value == null ? null : new BigDecimal(value.toString());
+                });
                 rows.add(result);
                 statements.add(statement);
             }

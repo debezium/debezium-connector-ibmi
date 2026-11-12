@@ -35,6 +35,13 @@ CONTROL = '__debezium-truncate.test'
 
 
 class Experiment(automatic.Experiment):
+    transaction_metadata = False
+    metadata_on_restart = False
+    first_start = None
+
+    def snapshot_rows(self, table):
+        return 0 if self.first_start == 'no_data' else 303 if self.first_start and table == 'A' else 3
+
     def stage(self):
         super().stage()
         self.audit = self.directory / 'audit'
@@ -63,8 +70,13 @@ class Experiment(automatic.Experiment):
                            transaction_boundary='poll during ordinary legacy startup, connector after online opt-in',
                            migration_enabled=True, default_enabled=False, controller_seeded_offset=False,
                            configured_connector=CLASS, distribution_sha256=hashlib.sha256(distribution.read_bytes()).hexdigest())
+        if self.source_offsets:
+            self.report.update(transaction_boundary='Ordinary source offsets; Kafka source transactions disabled before legacy startup and migration',
+                               delivery_contract='At least once; no broker fencing or atomic output/offset commit',
+                               public_admission_changed=True)
         self.report.pop('production_streaming_enabled', None)
         self.report['normal_connector_path_enabled'] = True
+        self.report['transaction_metadata'] = 'enabled' if self.transaction_metadata else 'disabled'
         self.report['plugin_sha256'] = {str(p.relative_to(self.plugin)): hashlib.sha256(p.read_bytes()).hexdigest() for p in distribution_dir.iterdir()}
         self.report['harness_sha256']['tools/dcg-public-online-probe.py'] = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
         self.save()
@@ -76,6 +88,8 @@ class Experiment(automatic.Experiment):
         with config.open('a') as stream:
             stream.write('request.timeout.ms=5000\ndefault.api.timeout.ms=10000\nworker.sync.timeout.ms=20000\nrebalance.timeout.ms=30000\n'
                          'plugin.path=/connector\nconfig.providers=file\nconfig.providers.file.class=org.apache.kafka.common.config.provider.FileConfigProvider\n')
+            if self.source_offsets:
+                stream.write('exactly.once.source.support=disabled\n')
         worker = base.Experiment.container(self, name, ['--user', f'{os.getuid()}:{os.getgid()}', '--add-host', self.native_host,
                 '-v', f'{self.plugin}:/connector:ro', '-v', f'{self.audit}:/probe:ro', '-v', f'{self.audit}:/audit:ro',
                 '-v', f'{self.control}:/control', '-v', f'{config}:/worker.properties:ro',
@@ -129,7 +143,7 @@ class Experiment(automatic.Experiment):
                   'table.include.list': ','.join(self.library + '.' + t for t in ['A', 'B', 'M']), 'secure': 'false', 'snapshot.mode': 'initial',
                   'truncate.transactional.enabled': str(enabled).lower(), 'skipped.operations': 'none' if enabled else 't',
                   'max.batch.size': '64', 'max.queue.size': '2048', 'poll.interval.ms': '10', 'heartbeat.interval.ms': '1000',
-                  'provide.transaction.metadata': 'false', 'event.converting.failure.handling.mode': 'fail', 'errors.tolerance': 'none',
+                  'provide.transaction.metadata': str(self.transaction_metadata).lower(), 'event.converting.failure.handling.mode': 'fail', 'errors.tolerance': 'none',
                   'exactly.once.support': 'requested', 'transaction.boundary': 'connector' if enabled else 'poll',
                   'dcg.retention': 'operator-managed', 'dcg.journal': self.library + '/QSQJRN',
                   'schema.history.internal.kafka.bootstrap.servers': 'broker:9092', 'schema.history.internal.kafka.topic': 'bindings-automatic',
@@ -141,14 +155,27 @@ class Experiment(automatic.Experiment):
                   'key.converter.schemas.enable': 'false', 'value.converter.schemas.enable': 'false'}
         for key in ['database.hostname', 'database.user', 'database.password']:
             config[key] = '${file:/dev/shm/dcg-credentials.properties:' + key + '}'
+        if self.source_offsets:
+            config.pop('exactly.once.support')
+            config.pop('transaction.boundary')
+        if self.first_start:
+            config['notification.enabled.channels'] = 'sink'
+            config['notification.sink.topic.name'] = 'snapshot-notifications'
         return config
 
     def setup_connector(self, worker):
-        for topic in [f'test.{self.fixture.server_name}.{self.library}.{t}' for t in ['A', 'B', 'M']] + [CONTROL, 'bindings-automatic', '__debezium-heartbeat.test']:
+        topics = [f'test.{self.fixture.server_name}.{self.library}.{t}' for t in ['A', 'B', 'M']] + [CONTROL, 'bindings-automatic', '__debezium-heartbeat.test']
+        if self.transaction_metadata or self.metadata_on_restart:
+            topics.append('test.transaction')
+        if self.first_start:
+            topics.append('snapshot-notifications')
+        for topic in topics:
             extra = ['--config', 'cleanup.policy=delete', '--config', 'retention.ms=-1'] if topic == 'bindings-automatic' else []
             self.command('docker', 'exec', self.broker, '/opt/kafka/bin/kafka-topics.sh', '--bootstrap-server', 'broker:9092',
                          '--create', '--topic', topic, '--partitions', '1', '--replication-factor', '1', *extra)
-        config = self.configuration(False)
+        config = self.configuration(bool(self.first_start))
+        if self.first_start:
+            config['snapshot.mode'] = self.first_start
         (self.directory / 'legacy-connector.json').write_text(json.dumps(config, indent=2))
         (self.control / 'automatic.owned-fixture').write_text(self.library)
         self.rest(worker, '/connectors', {'name': 'automatic', 'config': config})
@@ -157,10 +184,26 @@ class Experiment(automatic.Experiment):
             (self.directory / 'legacy-status.json').write_text(self.fixture.redact(json.dumps(status, indent=2)))
             if any(t['state'] == 'FAILED' for t in status['tasks']):
                 raise RuntimeError('Ordinary legacy startup failed; retained worker log and status')
-            return all(len(self.table_records(t, 'snapshot-' + t)) == 3 for t in ['A', 'B', 'M'])
+            return all(len(self.table_records(t, 'snapshot-' + t)) == self.snapshot_rows(t) for t in ['A', 'B', 'M'])
         base.wait_for('legacy snapshot', snapshot_complete, 150)
+        if self.first_start:
+            self.lifecycle(worker, 'handoff-complete')
         self.fixture.sql(f'INSERT INTO {self.library}.A VALUES (10)', 'legacy-insert.log', True)
         row = self.inserted('A', 10, 'legacy-insert')
+        if self.first_start:
+            saved = self.row_progress(row, 'first-start')
+            notifications = self.records(self.observer_container, 'snapshot-notifications', 'snapshot-notifications')
+            self.check('Standard snapshot notifications accompany acknowledged first start',
+                       {'STARTED', 'COMPLETED'} <= {r['value']['type'] for r in notifications}, 'control/snapshot-notifications.json')
+            self.check('Ordinary first start acknowledges the configured snapshot before native F/W and streaming',
+                       saved.get('offset.version') == '2' and all(
+                           sum(r['value'] is not None and r['value']['op'] == 'r' for r in self.table_records(t, 'first-start-' + t))
+                           == self.snapshot_rows(t) for t in ['A', 'B', 'M']), 'control/')
+            snapshot_values = [r['value'] for t in ['A', 'B', 'M'] for r in self.table_records(t, 'first-start-flags-' + t)
+                               if r['value'] and r['value']['op'] == 'r']
+            self.check('First-start snapshot completion marker follows the actual snapshot mode',
+                       sum(v['source']['snapshot'] == 'last' for v in snapshot_values) == (0 if self.first_start == 'no_data' else 1), 'control/')
+            return {t: self.table_records(t, 'before-migration-' + t) for t in ['A', 'B', 'M']}
         def completed():
             offset = self.checkpoint(self.observer_container, 'automatic', 'legacy')
             return offset if offset and offset.get('snapshot_completed') == 'true' and offset.get('offset.processed') == 'true' and int(offset['offset.event_sequence']) >= int(row['value']['source']['sequence']) else None
@@ -197,25 +240,28 @@ class Experiment(automatic.Experiment):
         first = self.start_worker('automatic', 'w1')
         baseline = self.setup_connector(first)
         self.audit_start = self.point()
-        busy = exp.connection(transaction=True)
-        exp.execute(busy, 'busy-before-enable', f'INSERT INTO {self.library}.U VALUES (90)')
-        config = self.configuration(True)
-        (self.directory / 'online-connector.json').write_text(json.dumps(config, indent=2))
-        self.request(first, 'automatic', 'PUT', '/config', config)
-        self.request(first, 'automatic', 'PUT', '/resume')
+        busy = None
+        if not self.first_start:
+            busy = exp.connection(transaction=True)
+            exp.execute(busy, 'busy-before-enable', f'INSERT INTO {self.library}.U VALUES (90)')
+            config = self.configuration(True)
+            (self.directory / 'online-connector.json').write_text(json.dumps(config, indent=2))
+            self.request(first, 'automatic', 'PUT', '/config', config)
+            self.request(first, 'automatic', 'PUT', '/resume')
         writer = exp.connection()
         for key in range(1000, 1010):
             exp.execute(writer, 'busy-writer', f'INSERT INTO {self.library}.A VALUES ({key})')
         rows = self.writer_output(list(range(1000, 1010)), 'busy-prefix')
-        self.check('Busy boundary leaves ordinary CDC progressing without prematurely enabling clears',
-                   len(rows) == 10 and 'offset.version' not in self.checkpoint(self.observer_container, 'automatic', 'busy'), 'control/')
-        exp.execute(busy, 'rollback'); self.close_session(busy)
-        self.lifecycle(first, 'handoff-complete')
+        if busy:
+            self.check('Busy boundary leaves ordinary CDC progressing without prematurely enabling clears',
+                       len(rows) == 10 and 'offset.version' not in self.checkpoint(self.observer_container, 'automatic', 'busy'), 'control/')
+            exp.execute(busy, 'rollback'); self.close_session(busy)
+            self.lifecycle(first, 'handoff-complete')
         saved = self.row_progress(rows[-1], 'migrated')
         self.check('Online admission exposes durable F/W after exact acknowledged legacy handoff',
                    saved.get('offset.version') == '2', 'control/')
         self.check('Enabling truncate adds no snapshot or duplicate legacy records',
-                   all(sum(r['value'] is not None and r['value']['op'] == 'r' for r in self.table_records(t, 'after-migration-' + t)) == 3 for t in baseline)
+                   all(sum(r['value'] is not None and r['value']['op'] == 'r' for r in self.table_records(t, 'after-migration-' + t)) == self.snapshot_rows(t) for t in baseline)
                    and [r['key']['ID'] for r in self.writer_output(list(range(1000, 1010)), 'prefix-final')] == list(range(1000, 1010)), 'control/')
         transaction = exp.connection(transaction=True)
         start = self.point()
@@ -230,6 +276,34 @@ class Experiment(automatic.Experiment):
         history = self.records(self.observer_container, 'bindings-automatic', 'history-before-crash')
         self.command('docker', 'kill', first)
         second = self.start_worker('automatic', 'w2')
+        if self.metadata_on_restart:
+            self.lifecycle(second, 'recovered')
+            self.request(second, 'automatic', 'PUT', '/stop')
+            base.wait_for('recovered connector stopped',
+                          lambda: self.rest(second, '/connectors/automatic/status')['connector']['state'] == 'STOPPED', 60)
+            self.lifecycle(second, 'drained')
+            recovered = self.logs[second].read_text().count('Transactional truncate test: recovered')
+            self.transaction_metadata = True
+            updated = self.configuration(True)
+            self.request(second, 'automatic', 'PUT', '/config', updated)
+            self.request(second, 'automatic', 'PUT', '/resume')
+            base.wait_for('reconfigured task recovered',
+                          lambda: self.logs[second].read_text().count('Transactional truncate test: recovered') > recovered, 180)
+            self.report['transaction_metadata'] = 'enabled after native checkpoint'
+            self.save()
+            # A transaction with metadata proves the replacement is using the
+            # new config, independently of REST acceptance or older log lines.
+            proof = exp.connection(transaction=True)
+            exp.execute(proof, 'output-reconfiguration', f'INSERT INTO {self.library}.A VALUES (3000)')
+            exp.execute(proof, 'commit')
+            self.close_session(proof)
+            row = self.inserted('A', 3000, 'output-reconfiguration')
+            changed_offset = self.row_progress(row, 'output-reconfiguration')
+            self.check('Output reconfiguration preserves open-transaction recovery and the existing source checkpoint identity',
+                       row['value'].get('transaction') is not None
+                       and changed_offset['capture_fingerprint'] == saved['capture_fingerprint']
+                       and changed_offset['replay_from.sequence'] == saved['replay_from.sequence']
+                       and self.table_records('B', 'reconfigured-open') == baseline['B'], 'control/')
         self.lifecycle(second, 'recovered')
         self.check('Fresh normal task resumes durable history without a new native boundary',
                    self.records(self.observer_container, 'bindings-automatic', 'history-after-crash') == history, 'control/')
@@ -240,7 +314,7 @@ class Experiment(automatic.Experiment):
         exp.execute(transaction, 'committed-reload', f'INSERT INTO {self.library}.B VALUES (201)')
         before = self.point(); exp.execute(transaction, 'commit')
         self.progressed(self.terminal(before, transaction[1], 'CM', 'commit'), 'commit')
-        self.check('Committed truncate precedes reload', [r['value']['op'] for r in self.table_records('B', 'commit')[3:]] == ['t', 'c'], 'control/')
+        self.check('Committed truncate precedes reload', [r['value']['op'] for r in self.table_records('B', 'commit')[len(baseline['B']):]] == ['t', 'c'], 'control/')
         # A different unchanged file remains eligible for IBM i's optimized DELETE.
         # Confirm the actual D/CG subtype independently; row DELETE is not a substitute.
         for outcome in ['rollback', 'commit']:
@@ -250,7 +324,7 @@ class Experiment(automatic.Experiment):
             self.progressed(self.terminal(before, transaction[1], 'RB' if outcome == 'rollback' else 'CM', 'delete-' + outcome), 'delete-' + outcome)
             output = self.table_records('M', 'delete-' + outcome)
             self.check('Optimized DELETE ' + outcome + ' obeys transaction outcome',
-                       output == baseline['M'] if outcome == 'rollback' else [r['value']['op'] for r in output[3:]] == ['t', 'c'], 'control/')
+                       output == baseline['M'] if outcome == 'rollback' else [r['value']['op'] for r in output[len(baseline['M']):]] == ['t', 'c'], 'control/')
         self.fixture.sql(f"UPDATE {self.library}.M SET S=-123,N=-12.34,D=0.001,C='XYZ',V=NULL,B=BX'FF00807F',VB=BX'1000FF',L=-9007199254740993,F=-1.5,G=3.25 WHERE ID=30", 'mixed-update.log', True)
         def updated():
             rows = self.table_records('M', 'mixed-update')
@@ -266,6 +340,8 @@ class Experiment(automatic.Experiment):
         subtypes = [bytes.fromhex(r['DATA_HEX'])[108:109].decode('cp037') for r in clears]
         self.check('Independent raw journal confirms subtype 8 TRUNCATE and subtype 3 optimized DELETE', subtypes.count('8') == 2 and subtypes.count('3') == 2, 'transactions-raw.json')
         self.report['raw_clear_subtypes'] = subtypes
+        if self.transaction_metadata:
+            self.verify_transaction_metadata(raw)
         self.close_session(transaction); self.close_session(writer)
         self.request(second, 'automatic', 'PUT', '/stop')
         self.lifecycle(second, 'drained')
@@ -287,16 +363,44 @@ class Experiment(automatic.Experiment):
                    all(self.table_records(t, 'downgrade-' + t) == rows for t, rows in before_missing.items())
                    and self.records(self.observer_container, 'bindings-automatic', 'downgrade-history') == history, 'control/')
         self.request(second, 'automatic', 'PUT', '/stop')
-        self.fixture.verify_rows({'A': [1, 2, 3, 10, 200, *range(1000, 1010)], 'B': [201], 'M': [30], 'U': [1, 2, 3]})
+        expected_a = [1, 2, 3, 10, 200, *range(1000, 1010)] + ([3000] if self.metadata_on_restart else [])
+        if self.first_start:
+            expected_a += list(range(4000, 4300))
+        self.fixture.verify_rows({'A': expected_a, 'B': [201], 'M': [30], 'U': [1, 2, 3]})
         self.report['status'] = 'passed'; self.save()
+
+    def verify_transaction_metadata(self, raw):
+        metadata = self.records(self.observer_container, 'test.transaction', 'transaction-metadata')
+        for clear in [r for r in raw if r['JOURNAL_CODE'] == 'D' and r['JOURNAL_ENTRY_TYPE'] == 'CG']:
+            cycle = str(clear['COMMIT_CYCLE'])
+            terminal = [r for r in raw if str(r['COMMIT_CYCLE']) == cycle and r['JOURNAL_CODE'] == 'C'
+                        and r['JOURNAL_ENTRY_TYPE'] in ['CM', 'RB']]
+            if len(terminal) != 1:
+                raise ValueError('One independent terminal required for each native clear')
+            output = [r['value'] for r in metadata if r['value'] is not None and r['value'].get('id') == cycle]
+            if terminal[0]['JOURNAL_ENTRY_TYPE'] == 'RB':
+                self.check('Rolled-back clear has no successful transaction metadata: ' + cycle, not output, 'transaction-metadata')
+                continue
+            self.check('Committed clear keeps legacy cycle ID and balanced transaction metadata: ' + cycle,
+                       [r['status'] for r in output] == ['BEGIN', 'END'] and output[-1]['event_count'] == 2, 'transaction-metadata')
+            data = [r['value'] for table in ['B', 'M'] for r in self.table_records(table, 'metadata-' + cycle + '-' + table)
+                    if r['value'] is not None and (r['value'].get('transaction') or {}).get('id') == cycle]
+            self.check('Clear and reload share their transaction ID and event ordering: ' + cycle,
+                       [r['op'] for r in data] == ['t', 'c']
+                       and [r['transaction']['total_order'] for r in data] == [1, 2], 'control/')
 
     def retain_failure_evidence(self):
         if not hasattr(self, 'observer_container'):
             return
         errors = []
-        for topic in ['offsets-automatic', 'bindings-automatic', CONTROL] + [f'test.{self.fixture.server_name}.{self.library}.{t}' for t in ['A', 'B', 'M']]:
+        for topic in ['offsets-automatic', 'bindings-automatic', CONTROL] + (['test.transaction'] if self.transaction_metadata else []):
             try:
                 self.records(self.observer_container, topic, 'failure-' + topic)
+            except Exception as error:
+                errors.append(self.fixture.redact(str(error)))
+        for table in ['A', 'B', 'M']:
+            try:
+                self.table_records(table, 'failure-' + table)
             except Exception as error:
                 errors.append(self.fixture.redact(str(error)))
         if hasattr(self, 'audit_start'):
@@ -307,9 +411,10 @@ class Experiment(automatic.Experiment):
         self.report['independent_failure_evidence'] = {'errors': errors}; self.save()
 
 
-def main():
-    if len(sys.argv) != 3:
-        raise SystemExit('Usage: dcg-public-online-probe.py NEW_DIRECTORY DCNCdddd; isolated IBM i writes and local Kafka')
+def main(experiment_type=Experiment, fixture_type=None):
+    if (len(sys.argv) not in [3, 4, 5] or len(sys.argv) >= 4 and sys.argv[3] not in ['eos', 'source-offsets']
+            or len(sys.argv) == 5 and sys.argv[4] not in ['metadata', 'metadata-restart', 'initial', 'no_data']):
+        raise SystemExit('Usage: dcg-public-online-probe.py NEW_DIRECTORY DCNCdddd [eos|source-offsets] [metadata|metadata-restart|initial|no_data]; isolated IBM i writes and local Kafka')
     import pyodbc
     pyodbc.pooling = False
     root = Path(sys.argv[1]).resolve(); root.mkdir(exist_ok=False)
@@ -320,11 +425,18 @@ def main():
             if name and path.is_file() and '__pycache__' not in name:
                 archive.write(path, name)
     capture = live.prospective.census.Experiment(root / 'native', sys.argv[2], 1)
-    capture.fixture.__class__ = packaged.continuous.MixedFixture
+    capture.fixture.__class__ = fixture_type or packaged.continuous.MixedFixture
     experiment = None
     try:
         capture.fixture.setup()
-        experiment = Experiment(root / 'connect', capture)
+        first_start = sys.argv[4] if len(sys.argv) == 5 and sys.argv[4] in ['initial', 'no_data'] else None
+        if first_start:
+            capture.fixture.sql(f'INSERT INTO {capture.library}.A VALUES ' + ','.join(f'({key})' for key in range(4000, 4300)),
+                                'first-start-seed.log', True)
+        experiment = experiment_type(root / 'connect', capture, delivery=sys.argv[3] if len(sys.argv) >= 4 else 'eos')
+        experiment.first_start = first_start
+        experiment.transaction_metadata = len(sys.argv) == 5 and sys.argv[4] == 'metadata'
+        experiment.metadata_on_restart = len(sys.argv) == 5 and sys.argv[4] == 'metadata-restart'
         experiment.stage(); experiment.start_broker(); experiment.observer(); experiment.exercise()
         capture.report.update(status='passed', source_connected=True, publication='Ordinary packaged plugin with public opt-in')
     except BaseException as error:

@@ -58,6 +58,8 @@ class CompleteRowEntryDecoderTest {
         System.arraycopy(captured, 0, buffer, offset, captured.length);
         EntryHeader entry = new EntryHeaderDecoder().decode(buffer, offset);
         assertEquals(BigInteger.valueOf(sequence), entry.getSequenceNumber());
+        // The second capture follows a clear: RRN 1 is reused for value 2.
+        assertEquals(BigInteger.valueOf(expected == 1 ? 1 : expected - 1), entry.getRelativeRecordNumber());
         assertEquals('R', entry.getJournalCode());
         assertEquals("PT", entry.getEntryType());
         assertEquals(236, entry.getNullValueOffest());
@@ -217,6 +219,22 @@ class CompleteRowEntryDecoderTest {
         assertArrayEquals(new byte[]{ 7, 8 }, (byte[]) row[1]);
     }
 
+    @ParameterizedTest
+    @ValueSource(ints = { 1200, 13488, 1208 })
+    void shouldDecodeUnicodeLengthUnitsWithoutConsumingTheFollowingColumn(int ccsid) throws Exception {
+        int unit = ccsid == 1208 ? 1 : 2;
+        var varying = new AS400VarChar(6 / unit, unit, ccsid);
+        var decoder = decoder(varying, new AS400Bin4());
+        prefix(12);
+        byte[] text = "Ä界".getBytes(ccsid == 1208 ? StandardCharsets.UTF_8 : StandardCharsets.UTF_16BE);
+        ByteBuffer.wrap(data).putShort(OFFSET + 256, (short) (text.length / unit)).putInt(OFFSET + 264, 42);
+        System.arraycopy(text, 0, data, OFFSET + 258, text.length);
+        nulls(0xf0, 0xf0);
+        assertArrayEquals(new Object[]{ "Ä界", 42 }, decoder.decode(header(12, 280, (byte) 0), data, OFFSET));
+        ByteBuffer.wrap(data).putShort(OFFSET + 256, (short) (6 / unit + 1));
+        assertThrows(IOException.class, () -> decoder.decode(header(12, 280, (byte) 0), data, OFFSET));
+    }
+
     @Test
     void rejectsXmlPlaceholderCodecEvenForNullColumns() {
         assertThrows(IllegalArgumentException.class, () -> decoder(new AS400Xml()));
@@ -226,6 +244,37 @@ class CompleteRowEntryDecoderTest {
     void rejectsOversizedPhysicalLayoutBeforeMaterialization() {
         assertThrows(IllegalArgumentException.class,
                 () -> new CompleteRowEntryDecoder(new AS400DataType[]{ new AS400Text(101) }, new boolean[]{ false }, 100));
+    }
+
+    @Test
+    void shouldDecodeTheNativeFieldLimitAndValidateTheLastNullIndicator() throws Exception {
+        int count = 8000;
+        int bytes = count * 4;
+        int nullOffset = 256 + bytes;
+        int end = nullOffset + 4 + count;
+        byte[] raw = new byte[OFFSET + end];
+        new AS400Text(5, 37).toBytes(String.format("%05d", bytes), raw, OFFSET + 240);
+        ByteBuffer buffer = ByteBuffer.wrap(raw);
+        buffer.putInt(OFFSET + nullOffset, count);
+        var types = new AS400DataType[count];
+        var nullable = new boolean[count];
+        Object[] expected = new Object[count];
+        for (int i = 0; i < count; i++) {
+            types[i] = new AS400Bin4();
+            nullable[i] = true;
+            buffer.putInt(OFFSET + 256 + i * 4, i);
+            raw[OFFSET + nullOffset + 4 + i] = (byte) (i % 2 == 0 ? 0xf0 : 0xf1);
+            expected[i] = i % 2 == 0 ? i : null;
+        }
+        var entry = new EntryHeader(end, nullOffset, 240, BigInteger.ONE, BigInteger.ONE, Instant.EPOCH,
+                'R', "PT", "TEST      LIB       TEST      ", BigInteger.TEN, end, 0, "RCV", "LIB",
+                new EntryHeader.ControlInfo('1', 0, false, false, (byte) 0));
+        var decoder = new CompleteRowEntryDecoder(types, nullable, bytes);
+        assertArrayEquals(expected, decoder.decode(entry, raw, OFFSET));
+        raw[OFFSET + end - 1] = (byte) 0xf9;
+        assertThrows(IOException.class, () -> decoder.decode(entry, raw, OFFSET));
+        assertThrows(IllegalArgumentException.class, () -> new CompleteRowEntryDecoder(types, nullable, bytes - 1));
+        assertThrows(IllegalArgumentException.class, () -> new CompleteRowEntryDecoder(new AS400DataType[8001], new boolean[8001], 65536));
     }
 
     private CompleteRowEntryDecoder decoder(AS400DataType... columns) {

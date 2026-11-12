@@ -29,17 +29,18 @@ import io.debezium.ibmi.db2.journal.retrieve.TransactionControlEntryDecoder.Outc
 import io.debezium.ibmi.db2.journal.retrieve.rjne0200.EntryHeader;
 
 /**
- * Single-threaded replay and serial output coordinator, not wired into streaming.
+ * Single-threaded replay and serial output coordinator used by the admitted source.
  * Restarts from an offset supplied by the durable offset store; enqueue success is
  * NOT durability. The sink must preserve source-partition order and acknowledge a
  * prefix of that order before persisting offsets. Scheduled heartbeats must be
- * marshalled onto the same thread/queue. Kafka Connect integration remains a gate.
+ * marshalled onto the same thread/queue. Scratch storage is never restart authority.
  */
 final class As400ReplayCoordinator implements AutoCloseable {
     private final As400Checkpoint loaded;
     private final As400JournalOrder order;
     private final As400TransactionBuffer buffer;
     private final As400SourceNormalizer normalizer;
+    private final As400SourceNormalizer.TableResolver tables;
     private final As400AutocommitBuffer autocommit;
     private final As400JournalLifecycle journalLifecycle;
     private final Limits limits;
@@ -47,7 +48,9 @@ final class As400ReplayCoordinator implements AutoCloseable {
     private final Map<String, ?> sourcePartition;
     private final RecordSink sink;
     private final TransactionControlEntryDecoder controls = new TransactionControlEntryDecoder();
-    private final Set<BigInteger> orphans = new HashSet<>();
+    private final Set<BigInteger> orphans;
+    private final As400SpillStore spill;
+    private final As400SpillStore.Codec<SourceRecord> outputCodec;
     private As400Checkpoint checkpoint;
     private JournalPosition completed;
     private JournalPosition scan;
@@ -95,6 +98,15 @@ final class As400ReplayCoordinator implements AutoCloseable {
                            As400JournalOrder order, Limits limits, long maximumRowBytes, int maximumOutputRecords,
                            As400SourceNormalizer.TableResolver tables, As400SourceNormalizer.SavepointPolicy savepoints,
                            Map<String, ?> sourcePartition, RecordSink sink, As400JournalLifecycle.Limits lifecycleLimits, boolean ordinary) {
+        this(persistedOffset, journalIdentity, fingerprint, order, limits, maximumRowBytes, maximumOutputRecords,
+                tables, savepoints, sourcePartition, sink, lifecycleLimits, ordinary, null);
+    }
+
+    As400ReplayCoordinator(Map<String, ?> persistedOffset, String journalIdentity, String fingerprint,
+                           As400JournalOrder order, Limits limits, long maximumRowBytes, int maximumOutputRecords,
+                           As400SourceNormalizer.TableResolver tables, As400SourceNormalizer.SavepointPolicy savepoints,
+                           Map<String, ?> sourcePartition, RecordSink sink, As400JournalLifecycle.Limits lifecycleLimits, boolean ordinary,
+                           As400SpillStore spill) {
         if (ordinary && lifecycleLimits == null) {
             throw new IllegalArgumentException("Ordinary CDC requires the native lifecycle validator");
         }
@@ -107,6 +119,10 @@ final class As400ReplayCoordinator implements AutoCloseable {
             throw new IllegalArgumentException("Bounded output and a source partition are required");
         }
         this.maximumOutputRecords = maximumOutputRecords;
+        this.spill = spill;
+        this.tables = tables;
+        outputCodec = spill == null ? null : As400SourceRecordCodec.stored(spill);
+        orphans = spill == null ? new HashSet<>() : spill.set("orphan-cycles", As400SpillCodec.INTEGER);
         int floorVsCompleted = order.compare(loaded.replayFrom(), loaded.completedThrough());
         if (!order.incarnation(loaded.replayFrom()).equals(loaded.replayReceiverIdentity())
                 || !order.incarnation(loaded.completedThrough()).equals(loaded.completedReceiverIdentity())) {
@@ -115,11 +131,11 @@ final class As400ReplayCoordinator implements AutoCloseable {
         replaying = loaded.replayInclusive() && floorVsCompleted <= 0;
         checkpoint = loaded;
         completed = loaded.completedThrough();
-        buffer = new As400TransactionBuffer(journalIdentity, limits);
-        autocommit = ordinary ? new As400AutocommitBuffer(journalIdentity, limits, buffer::usage) : null;
+        buffer = new As400TransactionBuffer(journalIdentity, limits, spill);
+        autocommit = ordinary ? new As400AutocommitBuffer(journalIdentity, limits, buffer::usage, spill) : null;
         normalizer = new As400SourceNormalizer(buffer, tables, maximumRowBytes,
                 lifecycleLimits == null ? savepoints : As400SourceNormalizer.SavepointPolicy.consumingTargets(), autocommit);
-        journalLifecycle = lifecycleLimits == null ? null : new As400JournalLifecycle(lifecycleLimits, tables, order, loaded, ordinary);
+        journalLifecycle = lifecycleLimits == null ? null : new As400JournalLifecycle(lifecycleLimits, tables, order, loaded, ordinary, spill);
     }
 
     /** R is diagnostic/read state only. It is deliberately absent from serialized offsets. */
@@ -290,7 +306,10 @@ final class As400ReplayCoordinator implements AutoCloseable {
             do {
                 CommittedBatch batch = pending;
                 Map<String, String> frozen = checkpoint.toOffset();
-                List<SourceRecord> prepared = new ArrayList<>();
+                List<SourceRecord> prepared = spill == null ? new ArrayList<>() : spill.list("prepared-output", outputCodec);
+                if (!prepared.isEmpty()) {
+                    throw new IllegalStateException("Output from another batch is still retained");
+                }
                 boolean[] collecting = { true };
                 try {
                     factory.prepare(batch, record -> {
@@ -314,9 +333,10 @@ final class As400ReplayCoordinator implements AutoCloseable {
                 for (SourceRecord record : prepared) {
                     enqueue(record);
                 }
+                prepared.clear();
                 completeBatch(batch);
                 pending = null;
-                advance(batch.commitPosition());
+                advance(batch.commitPosition(), factory.snapshotState().orElse(checkpoint.snapshotState()));
                 if (journalLifecycle != null) {
                     drainValidatedEntries();
                 }
@@ -324,6 +344,47 @@ final class As400ReplayCoordinator implements AutoCloseable {
         }
         catch (Exception e) {
             throw stop("Batch delivery failed; replay the whole batch from a durable checkpoint", e);
+        }
+        finally {
+            busy = false;
+        }
+    }
+
+    /** Snapshot signals use the same all-prepared, ordered publication boundary as row batches. */
+    void deliverSignals(RecordFactory factory) {
+        try {
+            ensureRunning();
+            if (pending != null || busy) {
+                throw new IllegalStateException("Signals cannot overlap committed batch publication");
+            }
+            busy = true;
+            var frozen = checkpoint.toOffset();
+            List<SourceRecord> prepared = spill == null ? new ArrayList<>() : spill.list("prepared-signals", outputCodec);
+            if (!prepared.isEmpty()) {
+                throw new IllegalStateException("Previous signal output is still retained");
+            }
+            boolean[] collecting = { true };
+            try {
+                factory.prepareSignals(record -> {
+                    ensureRunning();
+                    if (!collecting[0] || prepared.size() >= maximumOutputRecords) {
+                        throw stop("Required signal output rejected", new IllegalArgumentException("Late or oversized snapshot signal output"));
+                    }
+                    prepared.add(stamp(record, frozen));
+                });
+            }
+            finally {
+                collecting[0] = false;
+            }
+            ensureRunning();
+            for (var record : prepared) {
+                enqueue(record);
+            }
+            prepared.clear();
+            checkpoint = checkpoint.withSnapshotState(factory.snapshotState().orElse(checkpoint.snapshotState()));
+        }
+        catch (Exception e) {
+            throw stop("Signal delivery failed; restore the durable snapshot checkpoint", e);
         }
         finally {
             busy = false;
@@ -397,10 +458,14 @@ final class As400ReplayCoordinator implements AutoCloseable {
     }
 
     private void advance(JournalPosition boundary) {
+        advance(boundary, checkpoint.snapshotState());
+    }
+
+    private void advance(JournalPosition boundary, Map<String, String> snapshotState) {
         if (order.compare(boundary, completed) <= 0) {
             throw new IllegalArgumentException("Completed boundary must advance");
         }
-        As400Checkpoint next = snapshot(boundary);
+        As400Checkpoint next = snapshot(boundary).withSnapshotState(snapshotState);
         completed = boundary;
         checkpoint = next;
     }
@@ -421,8 +486,8 @@ final class As400ReplayCoordinator implements AutoCloseable {
             oldest = Optional.empty();
         }
         As400Checkpoint snapshot = new As400Checkpoint(loaded.journalIdentity(), loaded.captureFingerprint(), oldest.orElse(boundary), oldest.isPresent(), boundary,
-                order.incarnation(oldest.orElse(boundary)), order.incarnation(boundary));
-        return journalLifecycle == null ? snapshot : journalLifecycle.retainContext(snapshot);
+                order.incarnation(oldest.orElse(boundary)), order.incarnation(boundary), checkpoint.snapshotState(), checkpoint.schemaState());
+        return tables.schemaCheckpoint(journalLifecycle == null ? snapshot : journalLifecycle.retainContext(snapshot));
     }
 
     private void completeBatch(CommittedBatch batch) {
@@ -485,13 +550,30 @@ final class As400ReplayCoordinator implements AutoCloseable {
         if (journalLifecycle != null) {
             journalLifecycle.close();
         }
-        orphans.clear();
+        if (spill == null) {
+            orphans.clear();
+        }
         pending = null;
     }
 
     interface RecordFactory {
         /** Synchronously prepare complete immutable record values; do not retain the collector. */
         void prepare(CommittedBatch batch, Consumer<SourceRecord> records) throws Exception;
+
+        default boolean needsValues(io.debezium.relational.TableId table) {
+            return true;
+        }
+
+        default void prepareSignals(Consumer<SourceRecord> records) throws Exception {
+        }
+
+        default boolean hasSignalWork() {
+            return false;
+        }
+
+        default Optional<Map<String, String>> snapshotState() {
+            return Optional.empty();
+        }
     }
 
     interface RecordSink {

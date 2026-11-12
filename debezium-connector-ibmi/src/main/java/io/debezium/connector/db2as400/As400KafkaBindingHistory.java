@@ -29,21 +29,24 @@ import io.debezium.storage.kafka.history.KafkaSchemaHistory;
  * Standard Kafka history writes/storage with strict bounded recovery. The base
  * recovery loop skips null/invalid/unparseable records before notifying listeners.
  * A binding manifest must instead reject them, holes, or a moving history cut.
- * Online proposals use a bounded eligible prefix: excess stale appends cannot be
- * selected or invalidate an earlier acknowledged candidate. Strict baseline
- * history still rejects overflow. Dedicated one-partition, immutable history only.
+ * Legacy offsets retain their bounded eligible prefix. Paged generations stream
+ * a fixed log cut with bounded records/fetches; strict baseline history still
+ * rejects overflow. Dedicated one-partition, immutable history only.
  */
-final class As400KafkaBindingHistory extends KafkaSchemaHistory {
+final class As400KafkaBindingHistory extends KafkaSchemaHistory implements As400BindingHistory.BoundedRecovery {
     private static final Duration TIMEOUT = Duration.ofSeconds(30);
     private Properties readConfig;
     private String topic;
     private boolean candidateAppends;
+    private boolean pagedCandidates;
+    private boolean eligibleLegacyRecord;
     private As400BindingHistory.HistoryBudget budget = new As400BindingHistory.HistoryBudget();
 
     @Override
     public void configure(Configuration config, HistoryRecordComparator comparator, SchemaHistoryListener listener, boolean useCatalogBeforeSchema) {
         super.configure(config, comparator, listener, useCatalogBeforeSchema);
         candidateAppends = false;
+        pagedCandidates = false;
         topic = config.getString(TOPIC);
         readConfig = config.subset(CONFIGURATION_FIELD_PREFIX_STRING + "consumer.", true).edit()
                 .with(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, config.getString(BOOTSTRAP_SERVERS))
@@ -52,24 +55,59 @@ final class As400KafkaBindingHistory extends KafkaSchemaHistory {
                 .with(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, false)
                 .with(ConsumerConfig.ALLOW_AUTO_CREATE_TOPICS_CONFIG, false)
                 .with(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "none")
+                .with(ConsumerConfig.MAX_POLL_RECORDS_CONFIG, 32)
+                .with(ConsumerConfig.FETCH_MAX_BYTES_CONFIG, As400BindingHistory.MAX_RECORD_BYTES)
+                .with(ConsumerConfig.MAX_PARTITION_FETCH_BYTES_CONFIG, As400BindingHistory.MAX_RECORD_BYTES)
                 .with(ConsumerConfig.ISOLATION_LEVEL_CONFIG, "read_uncommitted")
                 .with(ConsumerConfig.DEFAULT_API_TIMEOUT_MS_CONFIG, 30_000)
                 .with(ConsumerConfig.REQUEST_TIMEOUT_MS_CONFIG, 10_000).build().asProperties();
     }
 
     /** Only immutable online proposals may append beyond this read's fixed log cut. */
-    void allowCandidateAppends() {
+    @Override
+    public void allowCandidateAppends() {
         candidateAppends = true;
     }
 
-    As400BindingHistory.HistoryBudget recoveryBudget() {
+    @Override
+    public void allowPagedCandidates() {
+        candidateAppends = true;
+        pagedCandidates = true;
+    }
+
+    @Override
+    public As400BindingHistory.HistoryBudget recoveryBudget() {
         return budget;
+    }
+
+    @Override
+    public boolean eligibleLegacyRecord() {
+        return eligibleLegacyRecord;
+    }
+
+    void requireEmptyForSnapshot() throws InterruptedException {
+        checkInterrupted();
+        if (!storageExists()) {
+            return;
+        }
+        try (var consumer = new KafkaConsumer<byte[], byte[]>(readConfig)) {
+            var partition = new TopicPartition(topic, 0);
+            var partitions = List.of(partition);
+            require(consumer.partitionsFor(topic, TIMEOUT).size() == 1, "Exactly one binding-history partition required");
+            var begin = consumer.beginningOffsets(partitions, TIMEOUT).get(partition);
+            var end = consumer.endOffsets(partitions, TIMEOUT).get(partition);
+            // An emptied retained topic can have begin == end > 0. Core exists()
+            // reports it as empty; it is not evidence of a never-used generation.
+            require(Long.valueOf(0).equals(begin) && Long.valueOf(0).equals(end),
+                    "Missing offsets cannot select automatic migration or a new snapshot with retained binding history");
+        }
     }
 
     @Override
     protected void recoverRecords(Consumer<HistoryRecord> records) throws InterruptedException {
         checkInterrupted();
-        budget = new As400BindingHistory.HistoryBudget();
+        budget = new As400BindingHistory.HistoryBudget(pagedCandidates);
+        var legacyBudget = new As400BindingHistory.HistoryBudget();
         try (var consumer = new KafkaConsumer<byte[], byte[]>(readConfig)) {
             var partition = new TopicPartition(topic, 0);
             var partitions = List.of(partition);
@@ -78,7 +116,7 @@ final class As400KafkaBindingHistory extends KafkaSchemaHistory {
             require(consumer.beginningOffsets(partitions, TIMEOUT).get(partition) == 0, "Binding history prefix was removed");
             long end = consumer.endOffsets(partitions, TIMEOUT).get(partition);
             require(end > 0 && (candidateAppends || end <= As400BindingHistory.MAX_HISTORY_RECORDS), "Missing or oversized binding history");
-            if (candidateAppends) {
+            if (candidateAppends && !pagedCandidates) {
                 end = Math.min(end, As400BindingHistory.MAX_HISTORY_RECORDS);
             }
             consumer.seek(partition, 0);
@@ -108,8 +146,14 @@ final class As400KafkaBindingHistory extends KafkaSchemaHistory {
                     catch (Exception e) {
                         throw new SchemaHistoryException("Malformed binding history at offset " + record.offset(), e);
                     }
+                    eligibleLegacyRecord = !pagedCandidates || legacyBudget.accept(record.value().length, true);
                     records.accept(history);
                     next++;
+                    // Bound a stalled fetch, not the lifetime size of an
+                    // immutable log which is being consumed incrementally.
+                    if (pagedCandidates) {
+                        deadline = System.nanoTime() + TIMEOUT.toNanos();
+                    }
                 }
             }
             long currentEnd = consumer.endOffsets(partitions, TIMEOUT).get(partition);

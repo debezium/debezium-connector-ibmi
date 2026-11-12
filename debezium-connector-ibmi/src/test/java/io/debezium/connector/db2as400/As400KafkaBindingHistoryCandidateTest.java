@@ -41,6 +41,33 @@ class As400KafkaBindingHistoryCandidateTest {
     Path directory;
 
     @ParameterizedTest
+    @ValueSource(strings = { "empty", "records", "removed-prefix", "multiple-partitions", "unavailable" })
+    void shouldPermitFirstSnapshotOnlyWhenKafkaHistoryHasNeverContainedRecords(String state) throws Exception {
+        var partition = new TopicPartition("history", 0);
+        var info = mock(PartitionInfo.class);
+        var config = Configuration.create().with(KafkaSchemaHistory.BOOTSTRAP_SERVERS, "unused.invalid:9092")
+                .with(KafkaSchemaHistory.TOPIC, "history").build();
+        try (var consumers = mockConstruction(KafkaConsumer.class, (consumer, ignored) -> {
+            when(consumer.listTopics()).thenReturn(Map.of("history", List.of(info)));
+            when(consumer.partitionsFor(anyString(), any())).thenReturn(state.equals("multiple-partitions") ? List.of(info, info) : List.of(info));
+            when(consumer.beginningOffsets(any(), any())).thenReturn(Map.of(partition, state.equals("removed-prefix") ? 9L : 0L));
+            when(consumer.endOffsets(any(), any())).thenReturn(Map.of(partition, state.equals("empty") ? 0L : 9L));
+            if (state.equals("unavailable")) {
+                when(consumer.endOffsets(any(), any())).thenThrow(new org.apache.kafka.common.errors.TimeoutException("unavailable"));
+            }
+        })) {
+            var history = new As400KafkaBindingHistory();
+            history.configure(config, HistoryRecordComparator.INSTANCE, SchemaHistoryListener.NOOP, false);
+            if (state.equals("empty")) {
+                history.requireEmptyForSnapshot();
+            }
+            else {
+                assertThrows(Exception.class, history::requireEmptyForSnapshot);
+            }
+        }
+    }
+
+    @ParameterizedTest
     @ValueSource(strings = { "records", "bytes" })
     void shouldRecoverOnlyTheBoundedEligiblePrefixWhenLateProposalsExceedCapacity(String bound) throws Exception {
         var f = new Fixture(directory);
@@ -79,11 +106,19 @@ class As400KafkaBindingHistoryCandidateTest {
             strict.configure(config, HistoryRecordComparator.INSTANCE, SchemaHistoryListener.NOOP, false);
             assertThrows(Exception.class, () -> strict.recoverRecords(record -> {
             }));
+            var paged = new As400KafkaBindingHistory();
+            paged.configure(config, HistoryRecordComparator.INSTANCE, SchemaHistoryListener.NOOP, false);
+            paged.allowPagedCandidates();
+            var count = new java.util.concurrent.atomic.AtomicInteger();
+            paged.recoverRecords(record -> count.incrementAndGet());
+            assertThat(count.get()).isEqualTo(input.size());
+            paged.recoveryBudget().requireAppend(value.length);
         }
     }
 
     @ParameterizedTest
-    @ValueSource(strings = { "candidate-growing", "strict-growing", "candidate-gap", "candidate-null", "candidate-removed", "candidate-truncated", "reconfigured" })
+    @ValueSource(strings = { "candidate-growing", "strict-growing", "candidate-gap", "candidate-null", "candidate-removed", "candidate-truncated", "reconfigured",
+            "paged-growing", "paged-gap", "paged-null", "paged-removed", "paged-truncated" })
     void immutableCandidateReadAllowsOnlyAppendBeyondItsVerifiedCut(String mode) throws Exception {
         var f = new Fixture(directory);
         f.initialize();
@@ -93,10 +128,10 @@ class As400KafkaBindingHistoryCandidateTest {
                 .with(KafkaSchemaHistory.TOPIC, "history").build();
         try (var consumers = mockConstruction(KafkaConsumer.class, (consumer, ignored) -> {
             when(consumer.partitionsFor(anyString(), any())).thenReturn(List.of(mock(PartitionInfo.class)));
-            when(consumer.beginningOffsets(any(), any())).thenReturn(Map.of(partition, 0L), Map.of(partition, mode.equals("candidate-removed") ? 1L : 0L));
-            when(consumer.endOffsets(any(), any())).thenReturn(Map.of(partition, 1L), Map.of(partition, mode.equals("candidate-truncated") ? 0L : 2L));
-            var first = new ConsumerRecord<byte[], byte[]>("history", 0, mode.equals("candidate-gap") ? 1 : 0, null,
-                    mode.equals("candidate-null") ? null : value);
+            when(consumer.beginningOffsets(any(), any())).thenReturn(Map.of(partition, 0L), Map.of(partition, mode.endsWith("-removed") ? 1L : 0L));
+            when(consumer.endOffsets(any(), any())).thenReturn(Map.of(partition, 1L), Map.of(partition, mode.endsWith("-truncated") ? 0L : 2L));
+            var first = new ConsumerRecord<byte[], byte[]>("history", 0, mode.endsWith("-gap") ? 1 : 0, null,
+                    mode.endsWith("-null") ? null : value);
             var appended = new ConsumerRecord<byte[], byte[]>("history", 0, 1, null, value);
             when(consumer.poll(any(java.time.Duration.class))).thenReturn(new ConsumerRecords<>(Map.of(partition, List.of(first, appended)), Map.of()));
         })) {
@@ -105,11 +140,14 @@ class As400KafkaBindingHistoryCandidateTest {
             if (!mode.equals("strict-growing")) {
                 history.allowCandidateAppends();
             }
+            if (mode.startsWith("paged-")) {
+                history.allowPagedCandidates();
+            }
             if (mode.equals("reconfigured")) {
                 history.configure(raw, HistoryRecordComparator.INSTANCE, SchemaHistoryListener.NOOP, false);
             }
             var records = new ArrayList<HistoryRecord>();
-            if (mode.equals("candidate-growing")) {
+            if (mode.equals("candidate-growing") || mode.equals("paged-growing")) {
                 history.recoverRecords(records::add);
                 assertThat(records).hasSize(1);
             }

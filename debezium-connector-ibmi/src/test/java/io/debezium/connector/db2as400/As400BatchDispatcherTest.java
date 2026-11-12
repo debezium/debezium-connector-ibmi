@@ -43,7 +43,6 @@ import io.debezium.ibmi.db2.journal.retrieve.rjne0200.EntryHeader;
 import io.debezium.pipeline.txmetadata.TransactionMonitor;
 import io.debezium.relational.TableId;
 import io.debezium.relational.TableSchema;
-import io.debezium.schema.AbstractTopicNamingStrategy;
 import io.debezium.schema.DatabaseSchema;
 
 class As400BatchDispatcherTest {
@@ -61,6 +60,79 @@ class As400BatchDispatcherTest {
     private static final List<String> OPERATIONS = List.of("BEGIN", "t", "c", "d", "tombstone", "c", "d", "tombstone", "c", "END");
 
     @ParameterizedTest
+    @ValueSource(strings = { "warn", "skip" })
+    void shouldHonorLossyRowPolicyButNeverSkipAFailedClear(String mode) throws Exception {
+        var properties = Map.of("truncate.transactional.enabled", "true", "event.processing.failure.handling.mode", mode);
+        var fixture = new Fixture(properties, 20);
+        fixture.schema.failValue = 2;
+        var records = new ArrayList<SourceRecord>();
+        try (var output = fixture.output; var replay = replay(INITIAL.toOffset(), records::add)) {
+            feedBatch(replay);
+            replay.deliver(output);
+            assertThat(records).extracting(As400BatchDispatcherTest::operation).containsExactly("BEGIN", "t", "c", "c", "END");
+            assertThat(value(records.get(records.size() - 1)).getInt64("event_count")).isEqualTo(3L);
+            assertThat(replay.checkpoint().completedThrough()).isEqualTo(pos(9));
+        }
+        records.clear();
+        fixture = new Fixture(properties, 20);
+        fixture.schema.available = false;
+        try (var output = fixture.output; var replay = replay(INITIAL.toOffset(), records::add)) {
+            feedBatch(replay);
+            assertThatThrownBy(() -> replay.deliver(output)).isInstanceOf(As400ReplayCoordinator.RecoveryException.class)
+                    .hasRootCauseMessage("Required buffered dispatch was rejected for DB.LIB.TEST");
+            assertThat(records).isEmpty();
+            assertThat(replay.checkpoint().completedThrough()).isEqualTo(INITIAL.completedThrough());
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = { "warn", "skip" })
+    void shouldDiscardPartialKeyChangeAndItsMetadataWhenRowDispatchIsSkipped(String mode) throws Exception {
+        var fixture = new Fixture(Map.of("truncate.transactional.enabled", "true", "event.processing.failure.handling.mode", mode), 20);
+        var listener = org.mockito.Mockito.mock(io.debezium.pipeline.source.spi.DataChangeEventListener.class);
+        org.mockito.Mockito.doAnswer(invocation -> {
+            if (invocation.getArgument(5) == Envelope.Operation.CREATE
+                    && ((Struct) invocation.getArgument(3)).getInt32("ID") == 2) {
+                throw new IllegalStateException("Controlled row dispatch failure after old-key delete");
+            }
+            return null;
+        }).when(listener).onEvent(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any());
+        fixture.output.eventDispatcher().setEventListener(listener);
+        var records = new ArrayList<SourceRecord>();
+        try (var output = fixture.output; var replay = replay(INITIAL.toOffset(), records::add)) {
+            feedBatch(replay);
+            replay.deliver(output);
+            assertThat(records).extracting(As400BatchDispatcherTest::operation).containsExactly("BEGIN", "t", "c", "d", "tombstone", "c", "END");
+            assertThat(value(records.get(records.size() - 1)).getInt64("event_count")).isEqualTo(4L);
+            assertThat(replay.checkpoint().completedThrough()).isEqualTo(pos(9));
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = { "c", "d", "c,u,d" })
+    void shouldHonorOrdinaryOperationFiltersWithoutSkippingTransactionRecovery(String skipped) throws Exception {
+        var expected = switch (skipped) {
+            case "c" -> List.of("BEGIN", "t", "d", "tombstone", "d", "tombstone", "END");
+            case "d" -> List.of("BEGIN", "t", "c", "c", "c", "END");
+            default -> List.of("BEGIN", "t", "END");
+        };
+        var records = new ArrayList<SourceRecord>();
+        try (var output = new Fixture(Map.of("skipped.operations", skipped), 20).output;
+                var replay = replay(INITIAL.toOffset(), records::add)) {
+            feedBatch(replay);
+            replay.deliver(output);
+            assertThat(records).extracting(As400BatchDispatcherTest::operation).containsExactlyElementsOf(expected);
+            long delivered = expected.stream().filter(op -> List.of("t", "c", "d", "u").contains(op)).count();
+            assertThat(value(records.get(records.size() - 1)).getInt64("event_count")).isEqualTo(delivered);
+            assertThat(replay.checkpoint().completedThrough()).isEqualTo(pos(9));
+            assertThat(records).allSatisfy(record -> assertThat(record.sourceOffset().get("completed_through.sequence")).isEqualTo("1"));
+            assertThat(output.publishCheckpoint(replay, true)).isTrue();
+            assertThat(records.get(records.size() - 1).sourceOffset().get("completed_through.sequence")).isEqualTo("9");
+        }
+    }
+
+    @ParameterizedTest
     @ValueSource(strings = { "json-schema", "json", "avro" })
     void convertersPreserveKeylessTruncateAndTombstones(String encoding) throws Exception {
         Fixture fixture = new Fixture(Map.of(), 20);
@@ -73,9 +145,10 @@ class As400BatchDispatcherTest {
         }
     }
 
-    @Test
-    void realMetadataKeyChangeAndTombstonesShareThePreviousCheckpoint() throws Exception {
-        Fixture fixture = new Fixture(Map.of(), 20);
+    @ParameterizedTest
+    @ValueSource(booleans = { false, true })
+    void realMetadataKeyChangeAndTombstonesShareThePreviousCheckpoint(boolean online) throws Exception {
+        Fixture fixture = new Fixture(Map.of("truncate.transactional.enabled", Boolean.toString(online)), 20);
         List<SourceRecord> records = new ArrayList<>();
         try (var output = fixture.output; var replay = replay(INITIAL.toOffset(), record -> records.add(record))) {
             feedBatch(replay);
@@ -89,7 +162,12 @@ class As400BatchDispatcherTest {
                 assertThatThrownBy(() -> record.sourceOffset().clear()).isInstanceOf(UnsupportedOperationException.class);
             });
             assertThat(records.get(0).topic()).isEqualTo("test.transaction");
-            assertThat(value(records.get(0)).getString("id")).startsWith("dcg-v1:");
+            if (online) {
+                assertThat(value(records.get(0)).getString("id")).isEqualTo("10");
+            }
+            else {
+                assertThat(value(records.get(0)).getString("id")).startsWith("dcg-v1:");
+            }
             assertThat(value(records.get(9)).getString("id")).isEqualTo(value(records.get(0)).getString("id"));
             assertThat(value(records.get(0)).getInt64("ts_ms")).isEqualTo(2_000L);
             assertThat(value(records.get(9)).getInt64("ts_ms")).isEqualTo(9_000L);
@@ -98,6 +176,7 @@ class As400BatchDispatcherTest {
             List<SourceRecord> data = records.stream().filter(r -> r.value() != null && value(r).schema().field("op") != null).toList();
             assertThat(data).extracting(r -> value(r).getStruct("transaction").getInt64("total_order")).containsExactly(1L, 2L, 3L, 4L, 5L, 6L);
             assertThat(data).extracting(r -> value(r).getStruct("source").getString("sequence")).containsExactly("3", "4", "6", "6", "7", "8");
+            assertThat(data).extracting(r -> value(r).getStruct("source").getString("rrn")).containsExactly(null, "1", "1", "1", "1", "1");
             assertThat(data).extracting(r -> value(r).getStruct("source").getInt64("ts_ms")).containsExactly(3000L, 4000L, 6000L, 6000L, 7000L, 8000L);
             assertThat(data).allSatisfy(r -> {
                 assertThat(value(r).getStruct("source").getString("receiver")).isEqualTo("RCV");
@@ -115,6 +194,31 @@ class As400BatchDispatcherTest {
             assertThat(records.get(10).topic()).isEqualTo("__debezium-heartbeat.test");
             assertThat(records.get(10).sourceOffset().get("completed_through.sequence")).isEqualTo("9");
             assertThat(output.publishCheckpoint(replay, false)).isFalse();
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = { "io.debezium.schema.SchemaTopicNamingStrategy", "io.debezium.connector.db2as400.HostnamePrefixNamingScheme" })
+    void shouldUseLegacyTopicOverridesForEveryTransactionRecordAndCheckpoint(String strategy) throws Exception {
+        var records = new ArrayList<SourceRecord>();
+        try (var output = new Fixture(Map.of("topic.naming.strategy", strategy, "topic.delimiter", "-", "topic.heartbeat.prefix", "beats",
+                "topic.transaction", "transactions"), 20).output;
+                var replay = replay(INITIAL.toOffset(), records::add)) {
+            feedBatch(replay);
+            replay.deliver(output);
+            assertThat(records).extracting(As400BatchDispatcherTest::operation).containsExactlyElementsOf(OPERATIONS);
+            assertThat(records.get(0).topic()).isEqualTo("test-transactions");
+            assertThat(records.get(9).topic()).isEqualTo("test-transactions");
+            String dataTopic = strategy.endsWith("HostnamePrefixNamingScheme") ? "test-LIB-TEST" : "test-DB-LIB-TEST";
+            assertThat(records.subList(1, 9)).allSatisfy(record -> {
+                assertThat(record.topic()).isEqualTo(dataTopic);
+                assertThat(record.sourceOffset()).isEqualTo(records.get(0).sourceOffset());
+                assertThat(record.sourceOffset().get("completed_through.sequence")).isEqualTo("1");
+                assertThat(record.sourceOffset().get("replay_from.sequence")).isEqualTo("2");
+            });
+            assertThat(output.publishCheckpoint(replay, true)).isTrue();
+            assertThat(records.get(10).topic()).isEqualTo("beats-test");
+            assertThat(records.get(10).sourceOffset().get("completed_through.sequence")).isEqualTo("9");
         }
     }
 
@@ -195,8 +299,10 @@ class As400BatchDispatcherTest {
             replay.deliver(output);
             assertThat(value(records.get(1)).getStruct("source").getString("receiver")).isEqualTo("RCV");
             assertThat(value(records.get(1)).getStruct("source").getString("sequence")).isEqualTo("3");
+            assertThat(value(records.get(1)).getStruct("source").getString("rrn")).isNull();
             assertThat(value(records.get(2)).getStruct("source").getString("receiver")).isEqualTo("NEXT");
             assertThat(value(records.get(2)).getStruct("source").getString("sequence")).isEqualTo("4");
+            assertThat(value(records.get(2)).getStruct("source").getString("rrn")).isEqualTo("1");
             output.publishCheckpoint(replay, true);
             assertThat(records.get(4).sourceOffset().get("completed_through.receiver")).isEqualTo("NEXT");
             assertThat(records.get(0).sourceOffset().get("completed_through.receiver")).isEqualTo("RCV");
@@ -260,6 +366,29 @@ class As400BatchDispatcherTest {
     }
 
     @Test
+    void shouldKeepCheckpointRecoveryWhenPublicHeartbeatsAndTombstonesAreDisabled() throws Exception {
+        List<SourceRecord> records = new ArrayList<>();
+        try (var output = new Fixture(Map.of("heartbeat.interval.ms", "0", "tombstones.on.delete", "false"), 20).output;
+                var replay = replay(INITIAL.toOffset(), records::add)) {
+            feedBatch(replay);
+            replay.deliver(output);
+            assertThat(records).extracting(As400BatchDispatcherTest::operation)
+                    .containsExactlyElementsOf(OPERATIONS.stream().filter(op -> !op.equals("tombstone")).toList());
+            assertThat(records).allSatisfy(record -> assertThat(record.sourceOffset().get("completed_through.sequence")).isEqualTo("1"));
+            assertThat(output.publishCheckpoint(replay, false)).isFalse();
+            assertThat(output.publishCheckpoint(replay, true)).isTrue();
+            var barrier = records.get(records.size() - 1);
+            assertThat(barrier.topic()).isEqualTo("__debezium-truncate.test");
+            assertThat(barrier.sourceOffset().get("completed_through.sequence")).isEqualTo("9");
+            try (var restarted = replay(barrier.sourceOffset(), ignored -> {
+                throw new AssertionError("Completed batch must not be republished after a durable checkpoint");
+            })) {
+                assertThat(restarted.checkpoint().completedThrough()).isEqualTo(pos(9));
+            }
+        }
+    }
+
+    @Test
     void heartbeatTimerOutputsStayInsideTheFrozenBatch() throws Exception {
         List<SourceRecord> records = new ArrayList<>();
         try (var output = new Fixture(Map.of("heartbeat.interval.ms", "1"), 30).output; var replay = replay(INITIAL.toOffset(), records::add)) {
@@ -293,10 +422,12 @@ class As400BatchDispatcherTest {
         }
     }
 
-    @Test
-    void interruptionInsideRealDispatchStopsTheBatchAndPreservesCancellation() throws Exception {
+    @ParameterizedTest
+    @ValueSource(strings = { "fail", "warn", "skip" })
+    void interruptionInsideRealDispatchStopsTheBatchAndPreservesCancellation(String mode) throws Exception {
         List<SourceRecord> records = new ArrayList<>();
-        try (var output = new Fixture(Map.of("provide.transaction.metadata", "false"), 20).output;
+        try (var output = new Fixture(Map.of("provide.transaction.metadata", "false", "truncate.transactional.enabled", "true",
+                "event.processing.failure.handling.mode", mode), 20).output;
                 var replay = replay(INITIAL.toOffset(), records::add)) {
             feedBatch(replay);
             Thread.currentThread().interrupt();
@@ -327,11 +458,34 @@ class As400BatchDispatcherTest {
     }
 
     @ParameterizedTest
-    @ValueSource(strings = { "heartbeat.interval.ms=0", "skipped.operations=t", "event.processing.failure.handling.mode=warn", "skip.messages.without.change=true",
+    @ValueSource(strings = { "heartbeat.interval.ms=-1", "skipped.operations=t", "event.processing.failure.handling.mode=warn",
             "event.converting.failure.handling.mode=warn" })
     void rejectsOutputDroppingConfigurations(String setting) {
         String[] parts = setting.split("=");
         assertThatThrownBy(() -> new Fixture(Map.of(parts[0], parts[1]), 20)).isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void shouldCheckpointSkippedUnchangedUpdatesWithoutEmittingDataOrLosingLaterChanges() throws Exception {
+        List<SourceRecord> records = new ArrayList<>();
+        try (var output = new Fixture(Map.of("skip.messages.without.change", "true", "heartbeat.interval.ms", "0", "provide.transaction.metadata", "false"), 20).output;
+                var replay = replay(INITIAL.toOffset(), records::add)) {
+            feed(replay, 2, "C/SC", 0);
+            feed(replay, 3, "R/UB", 1);
+            feed(replay, 4, "R/UP", 1);
+            feed(replay, 5, "C/CM", 0);
+            replay.deliver(output);
+            assertThat(records).isEmpty();
+            assertThat(output.publishCheckpoint(replay, true)).isTrue();
+            assertThat(records).hasSize(1);
+            assertThat(records.get(0).sourceOffset().get("completed_through.sequence")).isEqualTo("5");
+            feed(replay, 6, "C/SC", 0);
+            feed(replay, 7, "R/PT", 2);
+            feed(replay, 8, "C/CM", 0);
+            replay.deliver(output);
+            assertThat(operation(records.get(1))).isEqualTo("c");
+            assertThat(replay.checkpoint().completedThrough()).isEqualTo(pos(8));
+        }
     }
 
     private static class Fixture extends As400ConnectorTask {
@@ -351,12 +505,8 @@ class As400BatchDispatcherTest {
             config.getBeanRegistry().add(StandardBeanNames.CONNECTOR_CONFIG, config);
             config.getBeanRegistry().add(StandardBeanNames.CDC_SOURCE_TASK_CONTEXT, context);
             schema = new FixtureSchema(new As400OffsetContext(config).getSourceInfoSchema());
-            output = new As400BatchDispatcher(config, PARTITION, schema, new AbstractTopicNamingStrategy<TableId>(raw.asProperties()) {
-                @Override
-                public String dataChangeTopic(TableId id) {
-                    return "test.data";
-                }
-            }, new DebeziumHeaderProducer(context), () -> 42_000L, capacity);
+            output = new As400BatchDispatcher(config, PARTITION, schema, config.getTopicNamingStrategy(As400ConnectorConfig.TOPIC_NAMING_STRATEGY, true),
+                    new DebeziumHeaderProducer(context), () -> 42_000L, capacity);
         }
     }
 
@@ -398,17 +548,21 @@ class As400BatchDispatcherTest {
         }
     }
 
-    private static As400ReplayCoordinator replay(Map<String, ?> loaded, As400ReplayCoordinator.RecordSink sink) {
+    private As400ReplayCoordinator replay(Map<String, ?> loaded, As400ReplayCoordinator.RecordSink sink) {
         return replay(loaded, sink, ORDER, new Limits(10, 100, 20, 4096), 30);
     }
 
-    private static As400ReplayCoordinator replay(Map<String, ?> loaded, As400ReplayCoordinator.RecordSink sink,
-                                                 As400JournalOrder order, Limits limits, int outputRecords) {
+    private As400ReplayCoordinator replay(Map<String, ?> loaded, As400ReplayCoordinator.RecordSink sink,
+                                          As400JournalOrder order, Limits limits, int outputRecords) {
         var decoder = new CompleteRowEntryDecoder(new AS400DataType[]{ new AS400Bin4() }, new boolean[]{ false }, 64);
         var table = new TableIdentity(TABLE, "TEST", "TEST", JID, As400ConnectProbeConnector.MEMBER_JID, "FORMAT_V1");
         return new As400ReplayCoordinator(loaded, JOURNAL, FINGERPRINT, order, limits, 1024, outputRecords,
                 (file, library) -> new As400SourceNormalizer.TableBinding(table, decoder), (source, control) -> SavepointRollback.UNRESOLVED,
-                PARTITION.getSourcePartition(), sink);
+                PARTITION.getSourcePartition(), sink, null, false, spill());
+    }
+
+    protected As400SpillStore spill() {
+        return null;
     }
 
     @Test

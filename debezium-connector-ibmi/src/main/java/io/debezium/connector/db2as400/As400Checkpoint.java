@@ -16,7 +16,8 @@ import io.debezium.ibmi.db2.journal.retrieve.JournalReceiver;
 
 /** Immutable offset-store representation. It contains F and W, never the volatile scan cursor R. */
 record As400Checkpoint(String journalIdentity, String captureFingerprint, JournalPosition replayFrom,
-        boolean replayInclusive, JournalPosition completedThrough, String replayReceiverIdentity, String completedReceiverIdentity) {
+        boolean replayInclusive, JournalPosition completedThrough, String replayReceiverIdentity, String completedReceiverIdentity,
+        Map<String, String> snapshotState, As400SchemaState schemaState) {
 
     static final String VERSION = "offset.version";
     private static final String FLOOR = "replay_from";
@@ -26,9 +27,25 @@ record As400Checkpoint(String journalIdentity, String captureFingerprint, Journa
             COMPLETED + ".sequence", COMPLETED + ".receiver", COMPLETED + ".receiver_library", COMPLETED + ".receiver_identity");
     private static final BigInteger MAX_SEQUENCE = BigInteger.ONE.shiftLeft(64).subtract(BigInteger.ONE);
 
+    As400Checkpoint(String journalIdentity, String captureFingerprint, JournalPosition replayFrom, boolean replayInclusive,
+                    JournalPosition completedThrough, String replayReceiverIdentity, String completedReceiverIdentity) {
+        this(journalIdentity, captureFingerprint, replayFrom, replayInclusive, completedThrough, replayReceiverIdentity, completedReceiverIdentity, Map.of());
+    }
+
+    As400Checkpoint(String journalIdentity, String captureFingerprint, JournalPosition replayFrom, boolean replayInclusive,
+                    JournalPosition completedThrough, String replayReceiverIdentity, String completedReceiverIdentity, Map<String, String> snapshotState) {
+        this(journalIdentity, captureFingerprint, replayFrom, replayInclusive, completedThrough, replayReceiverIdentity, completedReceiverIdentity,
+                snapshotState, As400SchemaState.EMPTY);
+    }
+
     As400Checkpoint {
+        Objects.requireNonNull(schemaState);
+        snapshotState = Map.copyOf(snapshotState);
+        if (!As400IncrementalSnapshotState.fields(snapshotState).equals(snapshotState)) {
+            throw new IllegalArgumentException("Unexpected incremental snapshot checkpoint fields");
+        }
         identifier(journalIdentity, 256);
-        if (captureFingerprint == null || !captureFingerprint.matches("v1:[0-9a-f]{64}")) {
+        if (captureFingerprint == null || !captureFingerprint.matches("v[12]:[0-9a-f]{64}")) {
             throw new IllegalArgumentException("Expected a versioned SHA-256 capture fingerprint");
         }
         validatePosition(replayFrom);
@@ -50,7 +67,7 @@ record As400Checkpoint(String journalIdentity, String captureFingerprint, Journa
 
     Map<String, String> toOffset() {
         Map<String, String> result = new HashMap<>();
-        result.put(VERSION, "2");
+        result.put(VERSION, !schemaState.equals(As400SchemaState.EMPTY) ? "4" : snapshotState.isEmpty() ? "2" : "3");
         result.put("journal_identity", journalIdentity);
         result.put("capture_fingerprint", captureFingerprint);
         putPosition(result, FLOOR, replayFrom);
@@ -58,14 +75,32 @@ record As400Checkpoint(String journalIdentity, String captureFingerprint, Journa
         putPosition(result, COMPLETED, completedThrough);
         result.put(FLOOR + ".receiver_identity", replayReceiverIdentity);
         result.put(COMPLETED + ".receiver_identity", completedReceiverIdentity);
+        result.putAll(snapshotState);
+        result.putAll(schemaState.fields());
         return Map.copyOf(result);
     }
 
+    As400Checkpoint withSnapshotState(Map<String, String> state) {
+        return new As400Checkpoint(journalIdentity, captureFingerprint, replayFrom, replayInclusive, completedThrough,
+                replayReceiverIdentity, completedReceiverIdentity, state, schemaState);
+    }
+
+    As400Checkpoint withSchemaState(As400SchemaState state) {
+        return new As400Checkpoint(journalIdentity, captureFingerprint, replayFrom, replayInclusive, completedThrough,
+                replayReceiverIdentity, completedReceiverIdentity, snapshotState, state);
+    }
+
     static As400Checkpoint fromOffset(Map<String, ?> offset, String expectedJournal, String expectedFingerprint) {
-        if (offset == null || !"2".equals(offset.get(VERSION))) {
+        if (offset == null || !(offset.get(VERSION) instanceof String version) || !Set.of("2", "3", "4").contains(version)) {
             throw new IllegalArgumentException("Missing or unsupported buffered offset version; legacy migration is not automatic");
         }
-        if (!offset.keySet().equals(KEYS)) {
+        var state = As400IncrementalSnapshotState.fields(offset);
+        var schemas = As400SchemaState.from(offset);
+        var keys = new java.util.HashSet<>(KEYS);
+        keys.addAll(state.keySet());
+        keys.addAll(schemas.fields().keySet());
+        if (!offset.keySet().equals(keys) || ("4".equals(offset.get(VERSION)) ? schemas.equals(As400SchemaState.EMPTY)
+                : !schemas.equals(As400SchemaState.EMPTY) || "3".equals(offset.get(VERSION)) == state.isEmpty())) {
             throw new IllegalArgumentException("Incomplete or mixed checkpoint representation");
         }
         String identity = string(offset, "journal_identity");
@@ -78,7 +113,7 @@ record As400Checkpoint(String journalIdentity, String captureFingerprint, Journa
             throw new IllegalArgumentException("Malformed replay inclusivity");
         }
         return new As400Checkpoint(identity, fingerprint, position(offset, FLOOR), inclusive.equals("true"), position(offset, COMPLETED),
-                string(offset, FLOOR + ".receiver_identity"), string(offset, COMPLETED + ".receiver_identity"));
+                string(offset, FLOOR + ".receiver_identity"), string(offset, COMPLETED + ".receiver_identity"), state, schemas);
     }
 
     static void validatePosition(JournalPosition position) {

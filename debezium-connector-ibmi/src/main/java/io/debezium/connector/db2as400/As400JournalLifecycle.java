@@ -6,10 +6,8 @@
 package io.debezium.connector.db2as400;
 
 import java.math.BigInteger;
-import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Deque;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -60,25 +58,41 @@ final class As400JournalLifecycle implements AutoCloseable {
     private record Dependency(JournalPosition start, JournalPosition end) {
     }
 
+    private static final As400SpillStore.Codec<Producer> PRODUCER = As400SpillCodec.codec((out, producer) -> {
+        As400SpillCodec.string(out, producer.system());
+        As400SpillCodec.string(out, producer.job());
+        As400SpillCodec.string(out, producer.user());
+        As400SpillCodec.string(out, producer.number());
+        As400SpillCodec.integer(out, producer.thread());
+    }, in -> new Producer(As400SpillCodec.string(in), As400SpillCodec.string(in), As400SpillCodec.string(in), As400SpillCodec.string(in), As400SpillCodec.integer(in)));
+    private static final As400SpillStore.Codec<Marker> MARKER = As400SpillCodec.codec((out, marker) -> {
+        As400SpillCodec.integer(out, marker.sequence());
+        out.writeLong(marker.level());
+        out.writeInt(marker.clears());
+    }, in -> new Marker(As400SpillCodec.integer(in), in.readLong(), in.readInt()));
+
     private static final class Cycle {
         final Producer producer;
         final JournalPosition start;
-        final Map<BigInteger, Marker> markers = new LinkedHashMap<>();
-        final List<TableBinding> clears = new ArrayList<>();
+        final Map<BigInteger, Marker> markers;
+        final List<TableBinding> clears;
 
         private final long timestamp;
 
-        Cycle(Producer producer, JournalPosition start, long timestamp) {
+        Cycle(Producer producer, JournalPosition start, long timestamp, As400SpillStore spill, As400SpillStore.Codec<TableBinding> bindings) {
             this.timestamp = timestamp;
             this.producer = producer;
             this.start = start;
+            String prefix = "lifecycle/" + start.offset();
+            markers = spill == null ? new LinkedHashMap<>() : spill.map(prefix + "/markers", As400SpillCodec.INTEGER, MARKER);
+            clears = spill == null ? new ArrayList<>() : spill.list(prefix + "/clears", bindings);
         }
     }
 
     private record Step(String type, TableBinding table) {
     }
 
-    private static final class Window {
+    private final class Window {
         final String subtype;
         final Cycle cycle;
         final Marker marker;
@@ -89,14 +103,15 @@ final class As400JournalLifecycle implements AutoCloseable {
             this.subtype = subtype;
             this.cycle = cycle;
             this.marker = marker;
-            this.expected = expected.stream().map(type -> new Step(type, table)).toList();
+            this.expected = steps(cycle);
+            expected.forEach(type -> this.expected.add(new Step(type, table)));
         }
 
         Window(Cycle cycle, Marker marker, List<TableBinding> undone) {
             this.subtype = null;
             this.cycle = cycle;
             this.marker = marker;
-            List<Step> steps = new ArrayList<>();
+            List<Step> steps = steps(cycle);
             // Native rollback unwinds the clears in reverse operation order. Keep
             // each exact file/member pair; a balanced transition on another table
             // cannot satisfy this window.
@@ -108,8 +123,20 @@ final class As400JournalLifecycle implements AutoCloseable {
             if (marker != null) {
                 steps.add(new Step("C/SB", undone.get(0)));
             }
-            this.expected = List.copyOf(steps);
+            this.expected = steps;
         }
+
+        Window(String subtype, Cycle cycle, Marker marker, int step) {
+            this.subtype = subtype;
+            this.cycle = cycle;
+            this.marker = marker;
+            this.step = step;
+            this.expected = steps(cycle);
+        }
+    }
+
+    private List<Step> steps(Cycle cycle) {
+        return spill == null ? new ArrayList<>() : spill.list("window/" + cycle.start.offset(), stepCodec);
     }
 
     private final Limits limits;
@@ -128,10 +155,13 @@ final class As400JournalLifecycle implements AutoCloseable {
         return cycles.values().stream().mapToLong(c -> c.timestamp).min().orElse(-1);
     }
 
-    private final Map<BigInteger, Cycle> cycles = new HashMap<>();
-    private final Map<Producer, Window> windows = new HashMap<>();
-    private final Map<JournalPosition, Dependency> dependencies = new LinkedHashMap<>();
-    private final Deque<Entry> held = new ArrayDeque<>();
+    private final Map<BigInteger, Cycle> cycles;
+    private final Map<Producer, Window> windows;
+    private final Map<JournalPosition, Dependency> dependencies;
+    private final Map<JournalPosition, Entry> held;
+    private final As400SpillStore spill;
+    private final As400SpillStore.Codec<TableBinding> bindingCodec;
+    private final As400SpillStore.Codec<Step> stepCodec;
     private long heldBytes;
     private int markerCount;
     private int clearCount;
@@ -141,12 +171,65 @@ final class As400JournalLifecycle implements AutoCloseable {
     }
 
     As400JournalLifecycle(Limits limits, TableResolver tables, As400JournalOrder order, As400Checkpoint loaded, boolean ordinary) {
+        this(limits, tables, order, loaded, ordinary, null);
+    }
+
+    As400JournalLifecycle(Limits limits, TableResolver tables, As400JournalOrder order, As400Checkpoint loaded, boolean ordinary, As400SpillStore spill) {
         this.ordinary = ordinary;
         this.limits = limits;
         this.tables = tables;
         this.order = order;
         this.loaded = loaded;
+        this.spill = spill;
         require(ordinary || loaded.replayFrom().receiver().equals(loaded.completedThrough().receiver()), "Lifecycle profile supports one receiver only");
+        bindingCodec = As400SpillCodec.codec((out, binding) -> As400SpillCodec.table(out, binding.identity()), in -> {
+            var identity = As400SpillCodec.table(in);
+            try {
+                var binding = tables.resolve(identity.physicalFile(), identity.tableId().schema());
+                require(binding.identity().equals(identity), "Spilled lifecycle binding no longer matches validated history");
+                return binding;
+            }
+            catch (Exception e) {
+                throw new java.io.IOException("Cannot resolve spilled lifecycle binding", e);
+            }
+        });
+        stepCodec = As400SpillCodec.codec((out, step) -> {
+            As400SpillCodec.string(out, step.type());
+            As400SpillCodec.bytes(out, bindingCodec.encode(step.table()));
+        }, in -> new Step(As400SpillCodec.string(in), bindingCodec.decode(As400SpillCodec.bytes(in))));
+        As400SpillStore.Codec<Cycle> cycleCodec = As400SpillCodec.codec((out, cycle) -> {
+            As400SpillCodec.bytes(out, PRODUCER.encode(cycle.producer));
+            As400SpillCodec.position(out, cycle.start);
+            out.writeLong(cycle.timestamp);
+        }, in -> new Cycle(PRODUCER.decode(As400SpillCodec.bytes(in)), As400SpillCodec.position(in), in.readLong(), spill, bindingCodec));
+        cycles = spill == null ? new HashMap<>() : spill.map("lifecycle-cycles", As400SpillCodec.INTEGER, cycleCodec);
+        windows = spill == null ? new HashMap<>() : spill.map("lifecycle-windows", PRODUCER, As400SpillCodec.codec((out, window) -> {
+            As400SpillCodec.string(out, window.subtype);
+            As400SpillCodec.bytes(out, cycleCodec.encode(window.cycle));
+            As400SpillCodec.bytes(out, window.marker == null ? null : MARKER.encode(window.marker));
+            out.writeInt(window.step);
+        }, in -> {
+            String subtype = As400SpillCodec.string(in);
+            Cycle cycle = cycleCodec.decode(As400SpillCodec.bytes(in));
+            byte[] marker = As400SpillCodec.bytes(in);
+            return new Window(subtype, cycle, marker == null ? null : MARKER.decode(marker), in.readInt());
+        }));
+        dependencies = spill == null ? new LinkedHashMap<>()
+                : spill.map("lifecycle-dependencies", As400SpillCodec.POSITION,
+                        As400SpillCodec.codec((out, dependency) -> {
+                            As400SpillCodec.position(out, dependency.start());
+                            As400SpillCodec.position(out, dependency.end());
+                        }, in -> new Dependency(As400SpillCodec.position(in), As400SpillCodec.position(in))));
+        held = spill == null ? new LinkedHashMap<>()
+                : spill.map("lifecycle-held", As400SpillCodec.POSITION,
+                        As400SpillCodec.codec((out, entry) -> {
+                            As400SpillCodec.position(out, entry.position());
+                            As400SpillCodec.bytes(out, entry.bytes());
+                        }, in -> {
+                            var position = As400SpillCodec.position(in);
+                            byte[] bytes = As400SpillCodec.bytes(in);
+                            return new Entry(headers.decode(bytes, 0), bytes, position);
+                        }));
     }
 
     void accept(EntryHeader header, byte[] data, int offset, JournalPosition position) throws Exception {
@@ -164,7 +247,7 @@ final class As400JournalLifecycle implements AutoCloseable {
         require(entry.header().getEndOffset() == length, "Entry boundary changed while copying");
         As400SourceMetadata.from(entry.header(), position);
         if (classify(entry)) {
-            held.addLast(entry);
+            held.put(entry.position(), entry);
             heldBytes += length;
         }
     }
@@ -173,7 +256,9 @@ final class As400JournalLifecycle implements AutoCloseable {
         if (!windows.isEmpty() || held.isEmpty()) {
             return Optional.empty();
         }
-        Entry entry = held.removeFirst();
+        var first = held.values().iterator();
+        Entry entry = first.next();
+        first.remove();
         heldBytes -= entry.bytes().length;
         return Optional.of(entry);
     }
@@ -211,11 +296,14 @@ final class As400JournalLifecycle implements AutoCloseable {
         dependencies.values().removeIf(d -> order.compare(d.end(), retained) < 0
                 || (order.compare(d.end(), retained) == 0 && !includeRetained));
         return new As400Checkpoint(checkpoint.journalIdentity(), checkpoint.captureFingerprint(), floor, inclusive, checkpoint.completedThrough(),
-                order.incarnation(floor), checkpoint.completedReceiverIdentity());
+                order.incarnation(floor), checkpoint.completedReceiverIdentity(), checkpoint.snapshotState(), checkpoint.schemaState());
     }
 
     private boolean classify(Entry entry) throws Exception {
         var h = entry.header();
+        if (ordinary && tables.creationLifecycle(new RawJournalPage.Entry(entry.position(), h, entry.bytes()))) {
+            return false;
+        }
         if (ordinary && administrative(entry, tables)) {
             return false;
         }
@@ -253,13 +341,16 @@ final class As400JournalLifecycle implements AutoCloseable {
                 require(h.getCommitCycle().equals(window.cycle.start.offset())
                         && h.getControlInfo().nestedCommitLevel() == window.marker.level(), "Clear has wrong transaction/scope");
                 var clear = new FileChangeEntryDecoder(RawJournalPage.METADATA_CCSID).decode(h, entry.bytes(), 0);
-                require(clear.clearsRows() && String.valueOf(clear.changeType()).equals(window.subtype), "Clear subtype mismatch");
+                require((clear.clearsRows() || window.subtype.equals("0") && clear.changeType() == '0')
+                        && String.valueOf(clear.changeType()).equals(window.subtype), "Clear subtype mismatch");
                 identity(h, expected.table());
                 require(clear.file().equals(h.getFile()) && clear.library().equals(h.getLibrary())
                         && (clear.member().isEmpty() || clear.member().equals(expected.table().identity().member())), "Clear payload identity mismatch");
-                require(clearCount < limits.clears(), "Lifecycle clear limit exceeded");
-                window.cycle.clears.add(expected.table());
-                clearCount++;
+                if (clear.clearsRows()) {
+                    require(clearCount < limits.clears(), "Lifecycle clear limit exceeded");
+                    window.cycle.clears.add(expected.table());
+                    clearCount++;
+                }
             }
             else if (entry.type().equals("C/SQ")) {
                 require(h.getCommitCycle().equals(window.cycle.start.offset())
@@ -273,20 +364,27 @@ final class As400JournalLifecycle implements AutoCloseable {
             if (++window.step == window.expected.size()) {
                 complete(producer, window, entry.position());
             }
+            else if (spill != null) {
+                windows.put(producer, window);
+            }
             if (h.getJournalCode() != 'C' && !entry.type().equals("D/CG")) {
                 return false;
             }
         }
         else if (entry.type().equals("F/CH")) {
-            List<Cycle> matches = cycles.values().stream().filter(c -> c.producer.equals(producer)).toList();
+            List<Cycle> matches = cycles.values().stream().filter(c -> c.producer.equals(producer)).limit(2).toList();
             require(matches.size() == 1, "Missing or ambiguous lifecycle transaction start");
             Cycle cycle = matches.get(0);
             require(!cycle.markers.isEmpty(), "Legacy clear companion lacks an open scope");
-            Marker marker = new ArrayList<>(cycle.markers.values()).get(cycle.markers.size() - 1);
+            Marker marker = null;
+            for (Marker candidate : cycle.markers.values()) {
+                marker = candidate;
+            }
             TableBinding table = tables.resolve(h.getFile(), h.getLibrary());
             auxiliary(entry, table, 0);
             String subtype = new AS400Text(1, RawJournalPage.METADATA_CCSID).toObject(payload(entry)).toString();
-            require(subtype.equals("3") || subtype.equals("8"), "Unsupported legacy change");
+            require(subtype.equals("3") || subtype.equals("8") || subtype.equals("0") && tables.allowsSchemaChange(entry.position()),
+                    "Unsupported legacy change");
             windows.put(producer, new Window(table, subtype, cycle, marker, List.of("F/EJ", "D/EF", "D/JF", "F/JM", "D/CG", "C/SQ")));
             return false;
         }
@@ -304,7 +402,8 @@ final class As400JournalLifecycle implements AutoCloseable {
             String type = h.getEntryType();
             if (type.equals("SC")) {
                 require(cycles.size() < limits.cycles() && h.getCommitCycle().equals(entry.position().offset()), "Unsupported cycle start");
-                require(cycles.putIfAbsent(h.getCommitCycle(), new Cycle(producer, entry.position(), h.getTimestamp().toEpochMilli())) == null, "Repeated cycle");
+                require(cycles.putIfAbsent(h.getCommitCycle(), new Cycle(producer, entry.position(), h.getTimestamp().toEpochMilli(), spill, bindingCodec)) == null,
+                        "Repeated cycle");
             }
             else if (!type.equals("BC") && !type.equals("EC") && !orphan) {
                 require(cycle != null && cycle.producer.equals(producer), "Missing cycle or changed producer");
@@ -318,7 +417,7 @@ final class As400JournalLifecycle implements AutoCloseable {
                     Marker marker = cycle.markers.get(control.savepointSequence());
                     require(marker != null && marker.level() == h.getControlInfo().nestedCommitLevel(), "Unknown or mismatched savepoint target");
                     if (type.equals("SU")) {
-                        List<TableBinding> undone = new ArrayList<>(cycle.clears.subList(marker.clears(), cycle.clears.size()));
+                        List<TableBinding> undone = cycle.clears.subList(marker.clears(), cycle.clears.size());
                         if (!undone.isEmpty()) {
                             windows.put(producer, new Window(cycle, marker, undone));
                         }
@@ -339,6 +438,10 @@ final class As400JournalLifecycle implements AutoCloseable {
                     cycles.remove(h.getCommitCycle());
                     markerCount -= cycle.markers.size();
                     clearCount -= cycle.clears.size();
+                    if (spill != null) {
+                        cycle.markers.clear();
+                        cycle.clears.clear();
+                    }
                 }
                 else {
                     require(type.equals("R1"), "Unsupported control");
@@ -438,13 +541,20 @@ final class As400JournalLifecycle implements AutoCloseable {
         return true;
     }
 
+    static boolean administrativeType(String type) {
+        return ADMINISTRATIVE_ENTRIES.contains(type);
+    }
+
     private void complete(Producer producer, Window window, JournalPosition end) {
         windows.remove(producer);
+        if (spill != null) {
+            window.expected.clear();
+        }
         require(dependencies.containsKey(window.cycle.start) || dependencies.size() < limits.dependencies(), "Lifecycle recovery limit exceeded");
         dependencies.put(window.cycle.start, new Dependency(window.cycle.start, end));
     }
 
-    private static void auxiliary(Entry entry, TableBinding table, int flags) {
+    static void auxiliary(Entry entry, TableBinding table, int flags) {
         var h = entry.header();
         var control = h.getControlInfo();
         require(h.getCommitCycle().signum() == 0 && control.nestedCommitLevel() == 0 && control.flags() == flags
@@ -486,7 +596,7 @@ final class As400JournalLifecycle implements AutoCloseable {
         return new Producer(r.systemName(), r.jobName(), r.jobUser(), r.jobNumber(), r.threadId());
     }
 
-    private static byte[] payload(Entry entry) {
+    static byte[] payload(Entry entry) {
         int prefix = entry.header().getEntrySpecificDataOffset();
         if (prefix == 0) {
             return new byte[0];
@@ -501,10 +611,12 @@ final class As400JournalLifecycle implements AutoCloseable {
 
     @Override
     public void close() {
-        cycles.clear();
-        windows.clear();
-        dependencies.clear();
-        held.clear();
+        if (spill == null) {
+            cycles.clear();
+            windows.clear();
+            dependencies.clear();
+            held.clear();
+        }
         heldBytes = 0;
         markerCount = 0;
         clearCount = 0;

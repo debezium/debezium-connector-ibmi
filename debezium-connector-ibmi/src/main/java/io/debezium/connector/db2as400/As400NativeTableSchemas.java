@@ -10,7 +10,6 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-import io.debezium.jdbc.JdbcValueConverters;
 import io.debezium.relational.CustomConverterRegistry;
 import io.debezium.relational.TableId;
 import io.debezium.relational.TableSchema;
@@ -23,14 +22,12 @@ final class As400NativeTableSchemas implements DatabaseSchema<TableId> {
     private static final java.time.format.DateTimeFormatter LEGACY_TIMESTAMP = java.time.format.DateTimeFormatter.ofPattern(
             "uuuu-MM-dd-HH.mm.ss.SSSSSS", java.util.Locale.ROOT);
     private final Map<TableId, TableSchema> schemas;
+    private final As400ConnectorConfig config;
+    private final TopicNamingStrategy<TableId> topics;
 
     As400NativeTableSchemas(List<As400BindingDefinition> definitions, As400ConnectorConfig config, TopicNamingStrategy<TableId> topics) {
-        if (config.getDecimalMode() != JdbcValueConverters.DecimalMode.PRECISE
-                || config.binaryHandlingMode() != io.debezium.config.CommonConnectorConfig.BinaryHandlingMode.BYTES
-                || config.getConfig().asMap().entrySet().stream().anyMatch(e -> e.getValue() != null && !e.getValue().isBlank()
-                        && (e.getKey().equals("converters") || e.getKey().equals("message.key.columns") || e.getKey().startsWith("column.")))) {
-            throw new IllegalArgumentException("Native output requires precise decimals, owned bytes and complete unmodified native columns/keys");
-        }
+        this.config = config;
+        this.topics = topics;
         // Snapshot, legacy streaming and buffered streaming must share string
         // cleanup and trim semantics, especially for already-published keys.
         var converters = new As400ValueConverters(config.getDecimalMode(), config) {
@@ -41,23 +38,32 @@ final class As400NativeTableSchemas implements DatabaseSchema<TableId> {
                 return column.scale().orElseThrow(() -> new IllegalArgumentException("Native temporal precision missing"));
             }
         };
-        var builder = new TableSchemaBuilder(converters, config.schemaNameAdjuster(), new CustomConverterRegistry(List.of()),
+        var builder = new TableSchemaBuilder(converters, config.schemaNameAdjuster(), converterRegistry(config),
                 config.getSourceInfoStructMaker().schema(), io.debezium.pipeline.txmetadata.TransactionMonitor.TRANSACTION_BLOCK_SCHEMA,
                 config.getFieldNamer(), false, config.getEventConvertingFailureHandlingMode());
         var result = new HashMap<TableId, TableSchema>();
         boolean legacyTemporal = As400DcgConfig.transactionalTruncateEnabled(config.getConfig());
         if (legacyTemporal) {
-            requireLegacyTemporalCompatibility(definitions);
+            requireLegacyTemporalCompatibility(definitions.stream().filter(d -> selected(d.identity().tableId(), config)).toList());
         }
         for (var definition : definitions) {
-            var table = definition.outputTable();
-            if (table.primaryKeyColumnNames().isEmpty() || table.primaryKeyColumnNames().stream().anyMatch(k -> table.columnWithName(k).isOptional())) {
-                throw new IllegalArgumentException("Native output requires a complete non-null primary key");
+            if (!selected(definition.identity().tableId(), config) && (legacyTemporal || definition.excluded())) {
+                continue;
             }
-            TableSchema built = builder.create(topics, table, null, null, null);
-            if (built.keySchema() == null || built.valueSchema().fields().size() != table.columns().size()
-                    || !built.keySchema().fields().stream().map(f -> f.name()).toList().equals(table.primaryKeyColumnNames())
-                    || !built.valueSchema().fields().stream().map(f -> f.name()).toList().equals(table.columns().stream().map(c -> c.name()).toList())) {
+            if (definition.excluded()) {
+                throw new IllegalArgumentException("Captured table has only excluded identity history; a validated capture transition is required");
+            }
+            var table = definition.outputTable();
+            TableSchema built = builder.create(topics, table, config.getColumnFilter(),
+                    io.debezium.relational.mapping.ColumnMappers.create(config), config.getKeyMapper());
+            var expectedKeys = new io.debezium.relational.Key.Builder(table).customKeyMapper(config.getKeyMapper()).build().keyColumns().stream()
+                    .map(config.getFieldNamer()::fieldNameFor).toList();
+            var expectedValues = table.columns().stream()
+                    .filter(column -> config.getColumnFilter().matches(table.id().catalog(), table.id().schema(), table.id().table(), column.name()))
+                    .map(config.getFieldNamer()::fieldNameFor).toList();
+            var keyFields = built.keySchema() == null ? List.<String> of() : built.keySchema().fields().stream().map(f -> f.name()).toList();
+            if ((built.keySchema() == null) != expectedKeys.isEmpty() || !keyFields.equals(expectedKeys)
+                    || !built.valueSchema().fields().stream().map(f -> f.name()).toList().equals(expectedValues)) {
                 throw new IllegalArgumentException("Native output schema lost or remapped acquired fields/keys");
             }
             var temporal = definition.codecs().stream().map(c -> c.temporal()
@@ -70,10 +76,29 @@ final class As400NativeTableSchemas implements DatabaseSchema<TableId> {
                 throw new IllegalArgumentException("Duplicate acquired table schema");
             }
         }
-        if (result.isEmpty()) {
-            throw new IllegalArgumentException("Native output requires acquired schemas");
+        schemas = new java.util.concurrent.ConcurrentHashMap<>(result);
+    }
+
+    private static boolean selected(TableId table, As400ConnectorConfig config) {
+        return config.getTableFilters().dataCollectionFilter().isIncluded(table) || config.isSignalDataCollection(table);
+    }
+
+    void refresh(As400BindingDefinition definition) {
+        if (selected(definition.identity().tableId(), config) || !As400DcgConfig.transactionalTruncateEnabled(config.getConfig()) && !definition.excluded()) {
+            var replacement = new As400NativeTableSchemas(List.of(definition), config, topics);
+            schemas.put(definition.schema().id(), replacement.schemaFor(definition.schema().id()));
         }
-        schemas = Map.copyOf(result);
+    }
+
+    static CustomConverterRegistry converterRegistry(As400ConnectorConfig config) {
+        var services = config.getServiceRegistry();
+        // Normal tasks register this provider before schema construction. Native
+        // preflight also builds schemas before task startup; use the same provider
+        // there, preserving any service contributed by the hosting runtime.
+        if (services.tryGetService(CustomConverterRegistry.class) == null) {
+            services.registerServiceProvider(new io.debezium.converters.custom.CustomConverterServiceProvider());
+        }
+        return services.getService(CustomConverterRegistry.class);
     }
 
     private static java.util.function.Function<Object, Object> legacyTemporal(As400BindingDefinition.Codec codec) {
@@ -137,7 +162,7 @@ final class As400NativeTableSchemas implements DatabaseSchema<TableId> {
                 case "FLOAT8" -> value instanceof Double n && Double.isFinite(n);
                 case "BOOLEAN" -> value instanceof Boolean;
                 case "PACKED", "ZONED" -> value instanceof BigDecimal n && n.scale() == codec.scale() && n.precision() <= codec.size();
-                case "TEXT", "VARCHAR" -> value instanceof String;
+                case "TEXT", "VARCHAR", "VARGRAPHIC" -> value instanceof String;
                 case "BINARY" -> value instanceof byte[] bytes && bytes.length == codec.size();
                 case "VARBINARY" -> value instanceof byte[] bytes && bytes.length <= codec.size();
                 case "DATE_ISO", "TIME_ISO", "TIMESTAMP_ISO" -> {

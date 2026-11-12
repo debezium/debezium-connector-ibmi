@@ -54,6 +54,13 @@ public record RawJournalPage(List<Entry> entries, Optional<JournalPosition> cont
      * still verify source identity/ranges and any required F/W anchors.
      */
     static RawJournalPage decodeResult(byte[] response, byte[] error, JournalPosition from, JournalPosition through, int maximumEntries) {
+        return decodeResult(response, error, from, through, maximumEntries, handle -> {
+            throw new IllegalArgumentException("Pointer-backed journal data requires its API-job cleanup");
+        });
+    }
+
+    static RawJournalPage decodeResult(byte[] response, byte[] error, JournalPosition from, JournalPosition through, int maximumEntries,
+                                       java.util.function.LongConsumer releasePointer) {
         require(error != null && error.length == ERROR_BYTES, "Missing or truncated journal API error output");
         ByteBuffer fields = ByteBuffer.wrap(error);
         require(fields.getInt(0) == ERROR_BYTES, "Unexpected journal API error buffer size");
@@ -63,19 +70,26 @@ public record RawJournalPage(List<Entry> entries, Optional<JournalPosition> cont
             for (int i = 8; i < 16; i++) {
                 require(error[i] == 0, "Inconsistent successful journal API error output");
             }
-            return decode(response, from, through, maximumEntries);
+            return decode(response, from, through, maximumEntries, releasePointer);
         }
         String id = text(error, 8, 7);
         if (!id.equals("CPF7062")) {
             throw new RetrieveJournalException("Bounded raw journal API error; no entries accepted: " + id);
         }
-        RawJournalPage empty = decode(response, from, through, maximumEntries);
+        RawJournalPage empty = decode(response, from, through, maximumEntries, releasePointer);
         require(empty.bytesReturned() == 64 && empty.entries().isEmpty() && empty.continuation().isEmpty(),
                 "No-match journal error conflicts with nonempty or incomplete response");
         return empty;
     }
 
     static RawJournalPage decode(byte[] response, JournalPosition from, JournalPosition through, int maximumEntries) {
+        return decode(response, from, through, maximumEntries, handle -> {
+            throw new IllegalArgumentException("Pointer-backed journal data requires its API-job cleanup");
+        });
+    }
+
+    static RawJournalPage decode(byte[] response, JournalPosition from, JournalPosition through, int maximumEntries,
+                                 java.util.function.LongConsumer releasePointer) {
         validateRange(from, through, maximumEntries);
         require(response != null && response.length >= 64, "Truncated RJNE0200 response");
         ByteBuffer prefix = ByteBuffer.wrap(response);
@@ -104,7 +118,12 @@ public record RawJournalPage(List<Entry> entries, Optional<JournalPosition> cont
             int next = header.getNextEntryOffset();
             require(i == count - 1 ? next == 0 : next >= 236 && (long) offset + next + 236 <= returned,
                     "Journal entry count and links disagree");
-            require(header.getPointerHandle() == 0, "Pointer-backed journal data requires a different retrieval profile");
+            if (header.getPointerHandle() != 0) {
+                // Only the documented inline creation metadata is consumed.
+                // Rows, clears and all other incomplete images still reject.
+                FileCreationEntryDecoder.metadata(header, bounded, offset);
+                releasePointer.accept(header.getPointerHandle());
+            }
             if (entries.size() < maximumEntries) {
                 byte[] owned = Arrays.copyOfRange(bounded, offset, offset + header.getEndOffset());
                 // The entry no longer links into the reusable response buffer.

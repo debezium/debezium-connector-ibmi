@@ -14,6 +14,8 @@ import java.math.BigDecimal;
 import java.nio.ByteBuffer;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
+import java.util.Properties;
 import java.util.TimeZone;
 
 import org.junit.jupiter.api.Test;
@@ -22,13 +24,107 @@ import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import io.debezium.config.Configuration;
-import io.debezium.relational.CustomConverterRegistry;
 import io.debezium.relational.TableId;
 import io.debezium.relational.TableSchema;
 import io.debezium.schema.AbstractTopicNamingStrategy;
 import io.debezium.spi.topic.TopicNamingStrategy;
 
 class As400NativeTableSchemasTest {
+    static Map<String, String> converterProperties() {
+        return Map.of("converters", "label", "label.type", LabelConverter.class.getName(), "label.prefix", "custom:");
+    }
+
+    public static class LabelConverter
+            implements io.debezium.spi.converter.CustomConverter<org.apache.kafka.connect.data.SchemaBuilder, io.debezium.spi.converter.RelationalColumn> {
+        private String prefix;
+        private String rejected;
+
+        @Override
+        public void configure(Properties properties) {
+            prefix = properties.getProperty("prefix");
+            rejected = properties.getProperty("reject");
+        }
+
+        @Override
+        public void converterFor(io.debezium.spi.converter.RelationalColumn column,
+                                 ConverterRegistration<org.apache.kafka.connect.data.SchemaBuilder> registration) {
+            if (column.name().equals("ID")) {
+                registration.register(org.apache.kafka.connect.data.SchemaBuilder.string(), value -> {
+                    if (value != null && value.toString().equals(rejected)) {
+                        throw new IllegalArgumentException("Configured conversion failure");
+                    }
+                    return value == null ? null : prefix + value;
+                });
+            }
+        }
+    }
+
+    @Test
+    void shouldUseTheOrdinaryConverterRegistryForKeysAndValuesAfterBindingHistoryReload() throws Exception {
+        var definition = new As400NativeBindingAcquisitionTest.Fixture().acquire().definitions().get(0);
+        var raw = new java.util.HashMap<>(converterProperties());
+        raw.put("topic.prefix", "test");
+        raw.put("database.dbname", "TEST");
+        var config = new As400ConnectorConfig(Configuration.from(raw));
+        var topics = config.<TableId> getTopicNamingStrategy(As400ConnectorConfig.TOPIC_NAMING_STRATEGY, true);
+        var ordinary = legacySchema(definition, config, topics);
+        for (var restored : List.of(definition, As400BindingDefinition.restore(definition.storedTable()))) {
+            var nativeSchema = new As400NativeTableSchemas(List.of(restored), config, topics).schemaFor(restored.identity().tableId());
+            assertThat(nativeSchema.keyFromColumnData(row())).isEqualTo(ordinary.keyFromColumnData(row()));
+            assertThat(nativeSchema.valueFromColumnData(row())).isEqualTo(ordinary.valueFromColumnData(row()));
+            assertThat(nativeSchema.keyFromColumnData(row()).getString("ID")).isEqualTo("custom:7");
+            assertThat(nativeSchema.valueFromColumnData(row()).getString("ID")).isEqualTo("custom:7");
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = { "warn", "skip", "fail" })
+    void shouldPreserveOrdinaryColumnConversionFailurePolicy(String mode) throws Exception {
+        var definition = new As400NativeBindingAcquisitionTest.Fixture().acquire().definitions().get(0);
+        var raw = new java.util.HashMap<>(converterProperties());
+        raw.put("label.reject", "7");
+        raw.put("topic.prefix", "test");
+        raw.put("database.dbname", "TEST");
+        raw.put("event.converting.failure.handling.mode", mode);
+        var config = new As400ConnectorConfig(Configuration.from(raw));
+        var topics = config.<TableId> getTopicNamingStrategy(As400ConnectorConfig.TOPIC_NAMING_STRATEGY, true);
+        var ordinary = legacySchema(definition, config, topics);
+        var nativeSchema = new As400NativeTableSchemas(List.of(definition), config, topics).schemaFor(definition.identity().tableId());
+        if (mode.equals("fail")) {
+            assertThrows(io.debezium.DebeziumException.class, () -> ordinary.valueFromColumnData(row()));
+            assertThrows(io.debezium.DebeziumException.class, () -> nativeSchema.valueFromColumnData(row()));
+        }
+        else {
+            assertThat(nativeSchema.valueFromColumnData(row())).isEqualTo(ordinary.valueFromColumnData(row()));
+            assertThat(nativeSchema.valueFromColumnData(row()).get("ID")).isNull();
+        }
+    }
+
+    @Test
+    void shouldRejectPublishingFromIdentityOnlyHistoryEvenAfterAFilterChange() throws Exception {
+        var definition = As400BindingDefinition.excluded(new As400NativeBindingAcquisitionTest.Fixture().observation.tableIdentity());
+        assertThrows(IllegalArgumentException.class, () -> schemas(definition));
+        assertThrows(IllegalStateException.class, () -> definition.binding(1024).values(null, null, 0));
+    }
+
+    @Test
+    void shouldPreserveLegacyNullKeysAndValuesForTablesWithoutAPrimaryKey() throws Exception {
+        var fixture = new As400NativeBindingAcquisitionTest.Fixture();
+        fixture.keys.clear();
+        var definition = As400BindingDefinition.restore(fixture.acquire().definitions().get(0).storedTable());
+        var config = new As400ConnectorConfig(Configuration.create().with("topic.prefix", "test").with("database.dbname", "TEST").build());
+        var topics = config.<TableId> getTopicNamingStrategy(As400ConnectorConfig.TOPIC_NAMING_STRATEGY, true);
+        var nativeSchema = new As400NativeTableSchemas(List.of(definition), config, topics).schemaFor(definition.schema().id());
+        var legacy = legacySchema(definition, config, topics);
+        assertThat(nativeSchema.keySchema()).isNull();
+        assertThat(legacy.keySchema()).isNull();
+        assertThat(nativeSchema.keyFromColumnData(row())).isNull();
+        assertThat(nativeSchema.valueFromColumnData(row())).isEqualTo(legacy.valueFromColumnData(row()));
+        Object[] invalid = row();
+        invalid[0] = null;
+        assertThrows(IllegalArgumentException.class, () -> nativeSchema.valueFromColumnData(invalid));
+    }
+
     @ParameterizedTest
     @CsvSource({ "default,both", "none,none", "leading,leading", "trailing,trailing", "both,both" })
     void shouldPreserveLegacyCharacterKeysAndValuesWhenUsingNativeSchemas(String configured, String expectedMode) throws Exception {
@@ -56,7 +152,7 @@ class As400NativeTableSchemasTest {
 
     @ParameterizedTest
     @CsvSource({ "adaptive,UTC", "adaptive,America/Chicago", "adaptive,Asia/Tokyo", "adaptive_time_microseconds,UTC",
-            "adaptive_time_microseconds,America/Chicago", "adaptive_time_microseconds,Asia/Tokyo" })
+            "adaptive_time_microseconds,America/Chicago", "adaptive_time_microseconds,Asia/Tokyo", "connect,UTC", "connect,America/Chicago" })
     void shouldPreserveLegacyTemporalSchemasAndValuesAcrossWorkerTimeZones(String mode, String zone) throws Exception {
         var previous = TimeZone.getDefault();
         try {
@@ -167,7 +263,8 @@ class As400NativeTableSchemasTest {
         var jdbc = mock(As400JdbcConnection.class);
         when(jdbc.getRealDatabaseName()).thenReturn("TEST");
         var context = new io.debezium.connector.common.CdcSourceTaskContext<>(config.getConfig(), config, config.getCustomMetricTags());
-        try (var legacy = new As400DatabaseSchema(config, jdbc, topics, config.schemaNameAdjuster(), new CustomConverterRegistry(List.of()), context)) {
+        try (var legacy = new As400DatabaseSchema(config, jdbc, topics, config.schemaNameAdjuster(),
+                As400NativeTableSchemas.converterRegistry(config), context)) {
             legacy.forwardSchema(definition.outputTable());
             return legacy.schemaFor(definition.schema().id());
         }
@@ -215,14 +312,39 @@ class As400NativeTableSchemasTest {
     }
 
     @ParameterizedTest
-    @ValueSource(strings = { "decimal.handling.mode", "binary.handling.mode", "converters", "message.key.columns", "column.exclude.list", "column.mask.with.4.chars" })
-    void unqualifiedOutputTransformationsCannotSilentlyChangeTheFixedNativeProfile(String key) throws Exception {
+    @CsvSource({ "decimal.handling.mode,double", "decimal.handling.mode,string", "binary.handling.mode,hex", "binary.handling.mode,base64",
+            "column.exclude.list,LIB.M.C", "column.include.list,LIB.M.ID", "column.mask.with.4.chars,LIB.M.C", "column.truncate.to.2.chars,LIB.M.V",
+            "message.key.columns,LIB.M:C", "field.name.adjustment.mode,avro", "field.name.adjustment.mode,avro_unicode",
+            "schema.name.adjustment.mode,avro", "schema.name.adjustment.mode,avro_unicode", "datatype.propagate.source.type,.*", "column.propagate.source.type,LIB.M.C" })
+    void shouldPreserveLegacyKeyAndValueSchemasWithStandardOutputSettings(String key, String value) throws Exception {
         var definition = new As400NativeBindingAcquisitionTest.Fixture().acquire().definitions().get(0);
-        String value = key.equals("decimal.handling.mode") ? "double"
-                : key.equals("binary.handling.mode") ? "hex" : key.equals("message.key.columns") ? ".*:ID" : "unqualified";
+        if (key.equals("field.name.adjustment.mode")) {
+            definition = new As400BindingDefinition(definition.identity(), definition.schema().edit().renameColumn("C", "customer-code").create(), definition.codecs());
+        }
         var raw = Configuration.create().with("topic.prefix", "test").with("database.dbname", "TEST").with(key, value).build();
         var config = new As400ConnectorConfig(raw);
-        assertThrows(IllegalArgumentException.class, () -> new As400NativeTableSchemas(List.of(definition), config, null));
+        var topics = config.<TableId> getTopicNamingStrategy(As400ConnectorConfig.TOPIC_NAMING_STRATEGY, true);
+        var legacy = legacySchema(definition, config, topics);
+        var nativeSchema = new As400NativeTableSchemas(List.of(definition), config, topics).schemaFor(definition.schema().id());
+        assertThat(nativeSchema.keySchema()).isEqualTo(legacy.keySchema());
+        assertThat(nativeSchema.valueSchema()).isEqualTo(legacy.valueSchema());
+        if (key.contains("propagate.source.type")) {
+            assertThat(nativeSchema.valueSchema().field("C").schema().parameters()).containsKey("__debezium.source.column.type");
+        }
+        assertThat(nativeSchema.keyFromColumnData(row())).isEqualTo(legacy.keyFromColumnData(row()));
+        assertThat(nativeSchema.valueFromColumnData(row())).isEqualTo(legacy.valueFromColumnData(row()));
+        Object[] nullable = row();
+        nullable[4] = null;
+        assertThat(nativeSchema.keyFromColumnData(nullable)).isEqualTo(legacy.keyFromColumnData(nullable));
+        assertThat(nativeSchema.valueFromColumnData(nullable)).isEqualTo(legacy.valueFromColumnData(nullable));
+    }
+
+    @Test
+    void shouldRejectAMissingCustomConverterImplementationBeforeNativeOutput() throws Exception {
+        var definition = new As400NativeBindingAcquisitionTest.Fixture().acquire().definitions().get(0);
+        var config = new As400ConnectorConfig(Configuration.create().with("topic.prefix", "test").with("converters", "missing")
+                .with("missing.type", "example.MissingConverter").build());
+        assertThrows(RuntimeException.class, () -> new As400NativeTableSchemas(List.of(definition), config, null));
     }
 
     @Test

@@ -143,6 +143,9 @@ public class As400OffsetContext extends CommonOffsetContext<SourceInfo> {
                 As400OffsetContext.RECEIVER_LIBRARY, position.getReceiver().library(),
                 As400OffsetContext.SNAPSHOT_COMPLETED_KEY, Boolean.toString(snapshotCompleted)));
         incrementalSnapshotContext.store(offset);
+        if (offset.get("incremental_snapshot_correlation_id") == null) {
+            offset.remove("incremental_snapshot_correlation_id");
+        }
         return offset;
     }
 
@@ -160,7 +163,8 @@ public class As400OffsetContext extends CommonOffsetContext<SourceInfo> {
     As400OffsetContext recordContext(EntryHeader entry, JournalProcessedPosition checkpoint) {
         var result = new As400OffsetContext(connectorConfig, new JournalProcessedPosition(checkpoint), snapshotCompleted, incrementalSnapshotContext);
         var source = entryPosition(entry);
-        result.updateSourceInfo(source.getOffset(), source.getReceiver().name(), source.getReceiver().library(), entry.getTime());
+        result.updateSourceInfo(source.getOffset(), source.getReceiver().name(), source.getReceiver().library(), entry.getTime(),
+                rowNumber(entry.getJournalCode(), entry.getRelativeRecordNumber()));
         result.setTransaction(transactionContext);
         return result;
     }
@@ -179,18 +183,32 @@ public class As400OffsetContext extends CommonOffsetContext<SourceInfo> {
      */
     public void updateSourceInfo(EntryHeader entryHeader) {
         if (entryHeader.hasReceiver()) {
-            updateSourceInfo(entryHeader.getSequenceNumber(), entryHeader.getReceiver(), entryHeader.getReceiverLibrary(), entryHeader.getTime());
+            updateSourceInfo(entryHeader.getSequenceNumber(), entryHeader.getReceiver(), entryHeader.getReceiverLibrary(), entryHeader.getTime(),
+                    rowNumber(entryHeader.getJournalCode(), entryHeader.getRelativeRecordNumber()));
         }
         else {
-            updateSourceInfo(entryHeader.getSequenceNumber(), position.getReceiver().name(), position.getReceiver().library(), entryHeader.getTime());
+            updateSourceInfo(entryHeader.getSequenceNumber(), position.getReceiver().name(), position.getReceiver().library(), entryHeader.getTime(),
+                    rowNumber(entryHeader.getJournalCode(), entryHeader.getRelativeRecordNumber()));
         }
     }
 
-    private void updateSourceInfo(BigInteger sequence, String receiver, String receiverLibrary, Instant timestamp) {
+    void updateSourceInfo(As400SourceMetadata metadata) {
+        updateSourceInfo(metadata.position().offset(), metadata.position().receiver().name(), metadata.position().receiver().library(), metadata.timestamp(),
+                rowNumber(metadata.journalCode(), metadata.recordInfo().recordNumber()));
+    }
+
+    private static BigInteger rowNumber(char journalCode, BigInteger number) {
+        // Non-row records reuse the header field for other purposes. A clear
+        // must never inherit the last row's physical number.
+        return journalCode == 'R' && number != null && number.signum() > 0 ? number : null;
+    }
+
+    private void updateSourceInfo(BigInteger sequence, String receiver, String receiverLibrary, Instant timestamp, BigInteger rrn) {
         sourceInfo.setSourceTime(timestamp);
         sourceInfo.setReceiver(receiver);
         sourceInfo.setReceiverLib(receiverLibrary);
         sourceInfo.setSequence(sequence.toString());
+        sourceInfo.setRrn(rrn == null ? null : rrn.toString());
     }
 
     @Override
@@ -202,7 +220,7 @@ public class As400OffsetContext extends CommonOffsetContext<SourceInfo> {
     public void event(DataCollectionId collectionId, Instant timestamp) {
         // snapshot rows are read via SELECT and have no journal entry of their own,
         // so the processed position is the correct source here
-        updateSourceInfo(position.getOffset(), position.getReceiver().name(), position.getReceiver().library(), timestamp);
+        updateSourceInfo(position.getOffset(), position.getReceiver().name(), position.getReceiver().library(), timestamp, null);
         // sourceInfo.tableEvent((TableId) collectionId);
     }
 

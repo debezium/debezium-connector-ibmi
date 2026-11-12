@@ -401,6 +401,131 @@ class RawJournalPageTest {
         return error;
     }
 
+    private static byte[] creation(long sequence) throws Exception {
+        try (var stream = RawJournalPageTest.class.getResourceAsStream("/file-create-pointer.hex")) {
+            var entry = HexFormat.of().parseHex(new String(stream.readAllBytes(), StandardCharsets.UTF_8).lines()
+                    .filter(line -> !line.startsWith("#")).reduce("", String::concat));
+            ByteBuffer.wrap(entry).putLong(24, sequence);
+            return entry;
+        }
+    }
+
+    @Test
+    void shouldReleaseEveryCreationHandleIncludingEntriesDeferredByThePageBudget() throws Exception {
+        var first = creation(75);
+        var second = creation(76);
+        ByteBuffer.wrap(second).putInt(72, 14);
+        var released = new ArrayList<Long>();
+        var result = RawJournalPage.decode(page(List.of(first, second)), pos(75), pos(100), 1, released::add);
+        assertEquals(List.of(13L, 14L), released);
+        assertEquals(1, result.entries().size());
+        assertEquals(pos(76), result.continuation().orElseThrow());
+        assertEquals("CT", result.entries().get(0).header().getEntryType());
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = { "row", "member", "flags", "subtype", "identity", "not-logged", "truncated", "release" })
+    void shouldRejectUnqualifiedCreationPointersBeforeReturningAResponse(String fault) throws Exception {
+        var entry = creation(75);
+        var header = new io.debezium.ibmi.db2.journal.retrieve.rjne0200.EntryHeaderDecoder(37).decode(entry, 0);
+        int payload = header.getEntrySpecificDataOffset() + 16;
+        switch (fault) {
+            case "row" -> {
+                text(entry, 98, 1, "R");
+                text(entry, 99, 2, "PT");
+            }
+            case "member" -> {
+                text(entry, 98, 1, "F");
+                text(entry, 99, 2, "MC");
+            }
+            case "flags" -> entry[218] ^= 1;
+            case "subtype" -> text(entry, payload + 108, 1, "7");
+            case "identity" -> text(entry, payload, 10, "OTHER");
+            case "not-logged" -> text(entry, payload + 142, 1, "1");
+            case "truncated" -> text(entry, payload - 16, 5, "00143");
+            default -> {
+            }
+        }
+        var released = new ArrayList<Long>();
+        assertThrows(RuntimeException.class, () -> RawJournalPage.decode(page(List.of(entry)), pos(75), pos(100), 10, handle -> {
+            if (fault.equals("release")) {
+                throw new IllegalStateException("cleanup failed");
+            }
+            released.add(handle);
+        }));
+        assertTrue(released.isEmpty());
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = { "success", "release-failed", "error-structure", "different-job", "stop-during-release-setup" })
+    void shouldReleaseCreationPointersOnTheRetrievingJobOrCancelWithoutProgress(String scenario) throws Exception {
+        AS400 transport = mock(AS400.class);
+        Job captured = mock(Job.class);
+        when(captured.getCodedCharacterSetID()).thenReturn(37);
+        when(captured.getName()).thenReturn("QZRCSRVS");
+        when(captured.getUser()).thenReturn("FIXTURE");
+        when(captured.getNumber()).thenReturn("123456");
+        Job other = mock(Job.class);
+        when(other.getName()).thenReturn("DIFFERENT");
+        var lifecycle = new JournalReadLifecycle();
+        var reader = new RetrieveJournal(new RetrieveConfigBuilder().withAs400(() -> transport)
+                .withJournalInfo(new JournalInfo("JRN", "LIB", false)).build(), mock(JournalInfoRetrieval.class), lifecycle);
+        var response = page(List.of(creation(75)));
+        var requests = new ArrayList<ProgramParameter[]>();
+        try (var connections = mockConstruction(AS400.class);
+                var jobs = mockConstruction(Job.class);
+                var calls = mockConstruction(ServiceProgramCall.class, (call, context) -> {
+                    when(call.getServerJob()).thenReturn(captured, scenario.equals("different-job") ? other : captured);
+                    when(call.run()).thenReturn(true, !scenario.equals("release-failed"));
+                    when(call.getMessageList()).thenReturn(new AS400Message[0]);
+                    doAnswer(invocation -> {
+                        if (scenario.equals("stop-during-release-setup") && invocation.getArgument(0).equals("QjoDeletePointerHandle")) {
+                            lifecycle.requestStop();
+                        }
+                        return null;
+                    }).when(call).setProcedureName(anyString());
+                    doAnswer(invocation -> {
+                        ProgramParameter[] p = invocation.getArgument(1);
+                        requests.add(p);
+                        if (p.length == 6) {
+                            p[0] = mock(ProgramParameter.class);
+                            when(p[0].getOutputData()).thenReturn(response);
+                            p[5] = mock(ProgramParameter.class);
+                            when(p[5].getOutputData()).thenReturn(noError());
+                        }
+                        else {
+                            assertEquals(2, p.length);
+                            assertEquals(13, ByteBuffer.wrap(p[0].getInputData()).getInt());
+                            p[1] = mock(ProgramParameter.class);
+                            byte[] error = noError();
+                            if (scenario.equals("error-structure")) {
+                                ByteBuffer.wrap(error).putInt(4, 32);
+                            }
+                            when(p[1].getOutputData()).thenReturn(error);
+                        }
+                        return null;
+                    }).when(call).setProgram(anyString(), org.mockito.ArgumentMatchers.any(ProgramParameter[].class));
+                })) {
+            if (scenario.equals("success")) {
+                assertEquals(1, reader.readRawPage(pos(75), pos(100), 1).entries().size());
+                assertTrue(jobs.constructed().isEmpty());
+            }
+            else {
+                assertThrows(IllegalStateException.class, () -> reader.readRawPage(pos(75), pos(100), 1));
+                assertEquals(1, jobs.constructed().size());
+                verify(jobs.constructed().get(0)).end(0);
+            }
+            assertEquals(scenario.equals("different-job") ? 1 : 2, requests.size());
+            verify(calls.constructed().get(0), org.mockito.Mockito.times(
+                    scenario.equals("different-job") || scenario.equals("stop-during-release-setup") ? 1 : 2)).run();
+            if (!scenario.equals("different-job")) {
+                verify(calls.constructed().get(0)).setProcedureName("QjoDeletePointerHandle");
+            }
+            assertNull(reader.getPosition());
+            assertTrue(!reader.readState().registered());
+        }
+    }
+
     private static byte[] nativeHex(String name) throws Exception {
         try (var input = RawJournalPageTest.class.getResourceAsStream("/raw-journal/" + name + ".hex")) {
             String hex = new String(input.readAllBytes(), StandardCharsets.UTF_8).lines().filter(line -> !line.startsWith("#")).reduce("", String::concat);

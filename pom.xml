@@ -32,6 +32,7 @@
 
         <!-- Dependencies -->
         <version.jt400>21.0.4</version.jt400>
+        <version.h2-mvstore>2.5.252</version.h2-mvstore>
     </properties>
 
     <repositories>

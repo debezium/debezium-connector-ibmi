@@ -24,8 +24,17 @@ final class As400ConverterFingerprint {
     private As400ConverterFingerprint() {
     }
 
+    static void requireNonSecretCustomSetting(String key) {
+        String property = key.toLowerCase(java.util.Locale.ROOT);
+        if (property.endsWith(".password") || property.endsWith(".secret") || property.endsWith(".token")
+                || property.endsWith(".user.info") || property.endsWith(".jaas.config") || property.endsWith(".keystore.key")) {
+            throw new IllegalArgumentException("Custom converter authentication needs explicit classification before capture fingerprinting: " + key);
+        }
+    }
+
     static boolean include(Configuration config, String key, String value) {
-        String prefix = key.startsWith("key.converter.") ? "key.converter" : "value.converter";
+        String prefix = key.startsWith("key.converter.") ? "key.converter"
+                : key.startsWith("header.converter.") ? "header.converter" : "value.converter";
         String property = key.substring(prefix.length() + 1);
         String clientProperty = property.startsWith("schema.registry.") ? property.substring("schema.registry.".length()) : property;
         if (CREDENTIALS.contains(clientProperty)) {

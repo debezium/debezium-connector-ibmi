@@ -42,8 +42,8 @@ class As400InitializationTaskTest {
     Path directory;
 
     @ParameterizedTest
-    @ValueSource(strings = { "heartbeat.interval.ms=missing", "heartbeat.interval.ms=0", "heartbeat.interval.ms=-1",
-            "event.processing.failure.handling.mode=warn", "event.processing.failure.handling.mode=skip", "skip.messages.without.change=true" })
+    @ValueSource(strings = { "heartbeat.interval.ms=-1",
+            "event.processing.failure.handling.mode=warn", "event.processing.failure.handling.mode=skip" })
     void invalidStreamingConfigurationCannotEnrollPublishOrInstallHistory(String setting) throws Exception {
         try (var run = new Running(directory, null)) {
             var config = new HashMap<>(properties());

@@ -114,7 +114,8 @@ class As400ConverterFingerprintTest {
     @ParameterizedTest
     @ValueSource(strings = { "value.converter.schema.registry.url=https://different.invalid", "value.converter=example.OtherConverter",
             "value.converter.value.subject.name.strategy=io.confluent.kafka.serializers.subject.RecordNameStrategy",
-            "value.converter.auto.register.schemas=false", "value.converter.use.latest.version=true", "value.converter.connect.meta.data=false" })
+            "value.converter.auto.register.schemas=false", "value.converter.use.latest.version=true", "value.converter.connect.meta.data=false",
+            "header.converter=org.apache.kafka.connect.json.JsonConverter", "header.converter.schemas.enable=false" })
     void authenticationExclusionCannotBypassChangedSerializationPolicy(String setting) throws Exception {
         var fixture = legacy(false);
         var properties = legacyProperties(false);
@@ -152,7 +153,7 @@ class As400ConverterFingerprintTest {
     }
 
     @ParameterizedTest
-    @ValueSource(strings = { "custom-converter", "unclassified-secret", "bare-password", "embedded-url", "malformed-url" })
+    @ValueSource(strings = { "custom-converter", "unclassified-secret", "bare-password", "embedded-url", "malformed-url", "header-secret", "header-url" })
     void ambiguousCredentialsRejectWithoutPrintingTheirValues(String fault) throws Exception {
         var properties = legacyProperties(false);
         String secret = "do-not-print-this-value";
@@ -165,6 +166,14 @@ class As400ConverterFingerprintTest {
             case "bare-password" -> properties.put("value.converter.password", secret);
             case "embedded-url" -> properties.put("value.converter.schema.registry.url", "https://user:" + secret + "@registry.invalid");
             case "malformed-url" -> properties.put("value.converter.schema.registry.url", "https://user:" + secret + "@registry invalid");
+            case "header-secret" -> {
+                properties.put("header.converter", "example.HeaderConverter");
+                properties.put("header.converter.basic.auth.user.info", secret);
+            }
+            case "header-url" -> {
+                properties.put("header.converter", "example.HeaderConverter");
+                properties.put("header.converter.schema.registry.url", "https://user:" + secret + "@registry.invalid");
+            }
             default -> throw new AssertionError(fault);
         }
         var failure = assertThrows(IllegalArgumentException.class, () -> new As400DcgConfig(Configuration.from(properties)));

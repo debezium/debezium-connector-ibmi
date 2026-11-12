@@ -42,17 +42,21 @@ public final class As400PackagedProbeAudit {
         List<Map<String, Object>> result = new ArrayList<>();
         long bytes = 0;
         try (var consumer = new org.apache.kafka.clients.consumer.KafkaConsumer<String, String>(config)) {
-            var partition = new org.apache.kafka.common.TopicPartition(args[1], 0);
-            consumer.assign(List.of(partition));
-            consumer.seekToBeginning(List.of(partition));
-            long end = consumer.endOffsets(List.of(partition)).get(partition);
+            var partitions = consumer.partitionsFor(args[1]).stream()
+                    .map(p -> new org.apache.kafka.common.TopicPartition(p.topic(), p.partition())).toList();
+            if (partitions.isEmpty() || partitions.size() > 1024) {
+                throw new IllegalStateException("Missing or excessive audit partitions");
+            }
+            consumer.assign(partitions);
+            consumer.seekToBeginning(partitions);
+            var end = consumer.endOffsets(partitions);
             long deadline = System.nanoTime() + Duration.ofSeconds(25).toNanos();
-            while (consumer.position(partition) < end) {
+            while (partitions.stream().anyMatch(p -> consumer.position(p) < end.get(p))) {
                 if (System.nanoTime() >= deadline) {
                     throw new IllegalStateException("Audit deadline exceeded");
                 }
                 for (var record : consumer.poll(Duration.ofMillis(100))) {
-                    if (record.offset() >= end) {
+                    if (record.offset() >= end.get(new org.apache.kafka.common.TopicPartition(record.topic(), record.partition()))) {
                         continue;
                     }
                     bytes += Math.max(0, record.serializedKeySize()) + Math.max(0, record.serializedValueSize());
@@ -60,6 +64,7 @@ public final class As400PackagedProbeAudit {
                         throw new IllegalStateException("Audit bound exceeded");
                     }
                     var row = new HashMap<String, Object>();
+                    row.put("partition", record.partition());
                     row.put("offset", record.offset());
                     row.put("key", record.key());
                     row.put("value", record.value());
@@ -68,6 +73,10 @@ public final class As400PackagedProbeAudit {
                 }
             }
         }
+        // Kafka has no cross-partition ordering. Stable partition/offset order
+        // supports repeated audits without inventing a global event sequence.
+        result.sort(java.util.Comparator.<Map<String, Object>, Integer> comparing(row -> (Integer) row.get("partition"))
+                .thenComparingLong(row -> (Long) row.get("offset")));
         new com.fasterxml.jackson.databind.ObjectMapper().writerWithDefaultPrettyPrinter().writeValue(Path.of(args[3]).toFile(), result);
     }
 

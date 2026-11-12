@@ -355,7 +355,7 @@ public class As400StreamingChangeEventSource implements StreamingChangeEventSour
             resolvedTable = tableId;
 
             final boolean includeTable = connectorConfig.getTableFilters().dataCollectionFilter()
-                    .isIncluded(tableId);
+                    .isIncluded(tableId) || connectorConfig.isSignalDataCollection(tableId);
 
             if (!alwaysProcess.contains(eheader.getJournalCode()) && !includeTable) { // always process journal J
                 // and transaction C

@@ -21,6 +21,7 @@ import io.debezium.connector.base.QueueProvider;
 import io.debezium.connector.common.DebeziumHeaderProducer;
 import io.debezium.connector.db2as400.As400TransactionBuffer.CommittedBatch;
 import io.debezium.connector.db2as400.As400TransactionBuffer.TransactionId;
+import io.debezium.heartbeat.Heartbeat;
 import io.debezium.heartbeat.HeartbeatImpl;
 import io.debezium.ibmi.db2.journal.retrieve.JournalProcessedPosition;
 import io.debezium.pipeline.DataChangeEvent;
@@ -46,6 +47,10 @@ final class As400BatchDispatcher implements As400ReplayCoordinator.RecordFactory
     private final StagingQueue staging;
     private final EventDispatcher<As400Partition, TableId> dispatcher;
     private final HeartbeatImpl heartbeat;
+    private final ChangeEventQueue<DataChangeEvent> queue;
+    private final As400BufferedSignals signals;
+    private io.debezium.pipeline.source.snapshot.incremental.IncrementalSnapshotContext<TableId> snapshotContext;
+    private As400BufferedIncrementalSnapshot incrementalSnapshot;
     private volatile boolean stopped;
     private boolean active;
     private As400OffsetContext source;
@@ -57,6 +62,13 @@ final class As400BatchDispatcher implements As400ReplayCoordinator.RecordFactory
 
     As400BatchDispatcher(As400ConnectorConfig config, As400Partition partition, DatabaseSchema<TableId> schema,
                          TopicNamingStrategy<TableId> topics, DebeziumHeaderProducer headers, Clock clock, int maximumRecords, boolean ordinary) {
+        this(config, partition, schema, topics, headers, clock, maximumRecords, ordinary, null);
+    }
+
+    As400BatchDispatcher(As400ConnectorConfig config, As400Partition partition, DatabaseSchema<TableId> schema,
+                         TopicNamingStrategy<TableId> topics, DebeziumHeaderProducer headers, Clock clock, int maximumRecords, boolean ordinary,
+                         As400BufferedSignals signals) {
+        this.signals = signals;
         this.ordinary = ordinary;
         this.config = Objects.requireNonNull(config);
         this.partition = Objects.requireNonNull(partition);
@@ -68,23 +80,87 @@ final class As400BatchDispatcher implements As400ReplayCoordinator.RecordFactory
         staging = new StagingQueue(maximumRecords);
         // Reject at the provider's smaller bound instead of blocking this single
         // producer while it is preparing the complete batch before any polling.
-        ChangeEventQueue<DataChangeEvent> queue = new ChangeEventQueue.Builder<DataChangeEvent>()
+        queue = new ChangeEventQueue.Builder<DataChangeEvent>()
                 .maxQueueSize(maximumRecords + 1).maxBatchSize(maximumRecords)
                 .pollInterval(Duration.ofMillis(1)).queueProvider(staging).build();
-        heartbeat = new HeartbeatImpl(config.getHeartbeatInterval(), topics.heartbeatTopic(), config.getLogicalName(), config.schemaNameAdjuster(), queue);
-        dispatcher = new EventDispatcher<>(config, topics, schema, queue, id -> true, DataChangeEvent::new, null,
-                new As400EventMetadataProvider(), heartbeat, config.schemaNameAdjuster(), null, headers);
+        boolean disabledHeartbeat = config.getHeartbeatInterval().isZero();
+        heartbeat = new HeartbeatImpl(config.getHeartbeatInterval(), disabledHeartbeat ? "__debezium-truncate." + config.getLogicalName() : topics.heartbeatTopic(),
+                config.getLogicalName(), config.schemaNameAdjuster(), queue);
+        dispatcher = new As400EventDispatcher(config, topics, schema, queue, id -> true, DataChangeEvent::new,
+                new As400EventMetadataProvider(), disabledHeartbeat ? Heartbeat.ScheduledHeartbeat.NOOP_HEARTBEAT : heartbeat, config.schemaNameAdjuster(), signals,
+                headers);
+    }
+
+    void incrementalSnapshot(As400BufferedIncrementalSnapshot snapshot, As400Checkpoint checkpoint) {
+        if (signals == null || incrementalSnapshot != null) {
+            throw new IllegalStateException("Incremental snapshot requires one admitted signal processor");
+        }
+        incrementalSnapshot = snapshot;
+        snapshotContext = As400IncrementalSnapshotState.restore(checkpoint.snapshotState());
+        source = new As400OffsetContext(config, new JournalProcessedPosition(checkpoint.completedThrough().offset(),
+                checkpoint.completedThrough().receiver(), clock.currentTimeAsInstant(), true), true, snapshotContext);
+        signals.setContext(io.debezium.pipeline.spi.Offsets.of(partition, source));
+        dispatcher.setIncrementalSnapshotChangeEventSource(java.util.Optional.of(snapshot));
+    }
+
+    private void processSignals() throws InterruptedException {
+        if (incrementalSnapshot != null) {
+            incrementalSnapshot.start(partition, source);
+            signals.executePending();
+        }
+    }
+
+    void schemaChanged(As400BindingDefinition definition) {
+        if (incrementalSnapshot != null) {
+            if (snapshotContext.snapshotRunning() && snapshotContext.currentDataCollectionId() != null
+                    && definition.schema().id().equals(snapshotContext.currentDataCollectionId().getId())) {
+                throw new IllegalArgumentException("Schema refresh during an active incremental snapshot is not supported by this connector");
+            }
+            incrementalSnapshot.schemaChanged(definition);
+        }
+    }
+
+    @Override
+    public boolean hasSignalWork() {
+        return incrementalSnapshot != null;
+    }
+
+    @Override
+    public java.util.Optional<Map<String, String>> snapshotState() {
+        return snapshotContext == null ? java.util.Optional.empty() : java.util.Optional.of(As400IncrementalSnapshotState.capture(snapshotContext));
+    }
+
+    @Override
+    public void prepareSignals(Consumer<SourceRecord> records) throws Exception {
+        try {
+            enter();
+            processSignals();
+            drain(records);
+        }
+        catch (Exception failure) {
+            stopped = true;
+            throw failure;
+        }
+        finally {
+            leave();
+        }
     }
 
     /** Admission must run this before first-start side effects; construction also defends the boundary. */
     static void requireConfiguration(As400ConnectorConfig config) {
-        if (!config.getSkippedOperations().isEmpty() || config.skipMessagesWithoutChange()
-                || config.getEventConvertingFailureHandlingMode() != EventConvertingFailureHandlingMode.FAIL
-                || config.getEventProcessingFailureHandlingMode() != EventProcessingFailureHandlingMode.FAIL
-                || config.getHeartbeatInterval().isZero() || config.getHeartbeatInterval().isNegative()) {
-            throw new IllegalArgumentException("Buffered dispatch requires skipped.operations=none, skip.messages.without.change=false, "
-                    + "event.processing.failure.handling.mode=fail, event.converting.failure.handling.mode=fail and heartbeat.interval.ms > 0");
+        boolean online = As400DcgConfig.transactionalTruncateEnabled(config.getConfig());
+        if (config.getSkippedOperations().contains(io.debezium.data.Envelope.Operation.TRUNCATE)
+                || !online && (config.getEventConvertingFailureHandlingMode() != EventConvertingFailureHandlingMode.FAIL
+                        || config.getEventProcessingFailureHandlingMode() != EventProcessingFailureHandlingMode.FAIL)
+                || config.getHeartbeatInterval().isNegative()) {
+            throw new IllegalArgumentException("Buffered dispatch requires truncate capture, "
+                    + "event.processing.failure.handling.mode=fail, event.converting.failure.handling.mode=fail and heartbeat.interval.ms >= 0");
         }
+    }
+
+    @Override
+    public boolean needsValues(io.debezium.relational.TableId table) {
+        return config.getTableFilters().dataCollectionFilter().isIncluded(table) || config.isSignalDataCollection(table);
     }
 
     @Override
@@ -96,34 +172,61 @@ final class As400BatchDispatcher implements As400ReplayCoordinator.RecordFactory
             if (batch.transactionId().commitCycle().signum() < 0 || (!transactional && (!ordinary || batch.changes().size() != 1))) {
                 throw new IllegalArgumentException("Invalid transaction or autocommit batch");
             }
-            var selected = batch.changes().stream().filter(c -> config.getTableFilters().dataCollectionFilter().isIncluded(c.table().tableId())).toList();
-            if (selected.isEmpty()) {
+            var selected = batch.changes().stream().filter(c -> needsValues(c.table().tableId())).iterator();
+            if (!selected.hasNext()) {
                 return; // No successful transaction metadata for an empty/filtered batch.
             }
             source = context(batch.startSource());
+            processSignals();
+            drain(records);
             if (transactional) {
-                dispatcher.dispatchTransactionStartedEvent(partition, transactionId(batch.transactionId()), source, batch.startSource().timestamp());
+                String id = As400DcgConfig.transactionalTruncateEnabled(config.getConfig())
+                        ? batch.transactionId().commitCycle().toString()
+                        : transactionId(batch.transactionId());
+                dispatcher.dispatchTransactionStartedEvent(partition, id, source, batch.startSource().timestamp());
+                drain(records);
             }
-            for (As400TransactionBuffer.Change change : selected) {
+            while (selected.hasNext()) {
+                As400TransactionBuffer.Change change = selected.next();
                 position(change.source());
-                source.event(change.table().tableId(), change.source().timestamp());
                 var emitter = new As400ChangeRecordEmitter(partition, source, change.operation(),
                         change.before() == null ? null : change.before().values(),
                         change.after() == null ? null : change.after().values(), clock, config);
-                if (!dispatcher.dispatchDataChangeEvent(partition, change.table().tableId(), emitter)) {
-                    throw new IllegalStateException("Required buffered dispatch was rejected for " + change.table().tableId());
+                if (incrementalSnapshot != null && change.operation() == io.debezium.data.Envelope.Operation.TRUNCATE) {
+                    incrementalSnapshot.truncate(change.table().tableId());
                 }
+                Map<String, Object> transactionBefore = null;
+                if (config.getEventProcessingFailureHandlingMode() != EventProcessingFailureHandlingMode.FAIL) {
+                    transactionBefore = new java.util.HashMap<>();
+                    source.getTransactionContext().store(transactionBefore);
+                }
+                try {
+                    if (!dispatcher.dispatchDataChangeEvent(partition, change.table().tableId(), emitter)) {
+                        if (change.operation() == io.debezium.data.Envelope.Operation.TRUNCATE
+                                || config.isSignalDataCollection(change.table().tableId())
+                                || config.getEventProcessingFailureHandlingMode() == EventProcessingFailureHandlingMode.FAIL) {
+                            throw new IllegalStateException("Required buffered dispatch was rejected for " + change.table().tableId());
+                        }
+                        // Explicit WARN/SKIP has the same lossy row semantics as
+                        // ordinary dispatch. Do not publish a partial key change.
+                        staging.records.clear();
+                        source.setTransaction(TransactionContext.load(transactionBefore));
+                    }
+                }
+                finally {
+                    emitter.rethrowDispatchInterruption();
+                }
+                processSignals();
+                // The replay coordinator prepares the entire batch before any
+                // publication. Drain each logical change into its bounded store
+                // instead of retaining a second complete batch in this deque.
+                drain(records);
             }
             position(batch.commitSource());
             if (transactional) {
                 dispatcher.dispatchTransactionCommittedEvent(partition, source, batch.commitSource().timestamp());
             }
-            ensureActive();
-            while (!staging.records.isEmpty()) {
-                ensureActive();
-                records.accept(staging.records.removeFirst().getRecord());
-                ensureActive();
-            }
+            drain(records);
         }
         catch (Exception e) {
             stopped = true;
@@ -137,6 +240,14 @@ final class As400BatchDispatcher implements As400ReplayCoordinator.RecordFactory
         }
     }
 
+    private void drain(Consumer<SourceRecord> records) {
+        ensureActive();
+        while (!staging.records.isEmpty()) {
+            records.accept(staging.records.removeFirst().getRecord());
+            ensureActive();
+        }
+    }
+
     /**
      * Invoke from the same source loop after delivery or while idle. The real
      * heartbeat timer is checked here; no executor may publish around a batch.
@@ -145,12 +256,18 @@ final class As400BatchDispatcher implements As400ReplayCoordinator.RecordFactory
     boolean publishCheckpoint(As400ReplayCoordinator replay, boolean force) throws InterruptedException {
         try {
             enter();
-            if (!force && !heartbeat.expired()) {
+            if (!force && (config.getHeartbeatInterval().isZero() || !heartbeat.expired())) {
                 return false;
             }
             var checkpoint = replay.checkpoint();
-            source = new As400OffsetContext(config, new JournalProcessedPosition(checkpoint.completedThrough().offset(),
-                    checkpoint.completedThrough().receiver(), clock.currentTimeAsInstant(), true));
+            var position = new JournalProcessedPosition(checkpoint.completedThrough().offset(),
+                    checkpoint.completedThrough().receiver(), clock.currentTimeAsInstant(), true);
+            if (snapshotContext == null) {
+                source = new As400OffsetContext(config, position);
+            }
+            else {
+                source.setPosition(position);
+            }
             source.setTransaction(new TransactionContext());
             heartbeat.emit(partition.getSourcePartition(), source);
             heartbeat.reset();
@@ -174,15 +291,18 @@ final class As400BatchDispatcher implements As400ReplayCoordinator.RecordFactory
     }
 
     private As400OffsetContext context(As400SourceMetadata metadata) {
-        var context = new As400OffsetContext(config,
-                new JournalProcessedPosition(metadata.position().offset(), metadata.position().receiver(), metadata.timestamp(), true));
+        var position = new JournalProcessedPosition(metadata.position().offset(), metadata.position().receiver(), metadata.timestamp(), true);
+        var context = snapshotContext == null ? new As400OffsetContext(config, position) : source;
+        context.setPosition(position);
         // Never restore metadata counters: recovery replays whole committed batches.
         context.setTransaction(new TransactionContext());
+        context.updateSourceInfo(metadata);
         return context;
     }
 
     private void position(As400SourceMetadata metadata) {
         source.setPosition(new JournalProcessedPosition(metadata.position().offset(), metadata.position().receiver(), metadata.timestamp(), true));
+        source.updateSourceInfo(metadata);
     }
 
     static String transactionId(TransactionId id) {
@@ -200,6 +320,7 @@ final class As400BatchDispatcher implements As400ReplayCoordinator.RecordFactory
             throw new IllegalStateException("Buffered dispatcher is stopped, reentrant or used from another thread");
         }
         active = true;
+        staging.prepared = 0;
     }
 
     private void ensureActive() {
@@ -233,6 +354,7 @@ final class As400BatchDispatcher implements As400ReplayCoordinator.RecordFactory
     private final class StagingQueue implements QueueProvider<DataChangeEvent> {
         private final Deque<DataChangeEvent> records = new ArrayDeque<>();
         private final int maximum;
+        private int prepared;
 
         private StagingQueue(int maximum) {
             this.maximum = maximum;
@@ -250,10 +372,11 @@ final class As400BatchDispatcher implements As400ReplayCoordinator.RecordFactory
         @Override
         public void enqueue(DataChangeEvent event) {
             ensureActive();
-            if (records.size() >= maximum) {
+            if (prepared >= maximum) {
                 stopped = true;
                 throw new IllegalStateException("Committed batch exceeds output staging bound");
             }
+            prepared++;
             records.addLast(event);
         }
 

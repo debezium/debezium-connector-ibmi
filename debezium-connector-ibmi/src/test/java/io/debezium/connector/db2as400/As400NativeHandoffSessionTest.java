@@ -29,6 +29,76 @@ import io.debezium.connector.db2as400.As400RecoveryTestSupport.Fixture;
 
 class As400NativeHandoffSessionTest {
     @ParameterizedTest
+    @ValueSource(booleans = { false, true })
+    void shouldRejectChangedRuntimeCapabilityAndStoppedPublicationAfterInitialAdmission(boolean sourceOffsets) throws Exception {
+        var raw = Configuration.create().with("topic.prefix", "test").with("database.schema", "LIB").with("database.dbname", "DB")
+                .with("skipped.operations", "none").with("provide.transaction.metadata", false)
+                .with("exactly.once.support", "requested").with("transaction.boundary", "connector").with("errors.tolerance", "none")
+                .with("event.converting.failure.handling.mode", "fail").build();
+        var config = new As400ConnectorConfig(raw);
+        var context = mock(SourceTaskContext.class);
+        var transactions = mock(TransactionContext.class);
+        when(context.transactionContext()).thenReturn(sourceOffsets ? null : transactions);
+        var offsets = mock(OffsetStorageReader.class);
+        when(context.offsetStorageReader()).thenReturn(offsets);
+        when(offsets.offset(Map.of("server", "test"))).thenReturn(new java.util.HashMap<>(Fixture.legacyOffset(29)));
+        var p = Fixture.POLICY;
+        var policy = new As400CaptureFingerprint.Policy(p.filters(), p.skippedOperations(), p.decoder(), p.schema(), p.output(),
+                false, true, Map.of("server", "test"));
+        try (var nativeHandles = mockConstruction(As400DcgNativeIo.class);
+                var session = new As400NativeHandoffSession(config, context, mock(CdcSourceTaskContext.class), raw,
+                        Fixture.JOURNAL, policy, "history", "control", As400ContinuousRuntime.Limits.experimental(), sourceOffsets)) {
+            session.checkQualified(raw);
+            when(context.transactionContext()).thenReturn(sourceOffsets ? transactions : null);
+            assertThatThrownBy(() -> session.checkQualified(raw)).hasMessageContaining("capability changed");
+            when(context.transactionContext()).thenReturn(sourceOffsets ? null : transactions);
+            session.requestStop();
+            assertThatThrownBy(() -> session.checkQualified(raw)).hasMessageContaining("stopped");
+            verify(offsets).offset(Map.of("server", "test"));
+            verifyNoMoreInteractions(offsets);
+            nativeHandles.constructed().forEach(handle -> {
+                verify(handle).requestStop();
+                verifyNoMoreInteractions(handle);
+            });
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = { "transactions", "unordered", "filter", "missing-offset", "malformed-delivery" })
+    void shouldRejectUnqualifiedSourceOffsetHandoffBeforeNativeHandlesAreCreated(String fault) {
+        var raw = Configuration.create().with("topic.prefix", "test").with("database.schema", "LIB").with("database.dbname", "DB")
+                .with("skipped.operations", "none").with("provide.transaction.metadata", false).with("heartbeat.interval.ms", 1000)
+                .with("errors.tolerance", "none").with("event.converting.failure.handling.mode", "fail");
+        if (fault.equals("unordered")) {
+            raw.with("record.processing.order", "UNORDERED");
+        }
+        if (fault.equals("filter")) {
+            raw.with("transforms", "drop");
+        }
+        var config = new As400ConnectorConfig(raw.build());
+        var context = mock(SourceTaskContext.class);
+        var offsets = mock(OffsetStorageReader.class);
+        when(context.offsetStorageReader()).thenReturn(offsets);
+        if (fault.equals("transactions")) {
+            when(context.transactionContext()).thenReturn(mock(TransactionContext.class));
+        }
+        if (fault.equals("malformed-delivery")) {
+            var saved = new java.util.HashMap<String, Object>(Fixture.legacyOffset(29));
+            saved.put(As400DeliveryOffset.VERSION, "2");
+            when(offsets.offset(Map.of("server", "test"))).thenReturn(saved);
+        }
+        var p = Fixture.POLICY;
+        var policy = new As400CaptureFingerprint.Policy(p.filters(), p.skippedOperations(), p.decoder(), p.schema(), p.output(),
+                false, true, Map.of("server", "test"));
+        try (var nativeHandles = mockConstruction(As400DcgNativeIo.class)) {
+            assertThatThrownBy(() -> new As400NativeHandoffSession(config, context, mock(CdcSourceTaskContext.class), Configuration.empty(),
+                    Fixture.JOURNAL, policy, "history", "control", As400ContinuousRuntime.Limits.experimental(), true))
+                    .isInstanceOf(IllegalArgumentException.class);
+            assertThat(nativeHandles.constructed()).isEmpty();
+        }
+    }
+
+    @ParameterizedTest
     @ValueSource(strings = { "rejected-audit", "unsupported-schema", "failed-drain", "wrapped-failed-drain", "native-failure", "stopped" })
     void unqualifiedAuditCanRetryButNativeFailureOrUnfinishedDrainCannot(String fault) throws Exception {
         var raw = Configuration.create().with("topic.prefix", "test").with("database.schema", "LIB").with("database.dbname", "DB")
@@ -86,7 +156,7 @@ class As400NativeHandoffSessionTest {
     }
 
     @ParameterizedTest
-    @ValueSource(strings = { "missing-offset", "partial-offset", "warn", "no-heartbeat", "no-transactions", "policy" })
+    @ValueSource(strings = { "missing-offset", "partial-offset", "warn", "negative-heartbeat", "no-transactions", "policy" })
     void unsafeAdmissionFailsBeforeCreatingAnyNativeHandles(String fault) {
         var raw = Configuration.create().with("topic.prefix", "test").with("database.schema", "LIB").with("database.dbname", "DB")
                 .with("skipped.operations", "none").with("provide.transaction.metadata", false).with("heartbeat.interval.ms", 1000)
@@ -95,8 +165,8 @@ class As400NativeHandoffSessionTest {
         if (fault.equals("warn")) {
             raw.with("event.processing.failure.handling.mode", "warn");
         }
-        if (fault.equals("no-heartbeat")) {
-            raw.with("heartbeat.interval.ms", 0);
+        if (fault.equals("negative-heartbeat")) {
+            raw.with("heartbeat.interval.ms", -1);
         }
         var config = new As400ConnectorConfig(raw.build());
         var context = mock(SourceTaskContext.class);
@@ -118,7 +188,7 @@ class As400NativeHandoffSessionTest {
             case "missing-offset" -> "Missing offsets cannot select automatic migration";
             case "partial-offset" -> "Completed legacy stream required";
             case "policy" -> "Handoff policy differs";
-            case "no-transactions" -> "Qualified no-metadata native handoff";
+            case "no-transactions" -> "Qualified native handoff";
             default -> "Buffered dispatch requires";
         };
         assertThatThrownBy(() -> new As400NativeHandoffSession(config, context, mock(CdcSourceTaskContext.class), Configuration.empty(),

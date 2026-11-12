@@ -10,18 +10,22 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import io.debezium.ibmi.db2.journal.retrieve.JournalPosition;
 import io.debezium.ibmi.db2.journal.retrieve.JournalReceiver;
 import io.debezium.ibmi.db2.journal.retrieve.RawJournalPage;
 import io.debezium.ibmi.db2.journal.retrieve.RetrieveJournal;
-import io.debezium.ibmi.db2.journal.retrieve.rjne0200.EntryHeaderDecoder;
 
 /** Bounded native C/J and prospective row history. No publication or startup authority. */
-final class As400NativeHandoffHistory {
+final class As400NativeHandoffHistory implements AutoCloseable {
+    private static final Logger LOGGER = LoggerFactory.getLogger(As400NativeHandoffHistory.class);
+
     record Observed(As400NativeJournalWindow.Window window, As400JournalOrder order,
             List<RawJournalPage.Entry> entries, As400ControlInventory.Inventory inventory) {
         Observed {
-            entries = List.copyOf(entries);
+            entries = As400JournalCapture.owned(entries);
         }
     }
 
@@ -33,13 +37,20 @@ final class As400NativeHandoffHistory {
     private final As400JdbcNativeIdentityEvidence identities;
     private final RetrieveJournal reader;
     private final Runnable checkRunning;
+    private final As400HandoffWork work;
 
     As400NativeHandoffHistory(As400OperatorJournalEvidence journals, As400JdbcNativeIdentityEvidence identities,
                               RetrieveJournal reader, Runnable checkRunning) {
+        this(journals, identities, reader, checkRunning, null);
+    }
+
+    As400NativeHandoffHistory(As400OperatorJournalEvidence journals, As400JdbcNativeIdentityEvidence identities,
+                              RetrieveJournal reader, Runnable checkRunning, As400HandoffWork work) {
         this.journals = journals;
         this.identities = identities;
         this.reader = reader;
         this.checkRunning = checkRunning;
+        this.work = work;
     }
 
     Observed collect(As400NativeBoundaryCollector.Candidate candidate, JournalPosition through) throws Exception {
@@ -63,20 +74,20 @@ final class As400NativeHandoffHistory {
                 "Candidate journal/receivers changed after control discovery");
         BigInteger overlapFrom = from.offset().max(candidate.window().from().offset());
         BigInteger overlapThrough = through.offset().min(candidate.window().through().offset());
-        require(projection(entries, overlapFrom, overlapThrough, java.util.Set.of('C'))
-                .equals(projection(candidate.audit().entries(), overlapFrom, overlapThrough, java.util.Set.of('C'))),
+        require(As400HandoffWork.sameProjection(entries, candidate.audit().entries(), overlapFrom, overlapThrough, java.util.Set.of('C')),
                 "Native control discovery differs from complete boundary audit");
-        var inventory = As400ControlInventory.reconstruct(entries, order, window.journalToken(), from, candidate.origin(), through);
+        var inventory = As400ControlInventory.reconstruct(entries, order, window.journalToken(), from, candidate.origin(), through, work);
         checkRunning.run();
+        LOGGER.info("Validated transactional truncate discovery history across {} control entries", entries.size());
         return new Observed(window, order, entries, inventory);
     }
 
     Prepared prepare(As400NativeBoundaryCollector.Candidate candidate, JournalPosition cut,
                      As400ConnectorConfig config, As400CaptureFingerprint.Policy policy)
             throws Exception {
-        // Metadata transition needs its separate legacy-state admission. Do not
-        // silently disable metadata, overwrite its state or inspect source first.
-        require(!config.shouldProvideTransactionMetadata() && !policy.transactionMetadata(), "Legacy metadata transition requires separate admission");
+        // Preserve the selected metadata contract. Replay additionally waits for
+        // every legacy metadata cycle to finish before a handoff is admitted.
+        require(config.shouldProvideTransactionMetadata() == policy.transactionMetadata(), "Legacy metadata setting differs from capture history");
         checkRunning.run();
         var controls = collect(candidate, cut);
         var from = candidate.origin();
@@ -94,15 +105,14 @@ final class As400NativeHandoffHistory {
                 "Row/control source identities differ after replay");
         var overlapThrough = cut.offset().min(candidate.window().through().offset());
         var codes = java.util.Set.of('C', 'D', 'F', 'R');
-        require(projection(entries, from.offset(), overlapThrough, codes)
-                .equals(projection(candidate.audit().entries(), from.offset(), overlapThrough, codes)),
+        require(As400HandoffWork.sameProjection(entries, candidate.audit().entries(), from.offset(), overlapThrough, codes),
                 "Native row history differs from complete boundary audit");
         String fingerprint = "v1:" + As400CaptureFingerprint.hash("online-handoff-candidate-v1", java.util.Map.of(
                 "bindings", As400NativeBoundaryCollector.digest(candidate.bindings().definitions()),
                 "policy", policy.fingerprint(candidate.bindings().definitions().stream().map(As400BindingDefinition::identity).toList()),
                 "journal", rows.journalToken(), "origin", from.offset().toString(), "receiver", rows.receiverTokens().get(from.receiver())));
         var evidence = new As400HandoffReplay.Evidence(entries, candidate.bindings().definitions(), controls.order(), rows.journalToken(), fingerprint,
-                from, from, controls.inventory().openAtLower().keySet(), policy.sourcePartition());
+                from, from, controls.inventory().openAtLower().keySet(), policy.sourcePartition(), work);
         var prepared = As400ProspectiveHandoffReplay.prepare(evidence, controls.entries(), from, cut, config);
         checkRunning.run();
         return new Prepared(controls, rows, prepared);
@@ -117,7 +127,7 @@ final class As400NativeHandoffHistory {
     Prepared resume(As400BindingHistory.Pending pending, JournalPosition cut, As400ConnectorConfig config,
                     As400CaptureFingerprint.Policy policy)
             throws Exception {
-        require(!config.shouldProvideTransactionMetadata() && !policy.transactionMetadata(), "Legacy metadata transition requires separate admission");
+        require(config.shouldProvideTransactionMetadata() == policy.transactionMetadata(), "Legacy metadata setting differs from capture history");
         var discovery = pending.discovery().orElseThrow(() -> new IllegalArgumentException("Pending history lacks its validated discovery floor"));
         checkRunning.run();
         var from = discovery.floor();
@@ -139,9 +149,9 @@ final class As400NativeHandoffHistory {
         checkRunning.run();
         var after = As400NativeJournalWindow.collect(journals, identities, from);
         var window = new As400NativeJournalWindow.Window(from, cut, before, after);
-        var inventory = As400ControlInventory.reconstruct(controls, order, pending.journal(), from, pending.origin(), cut);
+        var inventory = As400ControlInventory.reconstruct(controls, order, pending.journal(), from, pending.origin(), cut, work);
         var evidence = new As400HandoffReplay.Evidence(entries, pending.definitions(), order, pending.journal(), pending.fingerprint(),
-                pending.origin(), pending.origin(), inventory.openAtLower().keySet(), policy.sourcePartition());
+                pending.origin(), pending.origin(), inventory.openAtLower().keySet(), policy.sourcePartition(), work);
         As400ProspectiveHandoffReplay.Prepared prepared;
         if (entries.isEmpty() && cut.equals(pending.origin())) {
             // This is an empty schema epoch, not a fabricated terminal or an
@@ -163,13 +173,16 @@ final class As400NativeHandoffHistory {
             prepared = As400ProspectiveHandoffReplay.prepare(evidence, controls, pending.origin(), cut, config);
         }
         checkRunning.run();
+        LOGGER.info("Validated transactional truncate replay history across {} source entries and {} controls", entries.size(), controls.size());
         return new Prepared(new Observed(window, order, controls, inventory), window, prepared);
     }
 
     private List<RawJournalPage.Entry> read(JournalPosition from, JournalPosition through,
                                             List<As400OperatorJournalEvidence.Receiver> chain, As400JournalOrder order, boolean controls)
             throws Exception {
-        var entries = new ArrayList<RawJournalPage.Entry>();
+        var capture = work == null ? null : work.capture();
+        var entries = capture == null ? new ArrayList<RawJournalPage.Entry>() : null;
+        int entryCount = 0;
         int pages = 0;
         long bytes = 0;
         JournalPosition previous = null;
@@ -180,24 +193,32 @@ final class As400NativeHandoffHistory {
             JournalPosition end = receiver.name().equals(through.receiver()) ? through : new JournalPosition(receiver.last(), receiver.name());
             while (true) {
                 checkRunning.run();
-                require(++pages <= 128 && entries.size() < 20_000, "Native handoff history exceeds page/entry bounds");
+                require(work != null || ++pages <= 128 && entryCount < 20_000, "Native handoff history exceeds page/entry bounds");
+                int limit = work == null ? Math.min(1000, 20_000 - entryCount) : 1000;
                 RawJournalPage page;
                 if (controls) {
-                    var selected = reader.readControlHistoryPage(next, end, 20_000 - entries.size());
+                    var selected = reader.readControlHistoryPage(next, end, limit);
                     page = new RawJournalPage(selected.entries(), selected.continuation(), selected.bytesReturned());
                 }
                 else {
-                    page = reader.readRawPage(next, end, 20_000 - entries.size());
+                    page = reader.readRawPage(next, end, limit);
                 }
+                require(page.entries().size() <= limit, "Native history page exceeds the requested bound");
                 for (var entry : page.entries()) {
                     byte[] raw = entry.data();
-                    require(raw.length <= 1024 * 1024 && (bytes += raw.length) <= 64 * 1024 * 1024,
+                    require(raw.length <= 1024 * 1024 && (work != null || (bytes += raw.length) <= 64 * 1024 * 1024),
                             "Native handoff history exceeds byte bounds");
                     require(entry.position().receiver().equals(receiver.name()) && order.compare(next, entry.position()) <= 0
                             && order.compare(entry.position(), end) <= 0 && (previous == null || order.compare(previous, entry.position()) < 0),
                             "Repeated, foreign or unordered native handoff entry");
                     As400JournalRecordContent.digest(raw, entry.position());
-                    entries.add(entry);
+                    if (capture == null) {
+                        entries.add(entry);
+                    }
+                    else {
+                        capture.append(entry);
+                    }
+                    entryCount = Math.incrementExact(entryCount);
                     previous = entry.position();
                 }
                 if (page.continuation().isEmpty()) {
@@ -215,20 +236,14 @@ final class As400NativeHandoffHistory {
             }
         }
         require(reached, "Native history does not reach requested cut");
-        return List.copyOf(entries);
+        return capture == null ? List.copyOf(entries) : capture.seal();
     }
 
-    private static List<String> projection(List<RawJournalPage.Entry> entries, BigInteger from, BigInteger through, java.util.Set<Character> codes) throws Exception {
-        var result = new ArrayList<String>();
-        for (var entry : entries) {
-            if (entry.position().offset().compareTo(from) >= 0 && entry.position().offset().compareTo(through) <= 0) {
-                byte[] bytes = entry.data();
-                if (codes.contains(new EntryHeaderDecoder(RawJournalPage.METADATA_CCSID).decode(bytes, 0).getJournalCode())) {
-                    result.add(As400JournalRecordContent.digest(bytes, entry.position()));
-                }
-            }
+    @Override
+    public void close() throws Exception {
+        if (work != null) {
+            work.close();
         }
-        return List.copyOf(result);
     }
 
     private static void require(boolean valid, String reason) {

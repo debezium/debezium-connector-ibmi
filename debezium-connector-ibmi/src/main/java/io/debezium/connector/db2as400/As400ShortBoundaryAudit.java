@@ -36,17 +36,23 @@ final class As400ShortBoundaryAudit {
     static RetrieveJournal.AuditPage attemptInterval(As400ShortBoundaryProgram program, As400NativeJournalWindow.Window window,
                                                      RetrieveJournal.AuditPage page)
             throws java.io.IOException {
-        require(page.continuation().isEmpty() && !page.entries().isEmpty() && page.entries().size() <= 2000,
-                "Complete bounded raw audit required before locating Z");
+        require(page.continuation().isEmpty(), "Complete raw audit required before locating Z");
+        return new RetrieveJournal.AuditPage(attemptEntries(program, window, page.entries()), java.util.Optional.empty(), page.bytesReturned());
+    }
+
+    /** The caller owns a sealed capture; subList must remain a view, not a heap copy. */
+    static List<RawJournalPage.Entry> attemptEntries(As400ShortBoundaryProgram program, As400NativeJournalWindow.Window window,
+                                                     List<RawJournalPage.Entry> entries)
+            throws java.io.IOException {
+        require(!entries.isEmpty(), "Complete raw audit required before locating Z");
         byte[] closing = ("DCGB1 " + program.nonce() + " Z " + program.scopeDigest()).getBytes(CCSID37);
         byte[] opening = ("DCGB1 " + program.nonce() + " A").getBytes(CCSID37);
         BigInteger previous = null;
         int start = -1, end = -1;
-        long bytes = 0;
-        for (int i = 0; i < page.entries().size(); i++) {
-            var entry = page.entries().get(i);
+        for (int i = 0; i < entries.size(); i++) {
+            var entry = entries.get(i);
             byte[] data = entry.data();
-            require(data.length <= 1024 * 1024 && (bytes += data.length) <= 16 * 1024 * 1024
+            require(data.length <= 1024 * 1024
                     && entry.position().receiver().equals(window.from().receiver())
                     && entry.position().offset().compareTo(window.from().offset()) >= 0
                     && entry.position().offset().compareTo(window.through().offset()) <= 0
@@ -66,40 +72,46 @@ final class As400ShortBoundaryAudit {
                 start = i - 1; // Existing inclusive anchor immediately before A.
             }
         }
-        require(start >= 0 && end > start + 3 && page.entries().get(0).position().equals(window.from())
-                && page.entries().get(page.entries().size() - 1).position().equals(window.through()), "Missing markers or incomplete raw endpoint");
+        require(start >= 0 && end > start + 3 && entries.get(0).position().equals(window.from())
+                && entries.get(entries.size() - 1).position().equals(window.through()), "Missing markers or incomplete raw endpoint");
         // QjoRetrieveJournalEntries omits some internal entries. A gap before A
         // or after Z does not weaken this observed boundary. Keep the stronger
         // no-gap requirement over the inclusive anchor and A..Z itself; unknown
         // omissions there still reject, even if a different API could explain them.
-        BigInteger expected = page.entries().get(start).position().offset();
-        for (var entry : page.entries().subList(start, end)) {
+        BigInteger expected = entries.get(start).position().offset();
+        for (var entry : entries.subList(start, end)) {
             require(entry.position().offset().equals(expected), "Incomplete raw A/Z audit interval");
             expected = expected.add(BigInteger.ONE);
         }
-        return new RetrieveJournal.AuditPage(page.entries().subList(start, end), java.util.Optional.empty(), page.bytesReturned());
+        return entries.subList(start, end);
     }
 
     static JournalPosition validate(As400ShortBoundaryProgram program, Completion completion,
                                     As400NativeJournalWindow.Window window, RetrieveJournal.AuditPage page,
                                     List<As400BindingDefinition> definitions, JournalPosition metadataBefore, JournalPosition metadataAfter)
             throws Exception {
+        require(page.continuation().isEmpty(), "Complete all-code audit required");
+        return validate(program, completion, window, page.entries(), definitions, metadataBefore, metadataAfter);
+    }
+
+    static JournalPosition validate(As400ShortBoundaryProgram program, Completion completion,
+                                    As400NativeJournalWindow.Window window, List<RawJournalPage.Entry> entries,
+                                    List<As400BindingDefinition> definitions, JournalPosition metadataBefore, JournalPosition metadataAfter)
+            throws Exception {
         var from = window.from();
         var through = window.through();
         require(program.journal().equals(window.before().directory().journal()) && from.receiver().equals(through.receiver()),
                 "Foreign journal or receiver rotation during short boundary");
-        require(page.continuation().isEmpty() && page.entries().size() >= 4 && page.entries().size() <= 2000,
-                "Single complete bounded all-code audit required");
+        require(entries.size() >= 4, "Complete all-code audit required");
         var targets = definitions.stream().map(d -> new As400ShortBoundaryProgram.Target(d.identity().tableId().schema(),
                 d.identity().physicalFile(), d.identity().member())).toList();
         require(targets.equals(program.targets()), "Program scope differs from acquired native bindings");
         var payloads = List.of("DCGB1 " + program.nonce() + " A", program.payload(), "DCGB1 " + program.nonce() + " Z " + program.scopeDigest());
         var markers = new ArrayList<JournalPosition>();
         BigInteger expected = from.offset();
-        long totalBytes = 0;
-        for (var entry : page.entries()) {
+        for (var entry : entries) {
             byte[] bytes = entry.data();
-            require(bytes.length <= 1024 * 1024 && (totalBytes += bytes.length) <= 16 * 1024 * 1024, "Excessive raw audit bytes");
+            require(bytes.length <= 1024 * 1024, "Excessive raw audit entry");
             require(entry.position().receiver().equals(from.receiver()) && entry.position().offset().equals(expected), "Missing, reordered or foreign audit entry");
             expected = expected.add(BigInteger.ONE);
             if (entry.position().equals(from)) {
@@ -132,7 +144,13 @@ final class As400ShortBoundaryAudit {
                     require(info.objectType().equals("*QDDS") && info.objectNameIndicator() == '1'
                             && info.objectJournalId().equals(definition.identity().memberJournalId()) && header.getMember().equals(definition.identity().member())
                             && info.recordNumber().signum() > 0, "Concurrent row has different member identity");
-                    definition.binding(1024 * 1024).values(header, bytes, 0);
+                    var binding = definition.binding(1024 * 1024);
+                    if (definition.excluded()) {
+                        binding.validateExcludedRow(header, bytes, 0);
+                    }
+                    else {
+                        binding.values(header, bytes, 0);
+                    }
                 }
                 continue;
             }

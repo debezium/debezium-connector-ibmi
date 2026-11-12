@@ -22,13 +22,15 @@ import io.debezium.connector.base.ChangeEventQueue;
 
 class As400ErrorHandlerTest {
     @ParameterizedTest
-    @ValueSource(strings = { "row", "truncate", "metadata", "transport" })
+    @ValueSource(strings = { "row", "truncate", "metadata", "storage", "capture", "transport" })
     void shouldRetryOnlyTransportErrorsEvenWhenDecodeFailuresContainIOException(String kind) {
         var malformed = new IOException("same unreadable journal bytes");
         Throwable failure = switch (kind) {
             case "row" -> new As400StreamingChangeEventSource.RowProcessingException("invalid row", malformed);
             case "truncate" -> new As400StreamingChangeEventSource.TruncateException("invalid clear", malformed);
             case "metadata" -> new As400StreamingChangeEventSource.TransactionMetadataException("invalid metadata", malformed);
+            case "storage" -> new As400SpillStore.SpillException("unavailable local storage", malformed);
+            case "capture" -> new As400JournalCapture.CaptureException("unavailable raw capture", malformed);
             default -> malformed;
         };
         var queue = mock(ChangeEventQueue.class);

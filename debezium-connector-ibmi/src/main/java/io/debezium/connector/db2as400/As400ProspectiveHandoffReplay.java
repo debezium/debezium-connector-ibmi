@@ -6,7 +6,7 @@
 package io.debezium.connector.db2as400;
 
 import java.math.BigInteger;
-import java.util.ArrayList;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Set;
@@ -30,7 +30,7 @@ final class As400ProspectiveHandoffReplay {
 
         PriorEpochPending(Set<BigInteger> cycles) {
             super("Prior-schema transactions remain open; continue legacy publication and defer migration");
-            this.cycles = Set.copyOf(cycles);
+            this.cycles = As400HandoffWork.diagnosticCycles(cycles);
         }
 
         Set<BigInteger> cycles() {
@@ -40,25 +40,26 @@ final class As400ProspectiveHandoffReplay {
 
     record Prepared(Evidence projection, Candidate candidate, Set<BigInteger> completedPriorCycles) {
         Prepared {
-            completedPriorCycles = Set.copyOf(completedPriorCycles);
+            completedPriorCycles = projection.work() == null ? Set.copyOf(completedPriorCycles) : Collections.unmodifiableSet(completedPriorCycles);
         }
     }
 
     static Prepared prepare(Evidence future, List<RawJournalPage.Entry> controls, JournalPosition schemaOrigin, JournalPosition cut,
                             As400ConnectorConfig config)
             throws Exception {
-        require(!future.entries().isEmpty() && future.entries().size() <= 20_000 && controls.size() <= 20_000,
+        var work = future.work();
+        require(!future.entries().isEmpty() && (work == null ? controls.size() <= 20_000 : controls instanceof As400JournalCapture.Entries),
                 "Bounded prospective rows and older controls required");
         long controlBytes = 0;
         for (RawJournalPage.Entry entry : controls) {
-            require(entry.data().length <= 1024 * 1024 && (controlBytes += entry.data().length) <= 64 * 1024 * 1024,
+            require(entry.data().length <= 1024 * 1024 && (work != null || (controlBytes += entry.data().length) <= 64 * 1024 * 1024),
                     "Older controls exceed byte budget");
         }
         var order = future.order();
         require(order.compare(schemaOrigin, cut) <= 0, "Cut precedes qualified schema origin");
         var headers = new EntryHeaderDecoder(RawJournalPage.METADATA_CCSID);
-        var ownedControls = controls.stream()
-                .filter(e -> order.compare(e.position(), cut) <= 0).toList();
+        var ownedControls = work == null ? controls.stream().filter(e -> order.compare(e.position(), cut) <= 0).toList()
+                : work.select(controls, e -> order.compare(e.position(), cut) <= 0);
         // A complete native C/J selection can be empty for autocommit-only
         // history. Inventory and overlapping C projections must still agree;
         // no empty list is a substitute for a successful native read.
@@ -66,16 +67,41 @@ final class As400ProspectiveHandoffReplay {
                 ? schemaOrigin
                 : ownedControls.get(0).position();
         var inventory = As400ControlInventory.reconstruct(ownedControls, order, future.journal(),
-                controlFrom, schemaOrigin, cut);
+                controlFrom, schemaOrigin, cut, work);
         // The older C/J projection, not today's row decoder, establishes old-cycle lifetime.
         Set<BigInteger> prior = inventory.openAtLower().keySet();
-        var stillOpen = inventory.openThrough().keySet().stream().filter(prior::contains).collect(Collectors.toSet());
-        require(prior.stream().allMatch(c -> stillOpen.contains(c) || inventory.terminals().containsKey(c)), "Old cycle lacks a supported terminal");
+        Set<BigInteger> stillOpen;
+        if (work == null) {
+            stillOpen = inventory.openThrough().keySet().stream().filter(prior::contains).collect(Collectors.toSet());
+        }
+        else {
+            stillOpen = work.set(As400SpillCodec.INTEGER);
+            for (var cycle : inventory.openThrough().keySet()) {
+                work.check();
+                if (prior.contains(cycle)) {
+                    stillOpen.add(cycle);
+                }
+            }
+        }
+        JournalPosition priorThrough = schemaOrigin;
+        for (var cycle : prior) {
+            if (work != null) {
+                work.check();
+            }
+            require(stillOpen.contains(cycle) || inventory.terminals().containsKey(cycle), "Old cycle lacks a supported terminal");
+            if (stillOpen.contains(cycle)) {
+                priorThrough = cut;
+            }
+            else if (order.compare(inventory.terminals().get(cycle), priorThrough) > 0) {
+                priorThrough = inventory.terminals().get(cycle);
+            }
+        }
         require(future.inventory().equals(prior), "Supplied origin inventory differs from reconstructed controls");
-        var rowControls = new ArrayList<String>();
-        var projected = new ArrayList<RawJournalPage.Entry>();
         JournalPosition previous = null;
         for (RawJournalPage.Entry entry : future.entries()) {
+            if (work != null) {
+                work.check();
+            }
             require(order.compare(entry.position(), schemaOrigin) >= 0, "Today's schema must not decode rows before its origin");
             require(previous == null || order.compare(previous, entry.position()) < 0, "Prospective history is unordered or repeated");
             previous = entry.position();
@@ -84,13 +110,10 @@ final class As400ProspectiveHandoffReplay {
             }
             var header = headers.decode(entry.data(), 0);
             As400SourceMetadata.from(header, entry.position());
-            if (header.getJournalCode() == 'C') {
-                rowControls.add(As400JournalRecordContent.digest(entry.data(), entry.position()));
-            }
             // No lifecycle projection is invented for an old clear or rollback tail.
             // Even a cycle-zero companion while an old transaction is unresolved rejects.
             if (header.getJournalCode() == 'D' || header.getJournalCode() == 'F') {
-                require(prior.stream().noneMatch(c -> stillOpen.contains(c) || order.compare(entry.position(), inventory.terminals().get(c)) <= 0),
+                require(prior.isEmpty() || stillOpen.isEmpty() && order.compare(entry.position(), priorThrough) > 0,
                         "Lifecycle overlaps a prior-schema transaction; requalify a later origin");
             }
             if (prior.contains(header.getCommitCycle())) {
@@ -102,26 +125,20 @@ final class As400ProspectiveHandoffReplay {
                 As400SourceNormalizer.validateSource(header, entry.data(), 0, entry.position());
                 require(header.getJournalCode() == 'C' || header.getJournalCode() == 'R', "Unsupported prior-cycle operation");
             }
-            else {
-                projected.add(entry);
-            }
         }
-        var overlappingControls = new ArrayList<String>();
-        for (RawJournalPage.Entry entry : ownedControls) {
-            if (order.compare(entry.position(), schemaOrigin) >= 0 && headers.decode(entry.data(), 0).getJournalCode() == 'C') {
-                overlappingControls.add(As400JournalRecordContent.digest(entry.data(), entry.position()));
-            }
-        }
-        require(rowControls.equals(overlappingControls), "Prospective and historical C projections disagree");
-        JournalPosition priorThrough = stillOpen.isEmpty() ? prior.stream().map(inventory.terminals()::get).max(order::compare).orElse(schemaOrigin) : cut;
+        require(As400HandoffWork.sameProjection(future.entries(), ownedControls, schemaOrigin.offset(), cut.offset(), Set.of('C')),
+                "Prospective and historical C projections disagree");
         validateProspectivePrefix(future, ownedControls, schemaOrigin, priorThrough);
         if (!stillOpen.isEmpty()) {
             throw new PriorEpochPending(stillOpen);
         }
+        java.util.function.Predicate<RawJournalPage.Entry> included = e -> order.compare(e.position(), cut) <= 0
+                && !prior.contains(headers.decode(e.data(), 0).getCommitCycle());
+        var projected = work == null ? future.entries().stream().filter(included).toList() : work.select(future.entries(), included);
         require(!projected.isEmpty() && projected.stream().anyMatch(e -> e.position().equals(cut)),
                 "Actual publication cut must survive the prospective projection");
         var projectedEvidence = new Evidence(projected, future.definitions(), order, future.journal(), future.fingerprint(),
-                projected.get(0).position(), projected.get(0).position(), Set.of(), future.partition());
+                projected.get(0).position(), projected.get(0).position(), Set.of(), future.partition(), work);
         var candidate = As400HandoffReplay.prepare(projectedEvidence, cut, config);
         require(order.compare(candidate.checkpoint().replayFrom(), schemaOrigin) >= 0, "Prospective checkpoint requires an older schema");
         require(prior.isEmpty() || order.compare(candidate.checkpoint().replayFrom(), priorThrough) > 0,
@@ -133,17 +150,22 @@ final class As400ProspectiveHandoffReplay {
         var bindings = new LinkedHashMap<String, As400SourceNormalizer.TableBinding>();
         future.definitions().forEach(d -> require(bindings.put(d.identity().tableId().schema() + "/" + d.identity().physicalFile(),
                 d.binding(1024 * 1024)) == null, "Duplicate prospective binding"));
-        var limits = new As400TransactionBuffer.Limits(128, 40_000, 2048, 64 * 1024 * 1024);
+        var work = future.work();
+        var limits = work == null ? new As400TransactionBuffer.Limits(128, 40_000, 2048, 64 * 1024 * 1024) : work.limits().transactions();
         var headers = new EntryHeaderDecoder(RawJournalPage.METADATA_CCSID);
-        try (var transactions = new As400TransactionBuffer(future.journal(), limits);
-                var autocommit = new As400AutocommitBuffer(future.journal(), limits, transactions::usage)) {
+        try (var scratch = work == null ? null : work.transactionStore();
+                var transactions = new As400TransactionBuffer(future.journal(), limits, scratch);
+                var autocommit = new As400AutocommitBuffer(future.journal(), limits, transactions::usage, scratch)) {
             var normalizer = new As400SourceNormalizer(transactions, (file, library) -> bindings.get(library + "/" + file),
                     1024 * 1024, As400SourceNormalizer.SavepointPolicy.consumingTargets(), autocommit);
-            var prefix = new ArrayList<RawJournalPage.Entry>();
-            controls.stream().filter(e -> future.order().compare(e.position(), origin) < 0 && headers.decode(e.data(), 0).getJournalCode() == 'C')
-                    .forEach(prefix::add);
-            future.entries().stream().filter(e -> future.order().compare(e.position(), through) <= 0).forEach(prefix::add);
-            for (RawJournalPage.Entry entry : prefix) {
+            var prefix = java.util.stream.Stream.concat(
+                    controls.stream().filter(e -> future.order().compare(e.position(), origin) < 0 && headers.decode(e.data(), 0).getJournalCode() == 'C'),
+                    future.entries().stream().filter(e -> future.order().compare(e.position(), through) <= 0)).iterator();
+            while (prefix.hasNext()) {
+                if (work != null) {
+                    work.check();
+                }
+                var entry = prefix.next();
                 var batch = normalizer.accept(headers.decode(entry.data(), 0), entry.data(), 0, entry.position());
                 if (batch.isPresent()) {
                     if (batch.orElseThrow().transactionId().commitCycle().signum() == 0) {

@@ -24,19 +24,22 @@ import io.debezium.ibmi.db2.journal.retrieve.TransactionControlEntryDecoder.Outc
 import io.debezium.relational.TableId;
 
 /**
- * Single-threaded, memory-only state machine for normalized local commit cycles.
- * Not connected to streaming until durable replay and validated startup exist.
+ * Single-threaded state machine for normalized local commit cycles. Optional
+ * scratch storage spills both images and transaction bookkeeping to disk.
  * The caller supplies immutable, owned row values and verified object identities
  * in journal order, with receiver names already resolved. Cross-receiver ordering and
  * incarnation validation belong to the reader; this class never orders receiver names.
- * As400RowData copies mutable payloads before admission. Cycle-zero changes belong to the future
- * output coordinator, not this transaction-only component.
+ * As400RowData copies mutable payloads before admission. Cycle-zero changes belong
+ * to the separate autocommit component.
  */
 final class As400TransactionBuffer implements AutoCloseable {
     private static final BigInteger MAX_SEQUENCE = BigInteger.ONE.shiftLeft(64).subtract(BigInteger.ONE);
     private final String journalIdentity;
     private final Limits limits;
-    private final Map<BigInteger, Cycle> cycles = new LinkedHashMap<>();
+    private final Map<BigInteger, Cycle> cycles;
+    private final Map<TableId, TableUse> tableUses;
+    private final Map<TableId, BigInteger> clearOwners;
+    private final As400SpillStore spill;
     private JournalPosition lastPosition;
     private CommittedBatch pendingBatch;
     private long payloadBytes;
@@ -46,8 +49,37 @@ final class As400TransactionBuffer implements AutoCloseable {
     private boolean closed;
 
     As400TransactionBuffer(String journalIdentity, Limits limits) {
+        this(journalIdentity, limits, null);
+    }
+
+    As400TransactionBuffer(String journalIdentity, Limits limits, As400SpillStore spill) {
         this.journalIdentity = identifier(journalIdentity, 256);
         this.limits = Objects.requireNonNull(limits);
+        this.spill = spill;
+        cycles = spill == null ? new LinkedHashMap<>()
+                : spill.map("transactions", As400SpillCodec.INTEGER,
+                        As400SpillCodec.codec((out, cycle) -> {
+                            As400SpillCodec.source(out, cycle.startSource);
+                            out.writeLong(cycle.bytes);
+                            out.writeInt(cycle.entries);
+                            out.writeBoolean(cycle.rollingBack);
+                            out.writeBoolean(cycle.compensating);
+                        }, in -> {
+                            var start = As400SpillCodec.source(in);
+                            var cycle = new Cycle(new TransactionId(journalIdentity, start.commitCycle(), start.position()), start, spill);
+                            cycle.bytes = in.readLong();
+                            cycle.entries = in.readInt();
+                            cycle.rollingBack = in.readBoolean();
+                            cycle.compensating = in.readBoolean();
+                            return cycle;
+                        }));
+        tableUses = spill == null ? new LinkedHashMap<>()
+                : spill.map("transaction-tables", As400SpillCodec.TABLE_ID,
+                        As400SpillCodec.codec((out, use) -> {
+                            As400SpillCodec.table(out, use.identity());
+                            out.writeInt(use.cycles());
+                        }, in -> new TableUse(As400SpillCodec.table(in), in.readInt())));
+        clearOwners = spill == null ? new LinkedHashMap<>() : spill.map("transaction-clears", As400SpillCodec.TABLE_ID, As400SpillCodec.INTEGER);
     }
 
     Optional<CommittedBatch> acceptControl(As400SourceMetadata source, Control control) {
@@ -94,7 +126,7 @@ final class As400TransactionBuffer implements AutoCloseable {
             if (cycles.size() >= limits.maxTransactions()) {
                 throw fail("Active transaction limit exceeded");
             }
-            cycles.put(control.commitCycle(), new Cycle(new TransactionId(journalIdentity, control.commitCycle(), position), source));
+            cycles.put(control.commitCycle(), new Cycle(new TransactionId(journalIdentity, control.commitCycle(), position), source, spill));
             return Optional.empty();
         }
         Cycle cycle = cycle(control.commitCycle());
@@ -104,7 +136,8 @@ final class As400TransactionBuffer implements AutoCloseable {
                     throw fail("Cannot commit an unresolved or non-durable cycle");
                 }
                 requirePairedImages(cycle);
-                pendingBatch = new CommittedBatch(cycle.id, cycle.startSource, source, cycle.changes);
+                pendingBatch = new CommittedBatch(cycle.id, cycle.startSource, source,
+                        spill == null ? cycle.changes : new As400SpillStore.FrozenList<>(cycle.changes));
                 return Optional.of(pendingBatch);
             }
             case ROLLBACK -> {
@@ -112,6 +145,7 @@ final class As400TransactionBuffer implements AutoCloseable {
                     throw fail("Cannot discard an incomplete or unknown rollback");
                 }
                 removeCycle(cycle);
+                return Optional.empty();
             }
             case START_ROLLBACK -> cycle.rollingBack = true;
             case START_SAVEPOINT -> {
@@ -141,9 +175,9 @@ final class As400TransactionBuffer implements AutoCloseable {
                     release(cycle, change.bytes(), 1);
                 }
                 cycle.changes.subList(keep, cycle.changes.size()).clear();
-                cycle.clearedTables.clear();
+                releaseClears(cycle);
                 cycle.changes.stream().filter(change -> change.operation() == Operation.TRUNCATE)
-                        .forEach(change -> cycle.clearedTables.add(change.table().tableId()));
+                        .forEach(change -> rememberClear(cycle, change.table().tableId()));
                 // SB requires no dangling images, so all pending pairs are after the target.
                 for (Image image : cycle.before.values()) {
                     release(cycle, image.row.payloadBytes(), 1);
@@ -154,6 +188,7 @@ final class As400TransactionBuffer implements AutoCloseable {
             }
             default -> throw fail("Unexpected transaction control " + control.entryType());
         }
+        persist(cycle);
         return Optional.empty();
     }
 
@@ -176,6 +211,7 @@ final class As400TransactionBuffer implements AutoCloseable {
         Image image = new Image(source, bytes);
         cycle.changes.add(new Change(operation, record.table(), record, source,
                 operation == Operation.DELETE ? image : null, operation == Operation.CREATE ? image : null));
+        persist(cycle);
     }
 
     void beforeImage(As400SourceMetadata source, RecordIdentity record, As400RowData bytes) {
@@ -187,6 +223,7 @@ final class As400TransactionBuffer implements AutoCloseable {
         }
         reserve(cycle, bytes.payloadBytes(), 1);
         cycle.before.put(record, new Image(source, bytes));
+        persist(cycle);
     }
 
     void update(As400SourceMetadata source, RecordIdentity record, As400RowData after) {
@@ -201,6 +238,7 @@ final class As400TransactionBuffer implements AutoCloseable {
         reserve(cycle, after.payloadBytes(), 0);
         cycle.changes.add(new Change(Operation.UPDATE, record.table(), record, source, before, new Image(source, after)));
         cycle.before.remove(record);
+        persist(cycle);
     }
 
     void truncate(As400SourceMetadata source, TableIdentity table) {
@@ -216,7 +254,8 @@ final class As400TransactionBuffer implements AutoCloseable {
         }
         reserve(cycle, 0, 1);
         cycle.changes.add(new Change(Operation.TRUNCATE, table, null, source, null, null));
-        cycle.clearedTables.add(table.tableId());
+        rememberClear(cycle, table.tableId());
+        persist(cycle);
     }
 
     /** A validated normalizer calls this for undo records, never insert/update/delete. */
@@ -224,6 +263,7 @@ final class As400TransactionBuffer implements AutoCloseable {
         acceptInput(source);
         Cycle cycle = cycle(source.commitCycle());
         cycle.compensating = true;
+        persist(cycle);
     }
 
     /**
@@ -236,6 +276,9 @@ final class As400TransactionBuffer implements AutoCloseable {
             throw fail("Completion does not match the pending batch");
         }
         removeCycle(cycle(batch.transactionId().commitCycle()));
+        if (batch.changes() instanceof As400SpillStore.FrozenList<?> frozen) {
+            frozen.invalidate();
+        }
         pendingBatch = null;
     }
 
@@ -246,15 +289,15 @@ final class As400TransactionBuffer implements AutoCloseable {
 
     /** Includes the pending committed batch until completeBatch is called. */
     Optional<JournalPosition> oldestTransactionPosition() {
-        return cycles.values().stream().findFirst().map(cycle -> cycle.id.start());
+        return closed ? Optional.empty() : cycles.values().stream().findFirst().map(cycle -> cycle.id.start());
     }
 
     long oldestTransactionTimestamp() {
-        return cycles.values().stream().mapToLong(c -> c.startSource.timestamp().toEpochMilli()).min().orElse(-1);
+        return closed ? -1 : cycles.values().stream().mapToLong(c -> c.startSource.timestamp().toEpochMilli()).min().orElse(-1);
     }
 
     Usage usage() {
-        return new Usage(cycles.size(), retainedEntries, savepoints, payloadBytes);
+        return new Usage(closed ? 0 : cycles.size(), retainedEntries, savepoints, payloadBytes);
     }
 
     boolean hasTransaction(BigInteger commitCycle) {
@@ -306,15 +349,14 @@ final class As400TransactionBuffer implements AutoCloseable {
             throw fail("Missing normalized table identity");
         }
         requireNoConflictingClear(commitCycle, table);
-        for (Cycle active : cycles.values()) {
-            TableIdentity known = active.tables.get(table.tableId());
-            if (known != null && !known.equals(table)) {
-                throw fail("Captured object/member/record format changed while a cycle was pending");
-            }
+        TableUse use = tableUses.get(table.tableId());
+        if (use != null && !use.identity().equals(table)) {
+            throw fail("Captured object/member/record format changed while a cycle was pending");
         }
         if (!cycle.tables.containsKey(table.tableId())) {
             reserve(cycle, 0, 1);
             cycle.tables.put(table.tableId(), table);
+            tableUses.put(table.tableId(), new TableUse(table, use == null ? 1 : Math.addExact(use.cycles(), 1)));
         }
         return cycle;
     }
@@ -327,10 +369,34 @@ final class As400TransactionBuffer implements AutoCloseable {
      */
     void requireNoConflictingClear(BigInteger commitCycle, TableIdentity table) {
         ensureUsable();
-        for (Cycle active : cycles.values()) {
-            if (!active.id.commitCycle().equals(commitCycle) && active.clearedTables.contains(table.tableId())) {
-                throw fail("Change from another commit cycle overlaps an uncommitted clear of " + table.tableId());
-            }
+        BigInteger owner = clearOwners.get(table.tableId());
+        if (owner != null && !owner.equals(commitCycle)) {
+            throw fail("Change from another commit cycle overlaps an uncommitted clear of " + table.tableId());
+        }
+    }
+
+    void requireIdleTable(TableIdentity table) {
+        ensureUsable();
+        if (tableUses.containsKey(table.tableId())) {
+            throw fail("Schema refresh crosses pending changes for " + table.tableId());
+        }
+    }
+
+    private void rememberClear(Cycle cycle, TableId table) {
+        cycle.clearedTables.add(table);
+        clearOwners.put(table, cycle.id.commitCycle());
+    }
+
+    private void releaseClears(Cycle cycle) {
+        for (TableId table : cycle.clearedTables) {
+            clearOwners.remove(table);
+        }
+        cycle.clearedTables.clear();
+    }
+
+    private void persist(Cycle cycle) {
+        if (spill != null) {
+            cycles.put(cycle.id.commitCycle(), cycle);
         }
     }
 
@@ -394,6 +460,22 @@ final class As400TransactionBuffer implements AutoCloseable {
     private void removeCycle(Cycle cycle) {
         release(cycle, cycle.bytes, cycle.entries);
         savepoints -= cycle.savepoints.size();
+        releaseClears(cycle);
+        for (TableId table : cycle.tables.keySet()) {
+            TableUse use = tableUses.get(table);
+            if (use.cycles() == 1) {
+                tableUses.remove(table);
+            }
+            else {
+                tableUses.put(table, new TableUse(use.identity(), use.cycles() - 1));
+            }
+        }
+        if (spill != null) {
+            cycle.changes.clear();
+            cycle.before.clear();
+            cycle.tables.clear();
+            cycle.savepoints.clear();
+        }
         cycles.remove(cycle.id.commitCycle());
     }
 
@@ -416,7 +498,16 @@ final class As400TransactionBuffer implements AutoCloseable {
     @Override
     public void close() {
         closed = true;
-        cycles.clear();
+        if (pendingBatch != null && pendingBatch.changes() instanceof As400SpillStore.FrozenList<?> frozen) {
+            frozen.invalidate();
+        }
+        // The coordinator owns scratch cleanup, including failed stores. Do not
+        // issue further disk mutations after a spill error or on shutdown.
+        if (spill == null) {
+            cycles.clear();
+            tableUses.clear();
+            clearOwners.clear();
+        }
         pendingBatch = null;
         payloadBytes = 0;
         retainedEntries = 0;
@@ -488,7 +579,7 @@ final class As400TransactionBuffer implements AutoCloseable {
 
     record CommittedBatch(TransactionId transactionId, As400SourceMetadata startSource, As400SourceMetadata commitSource, List<Change> changes) {
         CommittedBatch {
-            changes = List.copyOf(changes);
+            changes = changes instanceof As400SpillStore.FrozenList<?> ? changes : List.copyOf(changes);
         }
 
         JournalPosition commitPosition() {
@@ -526,6 +617,10 @@ final class As400TransactionBuffer implements AutoCloseable {
         Object[] values() {
             return row.values();
         }
+
+        As400RowData row() {
+            return row;
+        }
     }
 
     static final class BufferException extends DebeziumException {
@@ -541,13 +636,16 @@ final class As400TransactionBuffer implements AutoCloseable {
         return value;
     }
 
+    private record TableUse(TableIdentity identity, int cycles) {
+    }
+
     private static final class Cycle {
         private final TransactionId id;
-        private final List<Change> changes = new ArrayList<>();
-        private final Map<RecordIdentity, Image> before = new LinkedHashMap<>();
-        private final Map<TableId, TableIdentity> tables = new LinkedHashMap<>();
-        private final Set<TableId> clearedTables = new HashSet<>();
-        private final Map<BigInteger, Integer> savepoints = new LinkedHashMap<>();
+        private final List<Change> changes;
+        private final Map<RecordIdentity, Image> before;
+        private final Map<TableId, TableIdentity> tables;
+        private final Set<TableId> clearedTables;
+        private final Map<BigInteger, Integer> savepoints;
         private long bytes;
         private int entries;
         private boolean rollingBack;
@@ -555,9 +653,15 @@ final class As400TransactionBuffer implements AutoCloseable {
 
         private final As400SourceMetadata startSource;
 
-        private Cycle(TransactionId id, As400SourceMetadata startSource) {
+        private Cycle(TransactionId id, As400SourceMetadata startSource, As400SpillStore spill) {
             this.id = id;
             this.startSource = startSource;
+            String prefix = "cycle/" + id.commitCycle();
+            changes = spill == null ? new ArrayList<>() : spill.list(prefix + "/changes", As400SpillCodec.CHANGE);
+            before = spill == null ? new LinkedHashMap<>() : spill.map(prefix + "/before", As400SpillCodec.RECORD, As400SpillCodec.IMAGE);
+            tables = spill == null ? new LinkedHashMap<>() : spill.map(prefix + "/tables", As400SpillCodec.TABLE_ID, As400SpillCodec.TABLE);
+            clearedTables = spill == null ? new HashSet<>() : spill.set(prefix + "/clears", As400SpillCodec.TABLE_ID);
+            savepoints = spill == null ? new LinkedHashMap<>() : spill.map(prefix + "/savepoints", As400SpillCodec.INTEGER, As400SpillCodec.INT);
         }
     }
 }

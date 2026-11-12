@@ -34,12 +34,13 @@ class As400NativeJournalWindowTest {
     private static final JournalReceiver JOURNAL = new JournalReceiver("JRN", "LIB");
 
     @ParameterizedTest
-    @ValueSource(ints = { 17, 78, 128 })
-    void shouldAcceptRequiredRetainedChainsBeyondSixteenReceivers(int count) {
+    @ValueSource(ints = { 17, 128, 5000 })
+    void shouldValidateEveryRequiredReceiverWithoutAFixedChainCeiling(int count) {
         var sample = sample(count, "ONLINE");
         var from = new JournalPosition(BigInteger.ONE, receiver(0));
         var through = new JournalPosition(BigInteger.valueOf(count * 10L), receiver(count - 1));
         assertThat(new Window(from, through, sample, sample).receiverTokens()).hasSize(count);
+        As400NativeJournalWindow.requireStableDirectory(sample, sample);
     }
 
     @Test

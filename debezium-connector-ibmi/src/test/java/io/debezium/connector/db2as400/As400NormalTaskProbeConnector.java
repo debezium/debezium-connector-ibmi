@@ -5,8 +5,8 @@
  */
 package io.debezium.connector.db2as400;
 
-import java.nio.ByteBuffer;
 import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.Duration;
 import java.util.Map;
 import java.util.Optional;
@@ -15,7 +15,11 @@ import java.util.UUID;
 
 import org.apache.kafka.clients.producer.RecordMetadata;
 import org.apache.kafka.connect.connector.Task;
+import org.apache.kafka.connect.json.JsonConverter;
+import org.apache.kafka.connect.runtime.standalone.StandaloneConfig;
 import org.apache.kafka.connect.source.SourceRecord;
+import org.apache.kafka.connect.storage.FileOffsetBackingStore;
+import org.apache.kafka.connect.storage.OffsetStorageReaderImpl;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -23,7 +27,6 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import io.debezium.config.Configuration;
 import io.debezium.connector.db2as400.As400RecoveryTestSupport.Fixture;
 import io.debezium.ibmi.db2.journal.retrieve.RawJournalPage;
-import io.debezium.ibmi.db2.journal.retrieve.rjne0200.EntryHeaderDecoder;
 import io.debezium.relational.history.SchemaHistory;
 import io.debezium.storage.kafka.history.KafkaSchemaHistory;
 
@@ -55,6 +58,10 @@ public final class As400NormalTaskProbeConnector extends As400ConnectProbeConnec
                 Map<String, String> baseline = JSON.readValue(Files.readString(CONTROL.resolve(name + ".baseline.json")), new TypeReference<>() {
                 });
                 var source = new LocalSource(name, generation, baseline.get("capture_fingerprint"));
+                source.sourceOffsets = config.getBoolean("probe.source.offsets", false);
+                if (source.sourceOffsets && context.transactionContext() != null) {
+                    throw new IllegalStateException("Source-offset qualification must not use a transaction context");
+                }
                 var loaded = context.offsetStorageReader().offset(source.partition().getSourcePartition());
                 write(generation + ".start.json", Map.of("generation", generation, "loaded", loaded == null ? Map.of() : loaded));
                 return source;
@@ -93,36 +100,6 @@ public final class As400NormalTaskProbeConnector extends As400ConnectProbeConnec
             fixture.definitions.clear();
         }
 
-        /** Synthetic load on captured row/control layouts, not new native evidence. */
-        private void repeatedDeletes() {
-            byte[] row = fixture.entry(42).data();
-            byte[] start = fixture.entry(31).data();
-            byte[] commit = fixture.entry(59).data();
-            var anchor = fixture.entry(29);
-            fixture.entries.clear();
-            fixture.entries.add(anchor);
-            // Use one producer for the complete cycle; retain native object bindings.
-            for (byte[] control : new byte[][]{ start, commit }) {
-                System.arraycopy(row, 40, control, 40, 8);
-                System.arraycopy(row, 101, control, 101, 26);
-                System.arraycopy(row, 208, control, 208, 8);
-            }
-            fixture.entries.add(repeatedEntry(start, 30, "CSC"));
-            for (int i = 0; i < 300; i++) {
-                fixture.entries.add(repeatedEntry(row, 31 + 2 * i, "RPT"));
-                fixture.entries.add(repeatedEntry(row, 32 + 2 * i, "RDL"));
-            }
-            fixture.entries.add(repeatedEntry(commit, 631, "CCM"));
-        }
-
-        private static RawJournalPage.Entry repeatedEntry(byte[] template, long sequence, String type) {
-            byte[] raw = template.clone();
-            ByteBuffer.wrap(raw).putLong(24, sequence).putLong(64, 30);
-            new com.ibm.as400.access.AS400Text(3, 37).toBytes(type, raw, 98);
-            new com.ibm.as400.access.AS400Text(1, 37).toBytes(type.equals("RDL") ? "1" : "0", raw, 216);
-            return new RawJournalPage.Entry(Fixture.position(sequence), new EntryHeaderDecoder().decode(raw, 0), raw);
-        }
-
         @Override
         As400OperatorCutReader.Limits readerLimits() {
             return name.equals("normalduplicates") ? new As400OperatorCutReader.Limits(16, 1000, 1_000_000) : super.readerLimits();
@@ -136,9 +113,9 @@ public final class As400NormalTaskProbeConnector extends As400ConnectProbeConnec
                 try (var stream = Files.newInputStream(java.nio.file.Path.of("/worker.properties"))) {
                     worker.load(stream);
                 }
-                if (System.getenv("PROBE_WORKER") == null || !"enabled".equals(worker.getProperty("exactly.once.source.support"))
+                if (System.getenv("PROBE_WORKER") == null || !(sourceOffsets ? "disabled" : "enabled").equals(worker.getProperty("exactly.once.source.support"))
                         || !"broker:9092".equals(worker.getProperty("bootstrap.servers"))) {
-                    throw new IllegalStateException("Pinned local EOS worker required");
+                    throw new IllegalStateException("Pinned local worker delivery contract required");
                 }
             }
             catch (java.io.IOException e) {
@@ -190,7 +167,32 @@ public final class As400NormalTaskProbeConnector extends As400ConnectProbeConnec
     }
 
     public static void main(String[] args) throws Exception {
-        if (args.length == 2 && args[0].equals("baseline") && args[1].matches("normal[a-z]+")) {
+        if (args.length == 2 && args[0].equals("file-offset") && args[1].matches("normal[a-z]+")) {
+            Properties properties = new Properties();
+            try (var stream = Files.newInputStream(Path.of("/worker.properties"))) {
+                properties.load(stream);
+            }
+            if (!"/control/standalone-offsets.dat".equals(properties.getProperty("offset.storage.file.filename"))) {
+                throw new IllegalArgumentException("Owned standalone file offsets required");
+            }
+            var key = new JsonConverter();
+            var value = new JsonConverter();
+            key.configure(Map.of("schemas.enable", false), true);
+            value.configure(Map.of("schemas.enable", false), false);
+            var store = new FileOffsetBackingStore(key);
+            store.configure(new StandaloneConfig(Configuration.from(properties).asMap()));
+            store.start();
+            try (var reader = new OffsetStorageReaderImpl(store, args[1], key, value)) {
+                var saved = reader.offset(Map.of("server", "test"));
+                write(args[1] + ".file-offset.json", saved == null ? Map.of() : saved);
+            }
+            finally {
+                store.stop();
+                key.close();
+                value.close();
+            }
+        }
+        else if (args.length == 2 && args[0].equals("baseline") && args[1].matches("normal[a-z]+")) {
             Fixture fixture = new Fixture(CONTROL);
             history(fixture, args[1]);
             var offset = As400RecoveryTaskFixture.initialize(fixture);
