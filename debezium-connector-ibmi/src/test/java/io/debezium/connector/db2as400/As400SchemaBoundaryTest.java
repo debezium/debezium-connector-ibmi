@@ -212,7 +212,7 @@ class As400SchemaBoundaryTest {
 
     @ParameterizedTest
     @ValueSource(strings = { "missing-binding", "captured", "member-jid", "minimized", "defaulted", "truncated" })
-    void shouldRejectUnqualifiedInterleavedPointersBeforeAcceptingSchemaHistory(String fault) throws Exception {
+    void shouldRejectUnqualifiedInterleavedPointersWhenTheirRowsAreValidated(String fault) throws Exception {
         var f = new SchemaFixture(true);
         var records = new ArrayList<>(f.range(52, 62));
         var original = records.remove(records.size() - 1);
@@ -234,13 +234,50 @@ class As400SchemaBoundaryTest {
         };
         assertThatThrownBy(() -> {
             if (fault.equals("missing-binding")) {
-                As400SchemaChange.qualify(f.oldB, f.newB, records, f.order, f.position(61));
+                As400SourceNormalizer.validateSource(records.get(records.size() - 1).header(), records.get(records.size() - 1).data(), 0,
+                        original.position(), (file, library) -> null);
             }
             else {
-                As400SchemaChange.qualify(f.oldB, f.newB, records, f.order, f.position(61), bindings);
+                As400SourceNormalizer.validateSource(records.get(records.size() - 1).header(), records.get(records.size() - 1).data(), 0,
+                        original.position(), bindings);
             }
         }).isInstanceOf(Exception.class);
         assertThat(f.recover(f.initial).definitions()).contains(f.oldB).doesNotContain(f.newB);
+    }
+
+    @Test
+    void shouldQualifyACommittedAlterWhenAnotherFilesLifecycleOverlapsItsObservation() throws Exception {
+        var f = new SchemaFixture();
+        var interval = new ArrayList<>(f.range(52, 64));
+        for (var entry : f.range(65, 72)) {
+            byte[] raw = entry.data();
+            if (!entry.header().getFile().isEmpty()) {
+                new com.ibm.as400.access.AS400Text(10, 37).toBytes("OTHER", raw, 157);
+            }
+            interval.add(new RawJournalPage.Entry(entry.position(), new EntryHeaderDecoder(37).decode(raw, 0), raw));
+        }
+        var change = As400SchemaChange.qualify(f.oldB, f.newB, interval, f.order, f.position(72), f.bindings());
+        assertThat(change).isEqualTo(f.change);
+        // A second transition of the target file still makes the catalog ambiguous.
+        assertThatThrownBy(() -> As400SchemaChange.qualify(f.oldB, f.newB, f.range(52, 72), f.order, f.position(72), f.bindings()))
+                .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("Another table transition");
+    }
+
+    @Test
+    void shouldQualifyAnAlterBeforeAnUnrelatedNewFileHasARecoveredBinding() throws Exception {
+        var f = new SchemaFixture();
+        byte[] creation;
+        try (var input = getClass().getResourceAsStream("/native-transactions/new-file.json")) {
+            var entries = JSON.readTree(input).path("entries");
+            var item = java.util.stream.StreamSupport.stream(entries.spliterator(), false)
+                    .filter(value -> value.path("type").asText().equals("D/CT")).findFirst().orElseThrow();
+            creation = Base64.getDecoder().decode(item.path("raw").asText());
+        }
+        java.nio.ByteBuffer.wrap(creation).putLong(24, 60);
+        var interval = new ArrayList<>(f.range(52, 59));
+        interval.add(new RawJournalPage.Entry(f.position(60), new EntryHeaderDecoder(37).decode(creation, 0), creation));
+        interval.addAll(f.range(61, 61));
+        assertThat(As400SchemaChange.qualify(f.oldB, f.newB, interval, f.order, f.position(61), f.bindings())).isEqualTo(f.change);
     }
 
     @ParameterizedTest

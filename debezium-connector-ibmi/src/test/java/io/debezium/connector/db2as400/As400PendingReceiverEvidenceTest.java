@@ -30,6 +30,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -188,6 +189,40 @@ class As400PendingReceiverEvidenceTest {
                     .isEqualTo(new JournalPosition(BigInteger.ONE, old));
             assertThat(As400NativeHistoryDiscoveryProbe.restore(new ObjectMapper().valueToTree(As400NativeHistoryDiscoveryProbe.pending(sample)))).isEqualTo(sample);
         }
+    }
+
+    @ParameterizedTest
+    @CsvSource({ "FREED,false", "FREED,true", "PARTIAL,false", "PARTIAL,true", "RESET,false", "RESET,true", "MISSING_LINK,false", "MISSING_LINK,true" })
+    void shouldIgnoreUnavailableHistoricalReceiversOnlyWhenNoRequiredHistoryDependsOnThem(String condition, boolean pending) throws Exception {
+        try (var stream = getClass().getResourceAsStream("/native-transactions/prospective-boundary.json")) {
+            var fixture = new ObjectMapper().readTree(stream);
+            var item = java.util.stream.StreamSupport.stream(fixture.path("prospective-rows").path("entries").spliterator(), false)
+                    .filter(e -> e.path("type").asText().equals("R/PT") && e.path("cycle").asText().equals("0")).findFirst().orElseThrow();
+            byte[] bytes = Base64.getDecoder().decode(item.path("raw").asText());
+            var position = As400OnlineHandoff.position(item.path("position"));
+            var old = new JournalReceiver("OLD", position.receiver().library());
+            var sample = new As400PendingReceiverEvidence.Sample(new JournalReceiver("QSQJRN", old.library()), position.receiver(), List.of(
+                    new As400PendingReceiverEvidence.Receiver(old, List.of("FREED", "PARTIAL").contains(condition) ? condition : "SAVED",
+                            BigInteger.ONE, BigInteger.TEN, Optional.empty(), condition.equals("MISSING_LINK") ? Optional.empty() : Optional.of(position.receiver()),
+                            pending),
+                    new As400PendingReceiverEvidence.Receiver(position.receiver(), "ATTACHED", condition.equals("RESET") ? BigInteger.ONE : BigInteger.valueOf(11),
+                            position.offset(), Optional.of(old), Optional.empty(), false)));
+            var bracket = List.of(new RawJournalPage.Entry(position, new EntryHeaderDecoder().decode(bytes, 0), bytes));
+            if (pending) {
+                assertThrows(IllegalArgumentException.class, () -> sample.floor(bracket));
+            }
+            else {
+                assertThat(sample.floor(bracket)).isEqualTo(position);
+            }
+        }
+    }
+
+    @Test
+    void shouldDeferChangedDirectoryEvidenceRatherThanFailTheLegacyTask() throws Exception {
+        var fixture = new Fixture();
+        fixture.after.put("NUMBER_JOURNAL_RECEIVERS", 2);
+        assertThrows(As400NativeEvidenceException.class, fixture::collect);
+        verify(fixture.connection).close();
     }
 
     private static final class Fixture {

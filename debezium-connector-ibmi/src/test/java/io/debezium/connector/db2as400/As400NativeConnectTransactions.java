@@ -12,7 +12,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Properties;
 
-/** Finite controller-owned transactions; stdin credentials, no shared-auction SQL. */
+/** Finite controller-owned transactions; stdin credentials and isolated fixture SQL. */
 public class As400NativeConnectTransactions {
     private static final List<String> MODES = List.of("truncate-commit", "delete-rollback", "truncate-rollback", "delete-commit", "temporal-commit", "temporal-rollback");
 

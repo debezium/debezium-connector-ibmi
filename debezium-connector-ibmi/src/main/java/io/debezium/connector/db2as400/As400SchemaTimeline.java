@@ -85,7 +85,7 @@ final class As400SchemaTimeline implements As400SourceNormalizer.TableResolver {
         if (As400SchemaChange.isOpening(entry) || addingMember) {
             require(!pending.containsKey(key), "Overlapping schema changes for one table");
             var before = definitions.get(key);
-            boolean creation = entry.header().getJournalCode() == 'D';
+            boolean creation = entry.header().getJournalCode() == 'D' && entry.header().getEntryType().equals("CT");
             require(creation == (before == null), "Creation cannot replace a retained file; ALTER requires an existing definition");
             var saved = history.find(entry.position());
             As400SchemaChange change;
@@ -109,7 +109,7 @@ final class As400SchemaTimeline implements As400SourceNormalizer.TableResolver {
             var value = iterator.next();
             if (value.change.records().stream().anyMatch(mark -> mark.position().equals(entry.position()))) {
                 value.change.verifyRecord(entry, order);
-                if (value.change.creationLifecycle()) {
+                if (value.change.creationLifecycle() && entry.header().getJournalCode() != 'C') {
                     creationRecord = entry.position();
                 }
             }
@@ -118,6 +118,9 @@ final class As400SchemaTimeline implements As400SourceNormalizer.TableResolver {
             }
             if (value.change.commit().equals(entry.position())) {
                 value.committed = true;
+                if (value.change.after() == null) {
+                    bindings.remove(As400SchemaHistory.key(value.change.before()));
+                }
             }
             if (value.applied && value.committed) {
                 iterator.remove();
@@ -157,8 +160,17 @@ final class As400SchemaTimeline implements As400SourceNormalizer.TableResolver {
         var retained = history.append(current, value.change);
         // Rebuild output only after durable history; nothing from this epoch has
         // reached the queue. Failed conversion/setup leaves the old checkpoint.
-        update.accept(value.change.after());
-        install(value.change.after());
+        if (value.change.after() == null) {
+            String key = As400SchemaHistory.key(value.change.before());
+            definitions.remove(key);
+            // A transactional DROP's commit can still release older buffered
+            // rows for this identity. Keep its decoder until the qualified D/DF;
+            // F pins the opening, so a restart reconstructs this same interval.
+        }
+        else {
+            update.accept(value.change.after());
+            install(value.change.after());
+        }
         current = retained.cursor();
         applied.put(current.ordinal(), new Applied(position, current));
         value.applied = true;

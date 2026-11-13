@@ -15,6 +15,7 @@ requirements or current feature status.
 | Offline Python | Explicit native-test authorization, credential redaction, bounded allocation/release, marker validation and cleanup safeguards | `python3 -B -m unittest discover -s tools -p 'test_*.py'` |
 | Local Kafka Connect | Real task/dispatcher, durable acknowledgement, missing-offset rejection, interrupted batches, fencing and legitimate reassignment | `tools/dcg-ownership-probe`; CI runs `ack` and `offsets` on Kafka 4.2.0 and 4.3.1 |
 | Packaged native connector | Initial snapshot, online handoff, no second snapshot, clear commit/rollback, receiver rotation, mixed values, unrelated-table progress and replacement | `tools/dcg-public-online-probe.py` with an explicitly authorized isolated IBM i fixture |
+| Deferred online activation | Clear outcomes before handoff, pinned legacy offsets, unrelated rows, savepoints, receiver rotation and replacement | `tools/dcg-deferred-clear-probe.py`, using the same isolated-fixture authorization and cleanup |
 | Performance/restart | Old-versus-new workload comparison, complete update images after restart, open-clear progress and bounded sustained workload | `tools/dcg-performance-probe.py` and `tools/dcg-soak-probe.py` |
 
 See [contributor testing](dcg-contributor-testing.md) for prerequisites, commands,
@@ -1467,3 +1468,65 @@ workload contains no ALTER operation. Reproduction uses the same sustained
 runner command above, with a fresh directory/library and an explicitly selected
 immutable distribution for each run. Compare shared dependency hashes as well
 as source revisions before interpreting future results.
+
+## Subsequent review corrections — 2026-11-12
+
+The review found ordinary journal activity that could stop the enabled path:
+excluded-file DROP/REVOKE, another table's clear during ALTER observation,
+AFTER-only excluded updates, large excluded transactions and obsolete unreadable
+receivers. Corrections preserve exact object/member identity and required-history
+checks. Excluded rows no longer retain individual output entries, disk working
+storage is the default, and online activation rejects processing WARN/SKIP before
+opening native handles. Conversion handling remains a separate setting.
+
+An ordinary-plugin native run passed transactional DROP rollback/commit/recreate,
+ALTER followed by another table's clear, excluded AFTER-only updates, a 10,000-row
+excluded transaction and activation with an unused FREED receiver. Restart checks
+retained progress without resnapshotting. Those results used connector JAR
+`9c63a92b4364b7a3c20eef00c62953b6ab9e5fcec572efea20453a94533d0300`;
+they preceded the deferred-clear work below.
+
+The legacy prefix now holds a transactional clear and subsequent changes of its
+table while admission is pending. Other tables continue, with every source
+offset pinned until retained native history proves the held outcome. The public
+`dcg-deferred-clear-probe.py` runner passed **26 assertions** on the ordinary
+packaged task with Kafka source transactions and transaction metadata enabled:
+commit, rollback, savepoints, both D/CG subtypes, 600 unrelated rows across
+automatic flushes, receiver rotation, replacement, consecutive clears, a following F/CR across restart and eventual
+handoff without a second snapshot. A preceding build passed the ordinary
+source-offset variant. Missing history, changed bindings and an already-published
+same-table transactional prefix remain explicit failures; this does not repair
+arbitrary previously exposed legacy transactions.
+
+The final distribution ZIP is
+`c7c2c428a984e6097aa4ec2bd10ef55d467dc193972f67fe533c2472ecb91ed2`.
+All 197 production source files match the archived native test input. Maven
+verification passed **4,653 Java tests** (256 parser and 4,397 connector), assembly
+and formatter/import validation; **152 Python checks** passed. Local regressions
+also cover partial dispatch, fresh-instance replay, incremental-window cleanup,
+idle rollback completion, forty empty receivers and byte-limited read progress.
+The last two tests reproduced permanent reader-limit failures before correction.
+
+An initial native attempt exposed a background metadata timeout while a clear was
+open. Read-only metadata work outside allocation now defers admission; uncertain
+lock release still fails. That failed attempt is retained separately. Native
+fixture/library/inquiry, reader-job and local Kafka cleanup passed, followed by
+independent read-only verification that all six deferred-clear fixtures were
+absent. Raw captures remain private evidence until sanitized.
+
+Advisor inspected the actual files after the first 23-check run and found a valid
+F/CR following a held transactional clear would be rejected as a schema change.
+Two local commit/restart cases reproduced the failure. The correction shares the
+strict member-binding validator, preserves single-member and cycle-zero checks,
+and delivers the F/CR after the transactional outcome. Negative identity/scope
+cases and the full suite passed. The final 26-check native run above killed the
+worker at the pinned offset, committed the clear, performed CLRPFM and a reload,
+then verified `t, c, t, c` after replacement. There was no second Advisor review;
+this is the correction and re-verification of its reported concern.
+
+These are correctness results, not new performance measurements. The preceding
+timed candidate, maximum native scope and deployment results retain their original
+artifact qualifications. Long-lived journal-wide transaction retention,
+LOB-heavy cleanup cost and unusual resource/snapshot settings still need workload
+qualification; passing these bounded tests does not establish universal capacity
+or production-deployment readiness.

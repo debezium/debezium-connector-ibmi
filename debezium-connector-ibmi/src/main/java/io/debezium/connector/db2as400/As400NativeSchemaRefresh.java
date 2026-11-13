@@ -42,6 +42,9 @@ final class As400NativeSchemaRefresh {
             var window = new As400NativeJournalWindow.Window(opening.position(), firstTail, first, afterRead);
             require(window.journalToken().equals(journalIdentity), "Schema refresh journal identity changed");
             var entries = captured.seal();
+            if (opening.header().getJournalCode() == 'D' && opening.header().getEntryType().equals("DT")) {
+                return As400FileDeletion.qualify(before, entries, order(window));
+            }
             if (As400MemberCreation.opening(before, opening)) {
                 // The complete native association adds one member to the retained
                 // file format; no current-catalog schema substitution is needed.

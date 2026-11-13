@@ -72,9 +72,34 @@ The allocation uses `WAIT(1)`; that is not a universal one-second writer-pause
 promise. Server scheduling, conflicting locks and release/drain failures matter.
 Earlier isolated healthy pulses held allocations for approximately 1–2 ms, while
 collecting metadata took much longer outside those allocations. Enabling the
-feature on a busy journal may defer admission for an unbounded time. Applications
-must not rely on transactional clears being captured until handoff completes.
-This change cannot repair clears missed before its accepted boundary.
+feature on a busy journal may defer admission for an unbounded time.
+
+If the legacy prefix encounters a transactional clear while admission is waiting,
+it holds subsequent changes for that table and continues publishing other tables.
+Every source offset and automatic delivery acknowledgement stays at the safe
+pre-clear position. After the actual commit or rollback, retained native history
+must establish the original transaction start, exact file/member identities,
+unchanged schemas and the complete clear/savepoint/restore sequence. A committed
+clear precedes its replacement rows; rolled-back work is discarded. The existing
+legacy transaction metadata context closes only after all its held rows are
+released. A following cycle-zero F/CR is validated against its exact single-member
+binding and delivered in source order after that outcome; it is not discarded as
+administrative metadata. A background metadata timeout outside the allocation interval defers
+admission with backoff; it does not authorize publication or weaken lock-release
+checks.
+
+This transition still uses legacy offsets, before native F/W recovery takes over.
+A replacement reconstructs the held work from the saved position and retained
+original transaction history, including starts in earlier receivers. Ordinary
+rows already emitted after that position can repeat on restart. Retain that
+original history even when it precedes the saved legacy offset; do not delete
+receivers based only on the latest emitted row. Missing history, changed schemas,
+unresolved native sequences or a same-table transactional prefix already exposed
+before the clear are rejected without acknowledging past the clear. Temporary
+indexes and row images use disposable disk storage; they never replace the journal
+as recovery authority. After all held work drains, normal online admission resumes
+without resnapshotting. Clears skipped before the saved legacy position are not
+repaired by enabling the feature.
 
 A failed `DLCOBJ` must not be treated as a released lock. The server program makes
 three bounded release attempts; after an explicit terminal release failure, the
@@ -158,16 +183,28 @@ with these online-specific differences:
   allowing standard selection changes at restart. Excluded files retain native
   file/member identities, format shape and transaction effects without decoding
   output values. Unsupported or inaccessible excluded layouts remain identity-only.
-  They must still satisfy the complete-member-inventory, complete-image and
+  They must still satisfy the complete-member-inventory, non-minimized-image and
   journal-identity checks. Expanding capture selection cannot promote identity-only history into
   a row schema. Excluded native LOB files retain a separate identity-only binding:
-  bounded pointer descriptors, null maps and transaction effects are validated,
+  bounded pointer-row length/flags, null maps and transaction effects are validated,
   but external values are never read or published. Every returned pointer handle
   is released in the retrieving native job, including entries deferred to a later
   page. Cleanup failure prevents progress and cancels that job. Captured LOB/XML
   values remain unsupported; an excluded binding cannot become a captured schema
   just by changing a filter. Minimized/defaulted or ambiguous row metadata still
   rejects. Catalog reads use bounded batches without caching.
+  Excluded updates may use `IMAGES(*AFTER)` because no before-image is published
+  or paired for them. Captured updates still require their exact before-image.
+  Grant/revoke and trigger creation/removal records are identity-checked metadata.
+  Triggered row changes are still processed as ordinary journaled rows. Constraint changes on
+  excluded files do not produce output; captured constraint changes remain
+  rejected until their effect on output keys can be established. A complete
+  physical-file deletion retires its binding in durable schema history. A
+  transactional DROP requires its verified commit and physical deletion records;
+  rollback retains the original binding. The old decoder remains available for
+  buffered rows until the physical deletion completes. DROP
+  does not emit a truncate or delete existing topic records. A later creation
+  under the same name requires a newly qualified file/member identity.
   Object-identity queries group at most 16 exact file/member paths; this bounds
   each SQL request, not the total file inventory. Missing, duplicate, foreign,
   mismatched or incomplete observations reject the whole acquisition. The full
@@ -195,7 +232,10 @@ with these online-specific differences:
   not a user-supplied claim about the worker.
   Both paths support optional `provide.transaction.metadata=true` and require
   truncate to be absent from `skipped.operations` and `errors.tolerance=none`.
-  Ordinary row conversion supports the connector's FAIL/WARN/SKIP modes;
+  `event.processing.failure.handling.mode` must be `fail` (the default), checked
+  before native acquisition. A lossy legacy prefix cannot establish a safe
+  migration boundary. Ordinary value conversion still supports
+  `event.converting.failure.handling.mode=fail|warn|skip`;
   decode/history failures and failed clear dispatch remain fatal. `skipped.operations=none` emits every operation; ordinary `c/u/d`
   filters are supported. Recovery still processes all source records.
   With transaction metadata enabled, handoff waits for existing cycles to finish
@@ -348,14 +388,21 @@ Local Linux filesystem behavior is validated separately from any network-mounted
 or platform-specific storage. File history shares the existing bounded proposal
 prefix; it does not remove the native file-scope/history-volume limits.
 
-The existing memory buffer remains the default. For larger transactions, select
-`truncate.buffer.storage=disk`; the [disk-buffer configuration](dcg-configured-native.md#transaction-working-storage)
+`truncate.buffer.storage=disk` is the default; the
+[disk-buffer configuration](dcg-configured-native.md#transaction-working-storage)
 uses local scratch files for rows, transaction bookkeeping, lifecycle validation
 and prepared output. A replacement task reconstructs from journal history and
 durable offsets and does not need access to the previous task's files. Exceeding
 a configured resource budget stops capture with the durable checkpoint preserved;
 it does not silently evict an open transaction. This storage option does not
 remove runtime admission checks or the need to retain complete native history.
+
+Excluded rows are identity/format checked but do not consume one retained output
+entry per row. Transaction starts, savepoints, lifecycle state and table identities
+still include excluded files: a cycle can later touch a captured table. Thus the
+transaction/scope budgets and the oldest required journal position are journal-wide.
+The optional `memory` profile retains its explicit 64-cycle/10,000-entry defaults;
+exceeding them requires increasing the budget or switching to disk before restart.
 
 Boundary raw-journal audits always read bounded native pages. Captures above
 1 MiB spill to private task-owned scratch files, including when transaction

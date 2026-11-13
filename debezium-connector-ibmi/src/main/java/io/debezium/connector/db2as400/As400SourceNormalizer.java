@@ -83,10 +83,11 @@ final class As400SourceNormalizer {
                 if (autocommit == null) {
                     throw new IllegalArgumentException("Cycle-zero operation requires the future output coordinator");
                 }
-                TableBinding table = table(header, header.getFile(), header.getLibrary(), header.getMember(), ObjectKind.MEMBER_DATA);
+                boolean memberClear = header.getJournalCode() == 'F' && header.getEntryType().equals("CR");
+                TableBinding table = memberClear ? validateMemberClear(header, data, offset, currentPosition, tables)
+                        : table(header, header.getFile(), header.getLibrary(), header.getMember(), ObjectKind.MEMBER_DATA);
                 buffer.requireNoConflictingClear(source.commitCycle(), table.identity());
-                if (header.getJournalCode() == 'F' && header.getEntryType().equals("CR")) {
-                    table.requireTableWideClear();
+                if (memberClear) {
                     return autocommit.accept(source, table.identity(), null, null, completedReplay);
                 }
                 if (header.getJournalCode() != 'R' || !FORWARD.contains(header.getEntryType())) {
@@ -195,6 +196,22 @@ final class As400SourceNormalizer {
     }
 
     private TableBinding table(EntryHeader header, String file, String library, String member, ObjectKind kind) throws Exception {
+        return table(tables, header, file, library, member, kind);
+    }
+
+    /** F/CR changes data, not the retained schema; still require its exact member binding and clear scope. */
+    static TableBinding validateMemberClear(EntryHeader header, byte[] data, int offset, JournalPosition position, TableResolver tables) throws Exception {
+        validateSource(header, data, offset, position, tables);
+        if (header.getJournalCode() != 'F' || !header.getEntryType().equals("CR") || header.getCommitCycle().signum() != 0
+                || header.getControlInfo().nestedCommitLevel() != 0) {
+            throw new IllegalArgumentException("A nontransactional member clear requires an unambiguous cycle-zero F/CR");
+        }
+        var binding = table(tables, header, header.getFile(), header.getLibrary(), header.getMember(), ObjectKind.MEMBER_DATA);
+        binding.requireTableWideClear();
+        return binding;
+    }
+
+    private static TableBinding table(TableResolver tables, EntryHeader header, String file, String library, String member, ObjectKind kind) throws Exception {
         name(file, 10);
         name(library, 10);
         var info = Objects.requireNonNull(header.getRecordInfo());

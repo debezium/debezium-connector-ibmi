@@ -470,6 +470,28 @@ class As400LegacyRowFailureTest {
     }
 
     @Test
+    void shouldRetainInterleavedBeforeImagesInTheNativeLegacyPrefix() throws Exception {
+        try (var f = new Fixture(Map.of(), false)) {
+            f.ownedRow(40, "TEST", "UB", 1);
+            f.ownedRow(41, "OTHER", "UB", 7);
+            f.ownedRow(42, "TEST", "UP", 2);
+            var changed = f.queue.poll();
+            assertThat(changed).hasSize(3); // delete, tombstone, create for the primary-key change
+            var safe = changed.get(2).getRecord().sourceOffset();
+            assertThat(safe.get(As400OffsetContext.EVENT_SEQUENCE)).isEqualTo("40");
+            assertThat(safe.get(As400OffsetContext.PROCESSED)).isEqualTo("false");
+            f.ownedRow(43, "TEST", "PT", 3);
+            assertThat(f.queue.poll()).allSatisfy(event -> assertThat(event.getRecord().sourceOffset()).isEqualTo(safe));
+            assertThat(f.source.hasPendingBeforeImage()).isTrue();
+            assertThat(f.offset.getOffset()).isEqualTo(safe);
+            f.ownedRow(44, "OTHER", "UP", 8);
+            assertThat(f.queue.poll()).allSatisfy(event -> assertThat(event.getRecord().sourceOffset()).isEqualTo(safe));
+            assertThat(f.source.hasPendingBeforeImage()).isFalse();
+            assertThat(f.offset.getOffset().get(As400OffsetContext.EVENT_SEQUENCE)).isEqualTo("44");
+        }
+    }
+
+    @Test
     void shouldAdvanceRpcPositionOnlyAfterTheCurrentRowCallbackReturns() throws Exception {
         try (var f = new Fixture(Map.of(), false)) {
             var callbackOffsets = new ArrayList<Map<String, ?>>();
@@ -589,6 +611,18 @@ class As400LegacyRowFailureTest {
                     h.getTime(), 'R', type, String.format("%-10s%-10s%-10s", table, "LIB", table), BigInteger.ZERO, -1, -1, h.getReceiver(), h.getReceiverLibrary());
             when(journal.decode(decoder)).thenReturn(new Object[]{ value });
             run(new As400ConnectProbeConnector.Event(header, event.data(), event.position()));
+        }
+
+        void ownedRow(long sequence, String table, String type, int value) throws Exception {
+            var original = nativeRow(type);
+            byte[] raw = original.data();
+            java.nio.ByteBuffer.wrap(raw).putLong(24, sequence);
+            new com.ibm.as400.access.AS400Text(30, 37).toBytes(String.format("%-10s%-10s%-10s", table, "LIB", table), raw, 157);
+            var header = new io.debezium.ibmi.db2.journal.retrieve.rjne0200.EntryHeaderDecoder().decode(raw, 0);
+            var position = new io.debezium.ibmi.db2.journal.retrieve.JournalPosition(BigInteger.valueOf(sequence), original.position().receiver());
+            when(decoder.decode(any(), any(), org.mockito.ArgumentMatchers.anyInt())).thenReturn(new Object[]{ value });
+            source.processOwnedEntry(PARTITION, offset, new RawJournalPage.Entry(position, header, raw));
+            offset.setPosition(new JournalProcessedPosition(position, header.getTime(), true));
         }
 
         void run(As400ConnectProbeConnector.Event event) throws Exception {

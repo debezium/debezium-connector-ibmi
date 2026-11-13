@@ -202,6 +202,12 @@ bindings are explicit test inputs, not proof that a runtime object has that iden
 | `record-limit.json` | R/IL from growing a file beyond its initial record limit. The exact eight-byte internal layout is not decoded as a row. |
 | `save-while-active.json` | D/DW and F/SS from an actual save-while-active operation, along with save completion records. Restore and storage-freed saves are outside this acceptance. |
 | `reorganization.json` | Classic RGZPFM after creating a physical hole: F/RG and F/RM subtype E. Declared primary-key capture can continue; RRN keys and concurrent subtype F remain rejected. |
+| `file-deletion.json` | Grant/revoke, excluded CHECK constraint add/drop, physical-file deletion and recreation under the same name. Separate metadata records cover trigger creation/removal. Header names and JIDs are replaced consistently; opaque object apply data is removed while preserving layout and creation-image length. Tests require exact identities and complete deletion before retirement. |
+| `transactional-file-deletion.json` | A rolled-back DROP retains B, while a committed DROP of U emits physical member/file deletion after C/CM. Tests retain transaction controls, recover the rolled-back binding, and preserve the decoder through commit. The same object-data sanitization applies. |
+
+The object-level prefixes used for deletion, authority, constraint and trigger
+validation follow IBM's [journal entry layouts](https://www.ibm.com/docs/en/ssw_ibm_i_74/rzaki/rzakivarlength.htm).
+These sanitized captures establish regression inputs, not live identity or startup proof.
 
 The ordinary runtime tests replay these through the actual lifecycle classifier,
 strict row normalizer and recovery coordinator. Accepted administrative entries do

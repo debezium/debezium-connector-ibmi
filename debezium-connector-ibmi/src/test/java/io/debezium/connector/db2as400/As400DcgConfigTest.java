@@ -241,16 +241,18 @@ public class As400DcgConfigTest {
     }
 
     @Test
-    void shouldUseDiskBudgetDefaultsWithoutSilentlyChangingTheMemoryProfile() {
+    void shouldDefaultToBoundedDiskStorageAndRetainExplicitMemoryLimits() {
         var properties = onlineProperties();
-        var memory = As400DcgConfig.onlineCandidate(Configuration.from(properties));
-        properties.put("truncate.buffer.storage", "disk");
         var disk = As400DcgConfig.onlineCandidate(Configuration.from(properties));
+        properties.put("truncate.buffer.storage", "memory");
+        var memory = As400DcgConfig.onlineCandidate(Configuration.from(properties));
         assertThat(memory.runtimeLimits.storage()).isNull();
         assertThat(memory.runtimeLimits.transactions().maxPayloadBytes()).isEqualTo(16 * 1024 * 1024);
         assertThat(disk.runtimeLimits.transactions().maxPayloadBytes()).isEqualTo(disk.runtimeLimits.storage().maximumBytes());
         assertThat(disk.runtimeLimits.transactions().maxTransactions()).isGreaterThan(1024);
         assertThat(disk.runtimeLimits.transactions().maxRetainedEntries()).isGreaterThan(100000);
+        assertThat(disk.runtimeLimits.storage().maximumBytes()).isEqualTo(10L * 1024 * 1024 * 1024);
+        assertThat(As400ConnectorConfig.configDef().defaultValues()).containsEntry("truncate.buffer.storage", "disk");
     }
 
     @Test
@@ -453,7 +455,7 @@ public class As400DcgConfigTest {
 
     @ParameterizedTest
     @ValueSource(strings = { "fail", "warn", "skip", "default" })
-    void shouldAcceptOrdinaryRowErrorPoliciesWithoutToleratingDeliveryErrors(String mode) {
+    void shouldAcceptOrdinaryConversionPoliciesWithFailOnProcessingErrors(String mode) {
         var raw = onlineProperties();
         raw.put("truncate.transactional.enabled", "true");
         if (mode.equals("default")) {
@@ -461,7 +463,6 @@ public class As400DcgConfigTest {
         }
         else {
             raw.put("event.converting.failure.handling.mode", mode);
-            raw.put("event.processing.failure.handling.mode", mode);
         }
         As400DcgConfig.configuredProfile(Configuration.from(raw));
         As400BatchDispatcher.requireConfiguration(new As400ConnectorConfig(Configuration.from(raw)));
@@ -470,6 +471,21 @@ public class As400DcgConfigTest {
         raw.put("errors.tolerance", "all");
         assertThrows(IllegalArgumentException.class, () -> As400RecoveryAcknowledgements.requireConnectorProfile(raw));
         assertThrows(IllegalArgumentException.class, () -> As400RecoveryAcknowledgements.requireSourceOffsetProfile(raw));
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = { "warn", "skip" })
+    void shouldRejectLossyProcessingBeforeOpeningNativeHandlesForHandoff(String mode) {
+        var raw = onlineProperties();
+        raw.put("truncate.transactional.enabled", "true");
+        raw.put("event.processing.failure.handling.mode", mode);
+        try (var handles = org.mockito.Mockito.mockConstruction(As400DcgNativeIo.class)) {
+            org.assertj.core.api.Assertions.assertThatThrownBy(() -> As400DcgConfig.configuredProfile(Configuration.from(raw)))
+                    .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("event.processing.failure.handling.mode");
+            org.assertj.core.api.Assertions.assertThatThrownBy(() -> As400NativeHandoffSession.open(new As400ConnectorConfig(Configuration.from(raw)), null, null))
+                    .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("event.processing.failure.handling.mode");
+            assertThat(handles.constructed()).isEmpty();
+        }
     }
 
     public static class CustomTopics extends io.debezium.schema.SchemaTopicNamingStrategy {
@@ -571,6 +587,7 @@ public class As400DcgConfigTest {
     @ValueSource(strings = { "dcg.buffer.max.transactions", "dcg.buffer.max.entries", "dcg.buffer.max.savepoints", "dcg.buffer.max.bytes" })
     void bufferLimitsAreBoundedAndCanIncreaseWithoutChangingCapture(String key) {
         var p = properties();
+        p.put("truncate.buffer.storage", "memory");
         var baseline = new As400DcgConfig(Configuration.from(p));
         p.put(key, "0");
         assertThrows(IllegalArgumentException.class, () -> new As400DcgConfig(Configuration.from(p)));

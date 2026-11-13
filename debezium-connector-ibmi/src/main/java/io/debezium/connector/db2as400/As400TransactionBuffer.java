@@ -205,6 +205,13 @@ final class As400TransactionBuffer implements AutoCloseable {
         acceptInput(source);
         requireImage(record, bytes);
         Cycle cycle = forward(source.commitCycle(), record.table());
+        if (!bytes.included()) {
+            // Excluded images have already passed identity/format validation.
+            // Retain transaction and binding context, not one empty output slot
+            // per row in an unrelated bulk load.
+            persist(cycle);
+            return;
+        }
         if (cycle.before.containsKey(record)) {
             throw fail("Unpaired update precedes another operation on the same record");
         }
@@ -219,6 +226,10 @@ final class As400TransactionBuffer implements AutoCloseable {
         acceptInput(source);
         requireImage(record, bytes);
         Cycle cycle = forward(source.commitCycle(), record.table());
+        if (!bytes.included()) {
+            persist(cycle);
+            return;
+        }
         if (cycle.before.containsKey(record)) {
             throw fail("Duplicate before-image for an unresolved update");
         }
@@ -231,6 +242,12 @@ final class As400TransactionBuffer implements AutoCloseable {
         acceptInput(source);
         requireImage(record, after);
         Cycle cycle = forward(source.commitCycle(), record.table());
+        if (!after.included()) {
+            // IMAGES(*AFTER) is sufficient for a verified excluded table. No
+            // update event or key-change delete will be emitted for this row.
+            persist(cycle);
+            return;
+        }
         Image before = cycle.before.get(record);
         if (before == null) {
             throw fail("Update has no matching transaction/record before-image");

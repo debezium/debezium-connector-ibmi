@@ -34,7 +34,10 @@ import io.debezium.ibmi.db2.journal.retrieve.rjne0200.EntryHeaderDecoder;
  * The ordinary profile requires verified receiver order; ambiguous producers fail closed.
  */
 final class As400JournalLifecycle implements AutoCloseable {
-    private static final Set<String> ADMINISTRATIVE_ENTRIES = Set.of("F/OP", "F/CL", "F/MS", "D/DH", "F/SS", "D/DW", "D/GT", "D/LF", "R/IL", "F/RG", "F/RM",
+    private static final Set<String> OBJECT_METADATA = Set.of("D/GT", "D/RV", "D/AC", "D/DC", "D/TC", "D/TD");
+    private static final Set<String> ADMINISTRATIVE_ENTRIES = Set.of("F/OP", "F/CL", "F/MS", "D/DH", "F/SS", "D/DW", "D/GT", "D/RV", "D/AC", "D/DC", "D/TC", "D/TD",
+            "D/LF", "R/IL",
+            "F/RG", "F/RM",
             "F/JP", "F/EP");
 
     record Limits(int entries, long bytes, int cycles, int markers, int clears, int dependencies) {
@@ -144,6 +147,7 @@ final class As400JournalLifecycle implements AutoCloseable {
     private final TableResolver tables;
     private final As400JournalOrder order;
     private final As400Checkpoint loaded;
+    private final JournalPosition from;
     private final boolean ordinary;
     private final TransactionControlEntryDecoder controls = new TransactionControlEntryDecoder();
     private final EntryHeaderDecoder headers = new EntryHeaderDecoder(RawJournalPage.METADATA_CCSID);
@@ -176,11 +180,22 @@ final class As400JournalLifecycle implements AutoCloseable {
     }
 
     As400JournalLifecycle(Limits limits, TableResolver tables, As400JournalOrder order, As400Checkpoint loaded, boolean ordinary, As400SpillStore spill) {
+        this(limits, tables, order, loaded.replayFrom(), loaded, ordinary, spill);
+    }
+
+    /** Validate a complete original cycle without inventing a completed-output checkpoint. */
+    As400JournalLifecycle(Limits limits, TableResolver tables, As400JournalOrder order, JournalPosition from, As400SpillStore spill) {
+        this(limits, tables, order, from, null, true, spill);
+    }
+
+    private As400JournalLifecycle(Limits limits, TableResolver tables, As400JournalOrder order, JournalPosition from,
+                                  As400Checkpoint loaded, boolean ordinary, As400SpillStore spill) {
         this.ordinary = ordinary;
         this.limits = limits;
         this.tables = tables;
         this.order = order;
         this.loaded = loaded;
+        this.from = from;
         this.spill = spill;
         require(ordinary || loaded.replayFrom().receiver().equals(loaded.completedThrough().receiver()), "Lifecycle profile supports one receiver only");
         bindingCodec = As400SpillCodec.codec((out, binding) -> As400SpillCodec.table(out, binding.identity()), in -> {
@@ -234,10 +249,10 @@ final class As400JournalLifecycle implements AutoCloseable {
     }
 
     void accept(EntryHeader header, byte[] data, int offset, JournalPosition position) throws Exception {
-        require(ordinary || position.receiver().equals(loaded.replayFrom().receiver()), "Lifecycle profile supports one receiver only");
+        require(ordinary || position.receiver().equals(from.receiver()), "Lifecycle profile supports one receiver only");
         // The ordinary profile receives an explicitly validated continuous chain.
         // Never infer order from receiver names or from a sequence-number gap.
-        require(order.compare(position, loaded.replayFrom()) >= 0, "Entry precedes the verified replay window");
+        require(order.compare(position, from) >= 0, "Entry precedes the verified replay window");
         int length = header.getEndOffset();
         require(offset >= 0 && length >= 236 && (long) offset + length <= data.length, "Invalid entry bounds");
         require(length <= limits.bytes() - heldBytes && held.size() < limits.entries(), "Lifecycle staging limit exceeded");
@@ -269,7 +284,11 @@ final class As400JournalLifecycle implements AutoCloseable {
     }
 
     void verifyTail() {
-        require(windows.isEmpty() && held.isEmpty(), "Journal tail interrupts a lifecycle sequence or queued output");
+        require(drained(), "Journal tail interrupts a lifecycle sequence or queued output");
+    }
+
+    boolean drained() {
+        return windows.isEmpty() && held.isEmpty();
     }
 
     /**
@@ -400,7 +419,7 @@ final class As400JournalLifecycle implements AutoCloseable {
         Cycle cycle = cycles.get(h.getCommitCycle());
         // Ordinary completed orphan suffixes remain the coordinator's responsibility.
         // A lifecycle suffix without SC cannot borrow a producer/identity from the future.
-        boolean orphan = cycle == null && loaded.replayInclusive() && order.compare(entry.position(), loaded.completedThrough()) <= 0;
+        boolean orphan = cycle == null && loaded != null && loaded.replayInclusive() && order.compare(entry.position(), loaded.completedThrough()) <= 0;
         if (h.getJournalCode() == 'C') {
             var control = controls.decode(h, entry.bytes(), 0);
             String type = h.getEntryType();
@@ -518,7 +537,7 @@ final class As400JournalLifecycle implements AutoCloseable {
             case "F/RM" -> 109;
             case "F/OP" -> 41;
             case "F/CL" -> 30;
-            case "D/GT" -> 60;
+            case "D/GT", "D/RV", "D/AC", "D/DC", "D/TC", "D/TD" -> 60;
             case "D/LF" -> 30;
             case "F/SS", "D/DW" -> 64; // Start of save-while-active, not restore.
             case "R/IL" -> 8; // Internal record-limit data; never a row image.
@@ -551,11 +570,16 @@ final class As400JournalLifecycle implements AutoCloseable {
                         && new AS400Text(1, 37).toObject(data, 108).equals("E"), "Unqualified reorganization identity or mode");
             }
         }
-        if (entry.type().equals("D/GT")) {
+        if (OBJECT_METADATA.contains(entry.type())) {
+            // These records share the object-level name prefix. Authority and
+            // trigger changes do not replace row formats or journal bindings;
+            // triggered row changes are journaled and handled independently.
             var name = new AS400Text(10, 37);
             require(name.toObject(data, 0).toString().trim().equals(h.getFile())
                     && name.toObject(data, 10).toString().trim().equals(h.getLibrary())
                     && new AS400Text(40, 37).toObject(data, 20).toString().isBlank(), "Authority record object identity mismatch");
+            require(!List.of("D/AC", "D/DC").contains(entry.type()) || binding.excluded(),
+                    "Captured constraint changes require validation of the output key schema");
         }
         // F/OP and F/CL payload names may identify a logical file. The header's
         // physical member/JID, validated above, is the captured object identity.

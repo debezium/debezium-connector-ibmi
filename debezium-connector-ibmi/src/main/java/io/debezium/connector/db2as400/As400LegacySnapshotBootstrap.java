@@ -81,6 +81,7 @@ final class As400LegacySnapshotBootstrap {
         private final ArrayDeque<SourceRecord> beforeOffset = new ArrayDeque<>();
         private Exception failure;
         private int count;
+        private Map<String, ?> pinned;
 
         Delivery(As400TaskHandoff.Output output, Function<Map<String, ?>, SourceRecord> marker) {
             this.output = output;
@@ -126,8 +127,27 @@ final class As400LegacySnapshotBootstrap {
 
         synchronized void flush(Map<String, ?> offset) throws Exception {
             check();
-            releaseNotifications(offset);
-            boundary(offset);
+            var safe = pinned == null ? offset : pinned;
+            releaseNotifications(safe);
+            boundary(safe);
+        }
+
+        /** Hold every automatic boundary, including an enqueue's 256-record flush. */
+        synchronized void pin(Map<String, ?> offset) throws Exception {
+            check();
+            if (pinned == null) {
+                pinned = Map.copyOf(offset);
+                flush(pinned);
+            }
+        }
+
+        synchronized void releasePin() throws Exception {
+            check();
+            pinned = null;
+        }
+
+        synchronized Map<String, ?> safeOffset(Map<String, ?> offset) {
+            return pinned == null ? offset : pinned;
         }
 
         synchronized boolean pending() {
@@ -142,6 +162,10 @@ final class As400LegacySnapshotBootstrap {
         }
 
         private void emit(SourceRecord record) throws Exception {
+            if (pinned != null) {
+                record = new SourceRecord(record.sourcePartition(), pinned, record.topic(), record.kafkaPartition(), record.keySchema(), record.key(),
+                        record.valueSchema(), record.value(), record.timestamp(), record.headers());
+            }
             output.emit(record);
             if (++count == 256) {
                 boundary(record.sourceOffset());

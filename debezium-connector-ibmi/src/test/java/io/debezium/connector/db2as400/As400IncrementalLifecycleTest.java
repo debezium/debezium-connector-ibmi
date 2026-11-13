@@ -105,6 +105,80 @@ class As400IncrementalLifecycleTest {
         });
     }
 
+    static Stream<Arguments> deferredClears() {
+        return captures()
+                .filter(args -> !Set.of("interleaved", "update_commit", "savepoint_reuse", "statement_failure", "atomic_statement_failure", "multiple_clear_savepoint")
+                        .contains((String) args.get()[1]));
+    }
+
+    @ParameterizedTest
+    @MethodSource("deferredClears")
+    void shouldRecoverDeferredClearOutcomeWithoutRepeatingTheOtherTablesLegacyPrefix(String fixture, String name) throws Exception {
+        var captured = entries(fixture, name);
+        var first = captured.stream().filter(e -> e.type().equals("D/CG")).findFirst().orElseThrow();
+        var cycle = first.header().getCommitCycle();
+        var start = captured.stream().filter(e -> e.type().equals("C/SC") && e.header().getCommitCycle().equals(cycle)).findFirst().orElseThrow();
+        var clears = new HashMap<String, JournalPosition>();
+        var selected = new HashMap<String, TableBinding>();
+        var bindings = bindings(fixture);
+        for (var entry : captured) {
+            if (entry.type().equals("D/CG") && entry.header().getCommitCycle().equals(cycle)) {
+                String key = entry.header().getLibrary() + "/" + entry.header().getFile();
+                clears.putIfAbsent(key, entry.position());
+                selected.put(key, bindings.get(entry.header().getFile()));
+            }
+        }
+        var receiver = start.position().receiver();
+        var order = new As400JournalOrder(List.of(receiver), Map.of(receiver, IDENTITY),
+                Map.of(receiver, new As400JournalOrder.Range(BigInteger.ONE, BigInteger.valueOf(100000))));
+        var limits = new As400ContinuousRuntime.Limits(new As400TransactionBuffer.Limits(32, 1000, 128, 65536), LIMITS, 100);
+        List<SourceRecord> records = new ArrayList<>();
+        try (var replay = new As400LegacyClearReplay(IDENTITY, cycle, start.position(), clears, selected, order, limits, spill());
+                var output = new Output(bindings).dispatcher) {
+            for (Entry entry : captured) {
+                if (entry.position().offset().compareTo(cycle) >= 0) {
+                    replay.accept(new io.debezium.ibmi.db2.journal.retrieve.RawJournalPage.Entry(entry.position(), entry.header(), entry.bytes()));
+                }
+                if (entry.position().offset().compareTo(captured.stream().filter(e -> Set.of("C/CM", "C/RB").contains(e.type()))
+                        .findFirst().orElseThrow().position().offset()) < 0 || entry.type().equals("C/RB")) {
+                    assertThat(replay.resolution()).isEmpty();
+                }
+            }
+            var resolved = replay.resolution().orElseThrow();
+            if (resolved.committed().isPresent()) {
+                output.prepare(resolved.committed().orElseThrow(), records::add);
+            }
+            Set<String> files = selected.values().stream().map(b -> b.identity().physicalFile()).collect(java.util.stream.Collectors.toSet());
+            assertThat(data(records)).containsExactlyElementsOf(expected(name).stream().filter(event -> files.contains(event.split(":")[1])).toList());
+            assertThat(resolved.consumedThrough().offset()).isLessThanOrEqualTo(captured.get(captured.size() - 1).position().offset());
+        }
+    }
+
+    @Test
+    void shouldRejectDeferredClearWhenItsTableAlreadyHasAPublishedTransactionalPrefix() throws Exception {
+        var captured = entries("thread-enabled", "T_commit");
+        var clear = captured.get(index(captured, "D/CG"));
+        var cycle = clear.header().getCommitCycle();
+        var start = captured.stream().filter(e -> e.type().equals("C/SC") && e.header().getCommitCycle().equals(cycle)).findFirst().orElseThrow();
+        var row = captured.stream().filter(e -> e.type().equals("R/PT") && e.header().getFile().equals(clear.header().getFile())).findFirst().orElseThrow();
+        // Synthetic ordering of captured bytes: the old dispatcher has already
+        // exposed a row on this table before encountering its clear.
+        var published = renumber(row, cycle.longValueExact() + 1, cycle.longValueExact());
+        String key = clear.header().getLibrary() + "/" + clear.header().getFile();
+        var receiver = start.position().receiver();
+        var order = new As400JournalOrder(List.of(receiver), Map.of(receiver, IDENTITY),
+                Map.of(receiver, new As400JournalOrder.Range(BigInteger.ONE, BigInteger.valueOf(100000))));
+        var limits = new As400ContinuousRuntime.Limits(new As400TransactionBuffer.Limits(32, 1000, 128, 65536), LIMITS, 100);
+        try (var replay = new As400LegacyClearReplay(IDENTITY, cycle, start.position(), Map.of(key, clear.position()),
+                Map.of(key, bindings("thread-enabled").get(clear.header().getFile())), order, limits, spill())) {
+            replay.accept(new io.debezium.ibmi.db2.journal.retrieve.RawJournalPage.Entry(start.position(), start.header(), start.bytes()));
+            var failure = assertThrows(IllegalArgumentException.class, () -> replay.accept(
+                    new io.debezium.ibmi.db2.journal.retrieve.RawJournalPage.Entry(published.position(), published.header(), published.bytes())));
+            assertThat(failure).hasMessageContaining("already-published row prefix");
+            assertThat(replay.resolution()).isEmpty();
+        }
+    }
+
     @ParameterizedTest
     @ValueSource(strings = { "two_table_clear_rollback", "two_table_clear_savepoint" })
     void ordinaryTableFilterPreservesNativeCrossTableRollbackAndSavepointContext(String name) throws Exception {
@@ -919,7 +993,7 @@ class As400IncrementalLifecycleTest {
         return record.value() instanceof Struct value && value.schema().field("status") != null ? value.getString("status") : "heartbeat";
     }
 
-    private static List<String> data(List<SourceRecord> records) {
+    static List<String> data(List<SourceRecord> records) {
         return records.stream().filter(As400IncrementalLifecycleTest::isData).map(r -> {
             var value = (Struct) r.value();
             String op = value.getString("op");
@@ -928,7 +1002,7 @@ class As400IncrementalLifecycleTest {
         }).toList();
     }
 
-    private static List<String> expected(String name) {
+    static List<String> expected(String name) {
         return switch (name) {
             case "T_commit" -> List.of("c:MARK:1000", "t:TC2", "c:TC2:101");
             case "D_commit" -> List.of("c:MARK:2000", "t:DC2", "c:DC2:101");
@@ -959,7 +1033,7 @@ class As400IncrementalLifecycleTest {
         }
     }
 
-    private static List<Entry> entries(String fixture, String name) throws IOException {
+    static List<Entry> entries(String fixture, String name) throws IOException {
         for (JsonNode scenario : fixture(fixture).get("cases")) {
             if (!scenario.get("name").asText().equals(name)) {
                 continue;
@@ -976,7 +1050,7 @@ class As400IncrementalLifecycleTest {
         throw new IllegalArgumentException("Missing scenario " + name);
     }
 
-    private static Map<String, TableBinding> bindings(String fixture) throws IOException {
+    static Map<String, TableBinding> bindings(String fixture) throws IOException {
         Map<String, TableBinding> result = new HashMap<>();
         var decoder = new CompleteRowEntryDecoder(new AS400DataType[]{ new AS400Bin4() }, new boolean[]{ false }, 64);
         for (JsonNode table : fixture(fixture + "-bindings").get("tables")) {

@@ -7,7 +7,6 @@ package io.debezium.connector.db2as400;
 
 import io.debezium.pipeline.EventDispatcher;
 import io.debezium.pipeline.notification.NotificationService;
-import io.debezium.pipeline.source.snapshot.incremental.SignalBasedIncrementalSnapshotChangeEventSource;
 import io.debezium.pipeline.source.spi.DataChangeEventListener;
 import io.debezium.pipeline.source.spi.SnapshotProgressListener;
 import io.debezium.pipeline.spi.ChangeRecordEmitter;
@@ -17,7 +16,7 @@ import io.debezium.schema.DataCollectionSchema;
 import io.debezium.util.Clock;
 
 /** Standard chunk algorithm with ordered startup and whole-table clear deduplication. */
-final class As400BufferedIncrementalSnapshot extends SignalBasedIncrementalSnapshotChangeEventSource<As400Partition, TableId> {
+final class As400BufferedIncrementalSnapshot extends As400TruncateAwareIncrementalSnapshot {
     private final As400DatabaseSchema snapshotSchemas;
     private final As400ConnectorConfig config;
     private final Clock clock;
@@ -59,15 +58,6 @@ final class As400BufferedIncrementalSnapshot extends SignalBasedIncrementalSnaps
             }
         }
         super.readChunk(partition, offset);
-    }
-
-    void truncate(TableId table) {
-        if (context != null && context.deduplicationNeeded() && context.currentDataCollectionId() != null
-                && context.currentDataCollectionId().getId().equals(table)) {
-            // Core removes one key for a row change. A committed clear removes
-            // every pre-clear row from the active snapshot window.
-            window.clear();
-        }
     }
 
     void schemaChanged(As400BindingDefinition definition) {

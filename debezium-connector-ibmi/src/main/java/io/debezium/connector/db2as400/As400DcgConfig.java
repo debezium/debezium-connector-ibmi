@@ -120,7 +120,7 @@ final class As400DcgConfig {
         if (online && rrnKeys) {
             throw new IllegalArgumentException("Online key migration requires separate legacy RRN compatibility validation");
         }
-        String storage = config.getString("truncate.buffer.storage", "memory");
+        String storage = config.getString("truncate.buffer.storage", "disk");
         if (!Set.of("memory", "disk").contains(storage)) {
             throw new IllegalArgumentException("truncate.buffer.storage must be memory or disk");
         }
@@ -214,6 +214,7 @@ final class As400DcgConfig {
             require(config, "errors.tolerance", "none");
         }
         if (online) {
+            choice(config, "event.processing.failure.handling.mode", "fail", Set.of("fail"));
             choice(config, "event.converting.failure.handling.mode", "warn", Set.of("fail", "warn", "skip"));
         }
         else {

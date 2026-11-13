@@ -29,6 +29,7 @@ final class As400LegacyNativePrefix {
     private final As400OffsetContext scan;
     private final Runnable checkRunning;
     private final As400OperatorCutReader.Limits limits;
+    private final As400LegacyClearBuffer deferred;
     private As400NativeJournalWindow.Window previous;
     private boolean initialized;
     private Map<String, ?> completePosition;
@@ -36,6 +37,13 @@ final class As400LegacyNativePrefix {
     As400LegacyNativePrefix(As400OperatorJournalEvidence journals, As400JdbcNativeIdentityEvidence identities, RetrieveJournal reader,
                             As400StreamingChangeEventSource source, As400Partition partition, As400OffsetContext scan,
                             Runnable checkRunning, As400OperatorCutReader.Limits limits) {
+        this(journals, identities, reader, source, partition, scan, checkRunning, limits, null);
+    }
+
+    As400LegacyNativePrefix(As400OperatorJournalEvidence journals, As400JdbcNativeIdentityEvidence identities, RetrieveJournal reader,
+                            As400StreamingChangeEventSource source, As400Partition partition, As400OffsetContext scan,
+                            Runnable checkRunning, As400OperatorCutReader.Limits limits, As400LegacyClearBuffer deferred) {
+        this.deferred = deferred;
         As400LegacyHandoff.startingPosition(As400LegacyHandoff.strings(scan.getOffset()));
         this.journals = journals;
         this.identities = identities;
@@ -79,12 +87,15 @@ final class As400LegacyNativePrefix {
             var end = new JournalPosition(receiver.last(), receiver.name());
             while (true) {
                 checkRunning.run();
-                require(++pages <= limits.pages(), "Legacy prefix exceeds page bound");
+                ++pages;
                 var page = reader.readRawPage(next, end, limits.entries() - entries.size() + 1);
                 require(page.entries().size() <= limits.entries() - entries.size() + 1, "Oversized native prefix response");
                 for (var entry : page.entries()) {
                     byte[] raw = entry.data();
-                    require((bytes += raw.length) <= limits.bytes(), "Legacy prefix exceeds byte bound");
+                    if (bytes + raw.length > limits.bytes() && !entries.isEmpty()) {
+                        break outer; // Return the observed prefix; re-read this unprocessed entry on the next poll.
+                    }
+                    require((bytes += raw.length) <= limits.bytes(), "A legacy entry and its anchor exceed the byte bound");
                     require(entry.position().receiver().equals(receiver.name()) && entry.position().offset().compareTo(next.offset()) >= 0
                             && entry.position().offset().compareTo(end.offset()) <= 0, "Legacy prefix contains a foreign coordinate");
                     As400JournalRecordContent.digest(raw, entry.position());
@@ -107,9 +118,12 @@ final class As400LegacyNativePrefix {
                             && continuation.offset().compareTo(end.offset()) <= 0, "Invalid legacy native continuation");
                     next = continuation;
                 }
-                if (entries.size() == limits.entries()) {
+                if (entries.size() == limits.entries() || pages >= limits.pages() && !entries.isEmpty()) {
                     break outer;
                 }
+                // Empty receivers consume no retained row budget and cannot
+                // supply a synthetic progress offset. Continue their finite,
+                // verified chain with stop checks until actual work is observed.
                 if (page.continuation().isEmpty()) {
                     break;
                 }
@@ -125,22 +139,27 @@ final class As400LegacyNativePrefix {
         if (!initialized && (replayAnchor
                 || anchor.entries().get(0).header().getJournalEntryType() == io.debezium.ibmi.db2.journal.retrieve.JournalEntryType.BEFORE_IMAGE)) {
             checkRunning.run();
-            source.processOwnedEntry(partition, scan, anchor.entries().get(0));
+            process(anchor.entries().get(0));
             checkRunning.run();
             scan.setPosition(new JournalProcessedPosition(from, anchor.entries().get(0).header().getTime(), true));
         }
         initialized = true;
         for (var entry : entries) {
             checkRunning.run();
-            source.processOwnedEntry(partition, scan, entry);
+            process(entry);
             checkRunning.run();
             scan.setPosition(new JournalProcessedPosition(entry.position(), entry.header().getTime(), true));
         }
         checkRunning.run();
-        if (!source.hasPendingBeforeImage()) {
-            completePosition = Map.copyOf(scan.getOffset());
+        boolean resolving = hasDeferredWork();
+        if (deferred != null) {
+            deferred.resolve(scan(), previous.journalToken());
         }
-        return entries.isEmpty() && !replayAnchor ? Optional.empty() : Optional.ofNullable(completePosition);
+        if (hasDeferredWork() || !source.hasPendingBeforeImage()) {
+            completePosition = Map.copyOf(deferred == null ? scan.getOffset() : deferred.safeOffset(scan.getOffset()));
+        }
+        boolean resolved = resolving && !hasDeferredWork();
+        return entries.isEmpty() && !replayAnchor && !resolved ? Optional.empty() : Optional.ofNullable(completePosition);
     }
 
     /**
@@ -154,7 +173,7 @@ final class As400LegacyNativePrefix {
         boolean complete = completePosition != null;
         completePosition = null;
         var from = scan();
-        if (!complete || source.hasPendingBeforeImage() || marker.offset().compareTo(from.offset()) <= 0) {
+        if (!complete || hasDeferredWork() || source.hasPendingBeforeImage() || marker.offset().compareTo(from.offset()) <= 0) {
             return Optional.empty();
         }
         var before = As400NativeJournalWindow.collect(journals, identities, from);
@@ -169,10 +188,8 @@ final class As400LegacyNativePrefix {
         byte[] raw = entry.data();
         long bytes = raw.length;
         var header = As400JournalRecordContent.userMarker(entry);
-        int pages = 1;
         for (var receiver : As400OperatorCutReader.chain(before.directory(), from.receiver())) {
             receiver.requireReadableProfile();
-            require(++pages <= limits.pages(), "Marker proof exceeds page bound");
             var start = receiver.name().equals(from.receiver()) ? from : new JournalPosition(receiver.first(), receiver.name());
             var end = receiver.name().equals(marker.receiver()) ? marker : new JournalPosition(receiver.last(), receiver.name());
             checkRunning.run();
@@ -212,6 +229,19 @@ final class As400LegacyNativePrefix {
     Optional<Map<String, ?>> completePosition() {
         checkRunning.run();
         return Optional.ofNullable(completePosition);
+    }
+
+    private void process(RawJournalPage.Entry entry) throws Exception {
+        if (deferred == null) {
+            source.processOwnedEntry(partition, scan, entry);
+        }
+        else {
+            deferred.process(entry);
+        }
+    }
+
+    boolean hasDeferredWork() {
+        return deferred != null && deferred.pending();
     }
 
     JournalPosition scan() {
