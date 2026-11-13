@@ -90,15 +90,14 @@ class As400SourceNormalizerTest {
         accept(clear('8'));
         accept(row("PX", 10, 9));
         var batch = accept(entry('C', "CM", 10, new byte[0])).orElseThrow();
-        assertThat(batch.changes()).extracting(Change::operation).containsExactly(Operation.CREATE, Operation.UPDATE, Operation.TRUNCATE, Operation.CREATE);
+        assertThat(batch.changes()).extracting(Change::operation).containsExactly(Operation.TRUNCATE);
         assertThat(batch.changes()).allSatisfy(change -> assertThat(change.table()).isEqualTo(identity));
-        assertThrows(IllegalStateException.class, () -> batch.changes().get(0).after().values());
         buffer.completeBatch(batch);
         assertThat(buffer.oldestTransactionPosition()).isEmpty();
     }
 
     @ParameterizedTest
-    @ValueSource(strings = { "unpaired-update", "missing-start", "short-image", "wrong-member", "minimized", "rollback-forward" })
+    @ValueSource(strings = { "missing-start", "short-image", "wrong-member", "minimized", "rollback-forward" })
     void shouldPreserveRecoveryGuardsForExcludedRows(String fault) throws Exception {
         var identity = new TableIdentity(table.tableId(), table.physicalFile(), table.member(), table.fileJournalId(), table.memberJournalId(),
                 "TEST:123456789ABCD:6:2:false");
@@ -109,13 +108,46 @@ class As400SourceNormalizerTest {
         if (fault.equals("rollback-forward")) {
             accept(entry('C', "R1", 10, new byte[0]));
         }
-        var row = row(fault.equals("unpaired-update") ? "UP" : "PT", 10, 7);
+        var row = row("PT", 10, 7);
         switch (fault) {
             case "short-image" -> text(row.bytes(), 240, 5, "00005");
             case "wrong-member" -> text(row.bytes(), 177, 10, "OTHER");
             case "minimized" -> row.bytes()[OFFSET + 218] = 8;
         }
         fails(row);
+    }
+
+    @ParameterizedTest
+    @ValueSource(longs = { 0, 10 })
+    void shouldAcceptExcludedAfterOnlyUpdatesWithoutRetainingBulkRows(long cycle) throws Exception {
+        var identity = new TableIdentity(table.tableId(), table.physicalFile(), table.member(), table.fileJournalId(), table.memberJournalId(),
+                "TEST:123456789ABCD:6:2:false");
+        try (var autocommit = new As400AutocommitBuffer("LIB/JRN/incarnation", new Limits(10, 100, 20, 4096), buffer::usage)) {
+            normalizer = new As400SourceNormalizer(buffer, (file, library) -> As400BindingDefinition.excluded(identity).binding(1024), 1024,
+                    (source, control) -> SavepointRollback.UNRESOLVED, autocommit);
+            if (cycle != 0) {
+                accept(entry('C', "SC", cycle, new byte[0]));
+            }
+            // More than the production memory profile's old 10,000-row ceiling,
+            // under a deliberately small 100-entry buffer. No synthetic UB.
+            for (int i = 0; i < 10_001; i++) {
+                var batch = accept(row("UP", cycle, i));
+                if (cycle == 0) {
+                    assertThat(batch.orElseThrow().changes()).isEmpty();
+                    autocommit.complete(batch.orElseThrow());
+                }
+                else {
+                    assertThat(batch).isEmpty();
+                }
+            }
+            if (cycle != 0) {
+                var batch = accept(entry('C', "CM", cycle, new byte[0])).orElseThrow();
+                assertThat(batch.changes()).isEmpty();
+                buffer.completeBatch(batch);
+            }
+            assertThat(buffer.oldestTransactionPosition()).isEmpty();
+            assertThat(autocommit.retainedStarts()).isEmpty();
+        }
     }
 
     @ParameterizedTest

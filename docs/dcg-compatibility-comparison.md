@@ -19,18 +19,18 @@ Current-upstream CI remains a separate merge gate.
 | Ordinary insert/update/delete | Supported | Preserved; native comparisons check keys, values and update before-images |
 | Committed SQL truncate / optimized bulk delete | Clear can be missed when IBM i omits individual row deletes | Emits keyless `op=t` before committed reload rows; discards rolled-back work |
 | Other tables while a clear is open | Ordinary journal streaming | Unrelated committed table changes continue; no journal-wide transaction pause |
-| Existing-stream activation | No transactional-truncate handoff | Uses existing offsets without a resnapshot; brief automatic lock boundary, with busy attempts deferred |
+| Existing-stream activation | No transactional-truncate handoff | Uses existing offsets without a resnapshot; brief automatic lock boundary, with busy attempts deferred. A clear encountered while waiting holds its table until retained history proves its outcome; other tables continue |
 | Distributed Kafka Connect | Supported | Ordinary offsets or the stricter source-transaction contract; Kafka 4.2/4.3 qualification retained |
 | Standalone / Embedded Engine | Existing deployment paths | Actual standalone and Engine restart/offset tests; native Engine validation without Kafka |
 | Debezium Server | Included in upstream Server since DBZ-9015 | Native validation of the Server JVM/HTTP profile with file history and offsets; other sink combinations are not universally qualified |
 | Initial, `no_data`, requested full and incremental snapshots | Ordinary snapshotter and core incremental algorithm | Integrated with durable acknowledgement, interrupted snapshot recovery and F/W replay |
 | SQL/DDS keys, keyless tables and ordinary output settings | Supported according to existing schema/type handling | Preserved; SQL/system names, supported text/binary/temporal types, CCSID overrides, column/key settings and custom converters covered |
 | Transforms, predicates and operation filters | Applied by the runtime | Uses the same runtime mechanisms; recovery progress must survive filtering and consumers must retain truncate events when required |
-| WARN/SKIP row conversion | Supported | Preserved for ordinary rows; failed clear delivery, invalid decoding and missing recovery evidence remain fatal |
+| WARN/SKIP row conversion | Supported | Preserved through `event.converting.failure.handling.mode`; transactional enablement requires processing mode `fail` before handoff. Failed clear delivery, invalid decoding and missing recovery evidence remain fatal |
 | Current-definition refresh and new-table discovery | Refreshes current JDBC metadata | Qualified observed ALTER/creation boundaries are persisted before output and replayed on restart |
 | Arbitrary historical DDL reconstruction | Not provided | Not added to the compatibility requirements; ambiguous historical layouts reject |
 | File/receiver count | No fixed connector file-count limit | No arbitrary connector count ceiling; bounded acquisition/history processing. Largest live scope tested: 56 files on a preceding build; the current dedicated runs use smaller scopes. Larger local fixtures are not native capacity evidence |
-| Large transaction payloads | No equivalent transaction buffer | Optional H2 MVStore working storage; memory/disk recovery and constrained-heap/failure tests. Metadata still scales with catalog size |
+| Large transaction payloads | No equivalent transaction buffer | H2 MVStore working storage by default; explicit memory profile available. Excluded rows do not retain individual output entries; transaction context is still journal-wide. Metadata scales with catalog size |
 | Multiple Kafka data partitions | Supported | Accepted; whole-table ordering of keyless truncates and keyed rows requires one partition or equivalent downstream ordering |
 | Native storage pools | No explicit ASP-1-only admission | System/basic pools 1–32 accepted by evidence validation; live qualification used pool 1. Independent ASPs remain unqualified |
 | Multiple file members | Row capture shares keys/topic; snapshot reads the first member | Preserves that row/snapshot contract, validates every member identity, discovers newly added members and recovers their history after restart |
@@ -61,8 +61,8 @@ complete association for replay.
 The excluded-LOB control uses the original packaged connector as well as the
 candidate, with a separately owned fixture. Candidate tests preserve selected
 output through 60 KB, NULL and empty CLOB values, mixed commit/rollback and a
-replacement during an open transaction. Native pointer descriptors establish
-operation/source/length/null metadata only; they are not checksums of external
+replacement during an open transaction. Native pointer-row checks establish
+operation/source/length/flags/null metadata only; they do not validate individual LOB descriptors or checksum external
 LOB values. Capturing those values is not added here: the original CLOB decoder
 was absent, and its XML row decoder returned an empty string rather than the
 actual document. Unknown or incomplete row layouts still reject.

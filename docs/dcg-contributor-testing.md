@@ -72,7 +72,7 @@ absence, creates only its fixture, retains the exact owned object inventory,
 preserves receiver recording options and tests the packaged connector. Credentials
 enter worker tmpfs over stdin, never connector config topics or command arguments.
 Reports redact host, user and password. External credential resolution belongs
-outside this repository; the runner imports neither aesql nor an AWS SDK.
+outside this repository; the runner requires no private credential tool or cloud SDK.
 
 Cleanup refuses unexpected objects, pending transactions, active locks or
 unattributed inquiries. Only the exact owned library and receivers are removed.
@@ -116,3 +116,14 @@ capture. Local `As400ExcludedLobTest` replays sanitized native pointer descripto
 and controls, including interrupted delivery and invalid binding/row metadata;
 `RawJournalPageTest` checks handle release on the retrieving job and cancellation
 before progress when release fails.
+
+For transactional clears encountered before online activation, use
+`python tools/dcg-deferred-clear-probe.py NEW_DIRECTORY DCNCdddd source-offsets metadata`
+(or replace `source-offsets` with `eos`). An open excluded-table transaction keeps
+admission pending while captured tables commit, roll back and use savepoints.
+The runner checks unrelated-table progress, pinned durable legacy offsets across
+600 rows, both D/CG subtypes, receiver rotation, worker replacement, consecutive
+clears, a following F/CR across restart and eventual handoff without another snapshot. It uses the same explicit
+fixture authorization and cleanup as the public probe. Raw native evidence is
+private until inspected and sanitized; missing-history and already-published
+same-table prefix rejection are also covered by local Java tests.

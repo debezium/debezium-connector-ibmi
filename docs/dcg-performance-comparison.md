@@ -86,7 +86,7 @@ described in [the contributor testing instructions](dcg-contributor-testing.md).
 requires an unused `DCNCdddd` library and explicit fixture-write authorization.
 The runner refuses an existing fixture, retains failure evidence, stops owned
 workers before native deletion, and verifies schema/library/inquiry absence.
-It does not require the author's AWS, aesql or production infrastructure.
+It does not require the author's cloud account, credential tooling or production infrastructure.
 
 Build both distributions with the same JDK/dependency repository. Compile the
 current test helpers; they are used only by the independent observer. For each

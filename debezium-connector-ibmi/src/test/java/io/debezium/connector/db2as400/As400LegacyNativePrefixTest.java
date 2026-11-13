@@ -65,11 +65,103 @@ class As400LegacyNativePrefixTest {
     }
 
     private As400LegacyNativePrefix prefix(int entryLimit) {
+        return prefix(entryLimit, null);
+    }
+
+    private As400LegacyNativePrefix prefix(int entryLimit, As400LegacyClearBuffer clears) {
         return new As400LegacyNativePrefix(journals, identities, transport, handler, new As400Partition("test"), scan, () -> {
             if (stopped.get()) {
                 throw new IllegalStateException("Terminal stop");
             }
-        }, new As400OperatorCutReader.Limits(16, entryLimit, 1_000_000));
+        }, new As400OperatorCutReader.Limits(16, entryLimit, 1_000_000), clears);
+    }
+
+    @org.junit.jupiter.api.Test
+    void shouldReturnAValidatedPartialPrefixWhenTheNextEntryWouldExceedItsByteBudget() throws Exception {
+        fixture.entries.subList(4, fixture.entries.size()).clear();
+        when(transport.readAuditHistoryPage(any(), any(), anyInt())).thenAnswer(i -> new RetrieveJournal.AuditPage(
+                fixture.entries.stream().filter(e -> e.position().equals(i.getArgument(0))).toList(), Optional.empty(), 1024));
+        when(transport.readRawPage(any(), any(), anyInt())).thenAnswer(i -> {
+            JournalPosition from = i.getArgument(0);
+            return new RawJournalPage(fixture.entries.stream().filter(e -> e.position().offset().compareTo(from.offset()) >= 0).toList(),
+                    Optional.empty(), 1024);
+        });
+        var prefix = new As400LegacyNativePrefix(journals, identities, transport, handler, new As400Partition("test"), scan,
+                () -> {
+                }, new As400OperatorCutReader.Limits(16, 100, 1120));
+        assertThat(prefix.publishNext().orElseThrow().get(As400OffsetContext.EVENT_SEQUENCE)).isEqualTo("31");
+        assertThat(prefix.publishNext().orElseThrow().get(As400OffsetContext.EVENT_SEQUENCE)).isEqualTo("32");
+        for (int sequence = 30; sequence <= 32; sequence++) {
+            verify(handler).processOwnedEntry(any(), any(), org.mockito.ArgumentMatchers.eq(fixture.entry(sequence)));
+        }
+    }
+
+    @org.junit.jupiter.api.Test
+    void shouldCrossMoreEmptyReceiversThanThePageBudgetWithoutInventingProgress() throws Exception {
+        var names = new ArrayList<io.debezium.ibmi.db2.journal.retrieve.JournalReceiver>();
+        names.add(Fixture.RECEIVER);
+        for (int i = 1; i < 40; i++) {
+            names.add(new io.debezium.ibmi.db2.journal.retrieve.JournalReceiver("RCV" + i, Fixture.RECEIVER.library()));
+        }
+        var receivers = new ArrayList<As400OperatorJournalEvidence.Receiver>();
+        for (int i = 0; i < names.size(); i++) {
+            receivers.add(new As400OperatorJournalEvidence.Receiver(names.get(i), i == names.size() - 1 ? "ATTACHED" : "SAVED",
+                    java.math.BigInteger.valueOf(29 + i * 10), java.math.BigInteger.valueOf(38 + i * 10),
+                    i == 0 ? Optional.empty() : Optional.of(names.get(i - 1)),
+                    i == names.size() - 1 ? Optional.empty() : Optional.of(names.get(i + 1)), "NO", "YES", "YES", "NO", "NO"));
+        }
+        var directory = new As400OperatorJournalEvidence.Observation(Fixture.JOURNAL, names.get(names.size() - 1), receivers);
+        when(journals.collectFrom(any())).thenReturn(directory);
+        doAnswer(i -> {
+            List<As400JdbcNativeIdentityEvidence.Target> targets = i.getArgument(0);
+            var objects = new java.util.HashMap<As400JdbcNativeIdentityEvidence.Target, As400JdbcNativeIdentityEvidence.Identity>();
+            for (int n = 0; n < targets.size(); n++) {
+                objects.put(targets.get(n), new As400JdbcNativeIdentityEvidence.Identity(java.math.BigInteger.ONE,
+                        java.math.BigInteger.valueOf(n + 1), java.math.BigInteger.ONE));
+            }
+            return new As400JdbcNativeIdentityEvidence.Candidates(objects);
+        }).when(identities).collect(any());
+        var anchor = fixture.entries.get(0);
+        var position = new JournalPosition(java.math.BigInteger.valueOf(424), names.get(names.size() - 1));
+        byte[] bytes = fixture.userMarker(424).data();
+        int receiver = java.nio.ByteBuffer.wrap(bytes).getInt(20);
+        assertThat(receiver).isPositive();
+        new com.ibm.as400.access.AS400Text(10, 37).toBytes(position.receiver().name(), bytes, receiver);
+        var marker = new RawJournalPage.Entry(position,
+                new io.debezium.ibmi.db2.journal.retrieve.rjne0200.EntryHeaderDecoder().decode(bytes, 0), bytes);
+        when(transport.readAuditHistoryPage(any(), any(), anyInt()))
+                .thenAnswer(i -> new RetrieveJournal.AuditPage(List.of(i.getArgument(0).equals(position) ? marker : anchor), Optional.empty(), 1024));
+        when(transport.readRawPage(any(), any(), anyInt())).thenAnswer(i -> {
+            JournalPosition from = i.getArgument(0);
+            return new RawJournalPage(from.receiver().equals(Fixture.RECEIVER) ? List.of(anchor) : List.of(), Optional.empty(), 1024);
+        });
+        var prefix = prefix(100);
+        assertThat(prefix.publishNext()).isEmpty();
+        assertThat(prefix.scan()).isEqualTo(anchor.position());
+        assertThat(prefix.advanceThroughMarker(position)).isPresent();
+        assertThat(prefix.scan()).isEqualTo(position);
+        verify(handler, never()).processOwnedEntry(any(), any(), any()); // No CDC record or synthetic row was dispatched.
+    }
+
+    @org.junit.jupiter.api.Test
+    void shouldOfferACompletedRollbackBoundaryWhenItsMetadataBecomesAvailableOnAnIdlePoll() throws Exception {
+        var anchor = fixture.entries.get(0);
+        when(transport.readAuditHistoryPage(any(), any(), anyInt()))
+                .thenReturn(new RetrieveJournal.AuditPage(List.of(anchor), Optional.empty(), 1024));
+        when(transport.readRawPage(any(), any(), anyInt())).thenReturn(new RawJournalPage(List.of(anchor), Optional.empty(), 1024));
+        var clears = mock(As400LegacyClearBuffer.class);
+        var pending = new AtomicBoolean(true);
+        when(clears.pending()).thenAnswer(i -> pending.get());
+        when(clears.safeOffset(any())).thenAnswer(i -> i.getArgument(0));
+        doAnswer(i -> {
+            assertThat(i.getArgument(0, JournalPosition.class)).isEqualTo(anchor.position());
+            pending.set(false);
+            return null;
+        }).when(clears).resolve(any(), any());
+        var prefix = prefix(100, clears);
+        assertThat(prefix.publishNext()).contains(scan.getOffset());
+        assertThat(prefix.hasDeferredWork()).isFalse();
+        assertThat(prefix.publishNext()).isEmpty(); // Completion is offered only once, without inventing source progress.
     }
 
     @org.junit.jupiter.api.Test

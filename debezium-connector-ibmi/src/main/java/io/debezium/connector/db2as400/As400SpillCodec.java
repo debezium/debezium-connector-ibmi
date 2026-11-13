@@ -39,6 +39,25 @@ final class As400SpillCodec {
     static final Codec<Integer> INT = codec(DataOutputStream::writeInt, DataInputStream::readInt);
     static final Codec<byte[]> BYTES = codec(As400SpillCodec::bytes, As400SpillCodec::bytes);
     static final Codec<JournalPosition> POSITION = codec(As400SpillCodec::position, As400SpillCodec::position);
+    static final Codec<java.util.Map<String, JournalPosition>> POSITIONS = codec((out, values) -> {
+        out.writeInt(values.size());
+        for (var value : values.entrySet()) {
+            string(out, value.getKey());
+            position(out, value.getValue());
+        }
+    }, in -> {
+        int count = in.readInt();
+        if (count < 0 || count > MAX_VALUE_BYTES / 20) {
+            throw new IOException("Invalid position-map size");
+        }
+        var values = new java.util.LinkedHashMap<String, JournalPosition>();
+        for (int i = 0; i < count; i++) {
+            if (values.put(string(in), position(in)) != null) {
+                throw new IOException("Repeated position-map key");
+            }
+        }
+        return values;
+    });
     static final Codec<TableId> TABLE_ID = codec(As400SpillCodec::tableId, As400SpillCodec::tableId);
     static final Codec<TableIdentity> TABLE = codec(As400SpillCodec::table, As400SpillCodec::table);
     static final Codec<RecordIdentity> RECORD = codec(As400SpillCodec::record, As400SpillCodec::record);

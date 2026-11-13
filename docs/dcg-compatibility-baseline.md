@@ -326,10 +326,11 @@ excluded:
 Disk runs used a 2 MiB page cache and 256 KiB dirty-page threshold. Disk storage
 costs CPU and I/O; it is not a throughput optimization for small transactions.
 The benefit is retaining work larger than the heap without evicting uncommitted
-changes. Keep the existing memory default until representative workload
-qualification justifies changing it. No new live IBM i or Server validation was
-performed for this storage change. The deployment and native metadata/history
-compatibility work above remains open.
+changes. At that stage memory remained the default. Subsequent adversarial
+validation found that journal-wide activity on excluded tables exhausted its
+small defaults. The default is now disk storage, and excluded rows no longer
+retain individual output entries. The timings above describe the earlier
+storage experiment, not a new performance measurement of that correction.
 
 ## Subsequent scaling and performance evidence
 

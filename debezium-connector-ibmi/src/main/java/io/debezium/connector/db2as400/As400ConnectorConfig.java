@@ -240,16 +240,16 @@ public class As400ConnectorConfig extends RelationalDatabaseConnectorConfig {
         return new As400SourceInfoStructMaker(Module.name(), Module.version(), this);
     }
 
-    public static final Field DCG_BUFFER_TRANSACTIONS = Field.create("dcg.buffer.max.transactions").withType(Type.INT).withDefault(64)
-            .withDescription("Maximum simultaneously buffered D/CG transactions; failure preserves durable recovery positions.");
-    public static final Field DCG_BUFFER_ENTRIES = Field.create("dcg.buffer.max.entries").withType(Type.INT).withDefault(10000)
-            .withDescription("Maximum retained changes, before-images and table identities across open D/CG transactions.");
-    public static final Field DCG_BUFFER_SAVEPOINTS = Field.create("dcg.buffer.max.savepoints").withType(Type.INT).withDefault(1024)
-            .withDescription("Maximum retained native savepoint scopes.");
-    public static final Field DCG_BUFFER_BYTES = Field.create("dcg.buffer.max.bytes").withType(Type.LONG).withDefault(16777216L)
-            .withDescription("Maximum retained source payload bytes; excludes JVM object and output serialization overhead.");
+    public static final Field DCG_BUFFER_TRANSACTIONS = Field.create("dcg.buffer.max.transactions").withType(Type.INT)
+            .withDescription("Maximum retained journal-wide transactions, including excluded tables. Defaults to 2147483645 for disk or 64 for memory.");
+    public static final Field DCG_BUFFER_ENTRIES = Field.create("dcg.buffer.max.entries").withType(Type.INT)
+            .withDescription("Maximum retained output changes, before-images and table identities. Defaults to 536870911 for disk or 10000 for memory.");
+    public static final Field DCG_BUFFER_SAVEPOINTS = Field.create("dcg.buffer.max.savepoints").withType(Type.INT)
+            .withDescription("Maximum retained journal-wide savepoint scopes. Defaults to 2147483645 for disk or 1024 for memory.");
+    public static final Field DCG_BUFFER_BYTES = Field.create("dcg.buffer.max.bytes").withType(Type.LONG)
+            .withDescription("Maximum retained source payload bytes. Defaults to the disk byte budget for disk or 16777216 for memory; excludes JVM overhead.");
 
-    public static final Field TRUNCATE_BUFFER_STORAGE = Field.create("truncate.buffer.storage").withType(Type.STRING).withDefault("memory")
+    public static final Field TRUNCATE_BUFFER_STORAGE = Field.create("truncate.buffer.storage").withType(Type.STRING).withDefault("disk")
             .withDescription(
                     "Working storage for transactional capture: memory or task-local disk. Disk is disposable; recovery uses journal history and durable offsets.");
     public static final Field TRUNCATE_BUFFER_DIRECTORY = Field.create("truncate.buffer.directory").withType(Type.STRING)

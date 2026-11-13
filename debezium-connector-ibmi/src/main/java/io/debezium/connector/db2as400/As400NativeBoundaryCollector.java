@@ -27,6 +27,38 @@ import io.debezium.relational.history.TableChanges;
  * The caller owns native I/O and terminal admission for the whole attempt.
  */
 final class As400NativeBoundaryCollector {
+    /** Read-only catalog work failed outside the file allocation interval. */
+    static final class MetadataUnavailable extends java.sql.SQLException {
+        MetadataUnavailable(java.sql.SQLException cause) {
+            super("Native metadata is temporarily unavailable outside allocation", cause);
+        }
+    }
+
+    static As400NativeBindingAcquisition.Acquired metadata(java.util.concurrent.Callable<As400NativeBindingAcquisition.Acquired> read) throws Exception {
+        try {
+            return read.call();
+        }
+        catch (java.sql.SQLException failure) {
+            boolean timeout = false;
+            for (Throwable current = failure; current != null; current = current.getCause()) {
+                timeout |= current instanceof java.sql.SQLTimeoutException || current instanceof java.net.SocketTimeoutException;
+                // A timed-out JT400 statement can report its already-closed
+                // connection during statement cleanup. No allocation occurred.
+                // Preserve every other cleanup failure, including holder close.
+                for (Throwable suppressed : current.getSuppressed()) {
+                    if (!(suppressed instanceof java.sql.SQLNonTransientConnectionException sql && "08003".equals(sql.getSQLState())
+                            && sql.getSuppressed().length == 0)) {
+                        throw failure;
+                    }
+                }
+            }
+            if (timeout) {
+                throw new MetadataUnavailable(failure);
+            }
+            throw failure;
+        }
+    }
+
     private static final org.slf4j.Logger LOGGER = org.slf4j.LoggerFactory.getLogger(As400NativeBoundaryCollector.class);
 
     /** Bounded diagnostic bytes survive rejection; this exception grants no admission. */
@@ -120,7 +152,7 @@ final class As400NativeBoundaryCollector {
             As400NativeJournalWindow.requireStableDirectory(pendingBefore, pendingAfter);
             sample.verifyWindow(pendingBefore.directory(), pendingAfter.directory());
             var scope = scope();
-            var bindings = acquisition.collect(scope.files());
+            var bindings = metadata(() -> acquisition.collect(scope.files()));
             require(bindings.observations().stream().mapToLong(o -> o.memberObjects().size()).sum() == scope.journaledMembers(),
                     "Native member inventory differs from independent journal counts");
             require(scope.equals(scope()), "Journal membership changed during binding acquisition");
@@ -137,7 +169,7 @@ final class As400NativeBoundaryCollector {
             }
             var after = As400NativeJournalWindow.collectDirectory(journals, identities);
             require(scope.equals(scope()), "Journal membership changed across allocation");
-            require(bindings.equals(acquisition.collect(scope.files())), "Native identity or schema changed across allocation");
+            require(bindings.equals(metadata(() -> acquisition.collect(scope.files()))), "Native identity or schema changed across allocation");
             require(scope.equals(scope()), "Journal membership changed during recheck");
             As400NativeJournalWindow.requireStableDirectory(before, after);
             pulse.finish(program);

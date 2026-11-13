@@ -318,8 +318,9 @@ See IBM's [object-level journal entry layout](https://www.ibm.com/docs/en/ssw_ib
 
 ### Transaction working storage
 
-`truncate.buffer.storage=memory` retains the existing profile and its finite
-budgets:
+`truncate.buffer.storage=disk` is the default. Selecting `memory` explicitly uses
+the following finite budgets, including journal-wide transaction and savepoint
+context even for excluded files:
 
 | Property | Default | Allowed range |
 | --- | ---: | ---: |

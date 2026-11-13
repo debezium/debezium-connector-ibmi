@@ -237,6 +237,18 @@ class As400NativeBoundaryCollectorTest {
         }
     }
 
+    @ParameterizedTest
+    @ValueSource(strings = { "metadata-timeout", "metadata-bad-cleanup", "metadata-permission" })
+    void shouldDeferOnlyReadOnlyMetadataTimeoutsBeforeAnyAllocation(String fault) throws Exception {
+        var f = new Fixture(fault);
+        try (var pulses = f.pulses()) {
+            var failure = assertThrows(java.sql.SQLException.class, f.collector::collect);
+            assertThat(failure instanceof As400NativeBoundaryCollector.MetadataUnavailable).isEqualTo(fault.equals("metadata-timeout"));
+            assertThat(f.events).doesNotContain("pulse-returned", "audit");
+            verify(pulses.constructed().get(0)).close();
+        }
+    }
+
     private static final class Fixture {
         final As400NativeBoundaryCollector collector;
         final RetrieveJournal reader = mock(RetrieveJournal.class);
@@ -277,6 +289,16 @@ class As400NativeBoundaryCollectorTest {
             var acquisitions = new java.util.concurrent.atomic.AtomicInteger();
             when(acquisition.collect(scope.files())).thenAnswer(invocation -> {
                 events.add("bindings");
+                if (fault.startsWith("metadata-")) {
+                    if (fault.equals("metadata-permission")) {
+                        throw new java.sql.SQLException("Not authorized", "42501");
+                    }
+                    var timeout = new java.sql.SQLNonTransientConnectionException("Read timed out", "08S01",
+                            new java.net.SocketTimeoutException("Read timed out"));
+                    timeout.addSuppressed(fault.equals("metadata-bad-cleanup") ? new java.sql.SQLException("Unknown cleanup failure")
+                            : new java.sql.SQLNonTransientConnectionException("The connection does not exist", "08003"));
+                    throw timeout;
+                }
                 return fault.equals("bindings-after") && acquisitions.incrementAndGet() == 2
                         ? new As400NativeBindingAcquisition.Acquired(bindings.observations().subList(1, 4), bindings.definitions().subList(1, 4))
                         : bindings;

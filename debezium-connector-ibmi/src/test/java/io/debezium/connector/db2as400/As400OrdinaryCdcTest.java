@@ -97,18 +97,23 @@ class As400OrdinaryCdcTest {
     }
 
     @ParameterizedTest
-    @ValueSource(strings = { "F/OP", "F/CL", "F/MS", "D/DH", "D/GT", "R/IL", "F/SS", "D/DW", "F/RG", "F/RM" })
-    void shouldTreatCapturedAdministrativeEntriesAsNoOutputWithoutRelaxingIdentityOrPayloadChecks(String type) throws Exception {
+    @ValueSource(strings = { "F/OP", "F/CL", "F/MS", "D/DH", "D/GT", "D/RV", "R/IL", "F/SS", "D/DW", "F/RG", "F/RM" })
+    void shouldTreatAdministrativeEntriesAsNoOutputWithoutRelaxingIdentityOrPayloadChecks(String type) throws Exception {
         var json = new ObjectMapper().readTree(getClass().getResourceAsStream("/native-transactions/"
                 + (type.equals("R/IL") ? "record-limit.json"
                         : List.of("F/SS", "D/DW").contains(type) ? "save-while-active.json"
                                 : List.of("F/RG", "F/RM").contains(type) ? "reorganization.json" : "administrative-entries.json")));
         var bindings = capturedBindings(json);
         var raw = java.util.stream.StreamSupport.stream(json.get("entries").spliterator(), false)
-                .filter(e -> e.path("type").asText().equals(type)).findFirst().orElseThrow();
+                .filter(e -> e.path("type").asText().equals(type.equals("D/RV") ? "D/GT" : type)).findFirst().orElseThrow();
         byte[] captured = HexFormat.of().parseHex(raw.path("hex").asText());
         assertThat(HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(captured)))
                 .isEqualTo(raw.path("sha256").asText());
+        if (type.equals("D/RV")) {
+            // Deliberate fixture variant: grant/revoke share IBM's documented
+            // object-level layout. This is not a captured RJNE0200 revoke.
+            new com.ibm.as400.access.AS400Text(3, 37).toBytes("DRV", captured, 98);
+        }
         var receiver = new JournalReceiver(json.path("receiver").asText(), json.path("library").asText());
         var position = new JournalPosition(new BigInteger(raw.path("sequence").asText()), receiver);
         var initial = As400Checkpoint.afterVerifiedBoundary(JOURNAL, FINGERPRINT,
@@ -117,6 +122,9 @@ class As400OrdinaryCdcTest {
                 Map.of(receiver, new As400JournalOrder.Range(initial.replayFrom().offset(), position.offset())));
         List<SourceRecord> records = new ArrayList<>();
         var faults = new ArrayList<>(List.of("none", "none-restart", "identity", "payload", "transaction", "record-number", "strict-profile"));
+        if (type.equals("D/GT") || type.equals("D/RV")) {
+            faults.add("payload-identity");
+        }
         if (type.equals("F/RG") || type.equals("F/RM")) {
             faults.add("rrn-key");
         }
@@ -140,6 +148,9 @@ class As400OrdinaryCdcTest {
             }
             if (fault.equals("transaction")) {
                 java.nio.ByteBuffer.wrap(bytes).putLong(64, 1);
+            }
+            if (fault.equals("payload-identity")) {
+                new com.ibm.as400.access.AS400Text(10, 37).toBytes("OTHER", bytes, java.nio.ByteBuffer.wrap(bytes).getInt(8) + 16);
             }
             if (fault.equals("record-number")) {
                 java.nio.ByteBuffer.wrap(bytes).putLong(56, 1);

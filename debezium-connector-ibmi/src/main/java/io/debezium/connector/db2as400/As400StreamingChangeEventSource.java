@@ -275,7 +275,7 @@ public class As400StreamingChangeEventSource implements StreamingChangeEventSour
     // TODO tidy up exception handling
     BlockingReceiverConsumer processJournalEntries(As400Partition partition, As400OffsetContext offsetContext)
             throws IOException, SQLNonTransientConnectionException, InterruptedException {
-        return (nextOffset, reader, header) -> processJournalEntry(partition, offsetContext, nextOffset, reader::decode, header, false);
+        return (nextOffset, reader, header) -> processJournalEntry(partition, offsetContext, nextOffset, reader::decode, header, false, null, null);
     }
 
     @FunctionalInterface
@@ -283,8 +283,18 @@ public class As400StreamingChangeEventSource implements StreamingChangeEventSour
         <T> T decode(JournalEntryDeocder<T> decoder) throws Exception;
     }
 
+    @FunctionalInterface
+    interface DeferredClear {
+        void hold(TableId table, EntryHeader header, String physicalFile) throws Exception;
+    }
+
     /** Same legacy dispatcher for bounded owned native pages; no RPC cursor is acknowledged here. */
     void processOwnedEntry(As400Partition partition, As400OffsetContext offset, RawJournalPage.Entry entry)
+            throws IOException, SQLNonTransientConnectionException, InterruptedException {
+        processOwnedEntry(partition, offset, entry, null);
+    }
+
+    void processOwnedEntry(As400Partition partition, As400OffsetContext offset, RawJournalPage.Entry entry, DeferredClear deferred)
             throws IOException, SQLNonTransientConnectionException, InterruptedException {
         if (connectorConfig.getEventProcessingFailureHandlingMode() != EventProcessingFailureHandlingMode.FAIL) {
             throw new IllegalArgumentException("A migration prefix requires fail-on-error legacy dispatch");
@@ -297,7 +307,7 @@ public class As400StreamingChangeEventSource implements StreamingChangeEventSour
             public <T> T decode(JournalEntryDeocder<T> decoder) throws Exception {
                 return decoder.decode(header, bytes, 0);
             }
-        }, header, true);
+        }, header, true, deferred, entry.position());
     }
 
     /** A progress barrier cannot discard an update's cached before-image on restart. */
@@ -306,7 +316,8 @@ public class As400StreamingChangeEventSource implements StreamingChangeEventSour
     }
 
     private void processJournalEntry(As400Partition partition, As400OffsetContext offsetContext, BigInteger nextOffset,
-                                     EntryValues r, EntryHeader eheader, boolean migration)
+                                     EntryValues r, EntryHeader eheader, boolean migration, DeferredClear deferred,
+                                     io.debezium.ibmi.db2.journal.retrieve.JournalPosition ownedPosition)
             throws IOException, SQLNonTransientConnectionException, InterruptedException {
         final JournalEntryType journalEntryType = eheader.getJournalEntryType();
         TableId resolvedTable = null;
@@ -383,22 +394,15 @@ public class As400StreamingChangeEventSource implements StreamingChangeEventSour
                 }
                     break;
                 case END_COMMIT: {
-                    // end commit
-                    final String txId = eheader.getCommitCycle().toString();
-                    final TransactionContext txc = txMap.get(txId);
-                    log.debug("commit transaction id {} tx {} table {}", nextOffset, txId, tableId);
-                    if (txc != null) {
-                        offsetContext.setTransaction(txc);
-                        dispatcher.dispatchTransactionCommittedEvent(partition, offsetContext,
-                                eheader.getTime());
-                        txc.endTransaction();
-                        txMap.remove(txId);
-                        offsetContext.endTransaction();
-                    }
+                    finishTransaction(partition, offsetContext, eheader.getCommitCycle(), eheader.getTime());
                 }
                     break;
                 case FILE_CHANGE, FILE_CREATED: {
                     if (fileChange != null && fileChange.clearsRows()) {
+                        if (migration && deferred != null && eheader.getCommitCycle().signum() > 0) {
+                            deferred.hold(tableId, eheader, file);
+                            break;
+                        }
                         dispatchTruncate(partition, offsetContext, tableId, eheader, file, library, fileChange.member());
                         break;
                     }
@@ -422,9 +426,11 @@ public class As400StreamingChangeEventSource implements StreamingChangeEventSour
                         throw new IllegalArgumentException("Overlapping migration before-images require explicit recovery");
                     }
                     cacheBefore(tableId, dataBefore);
-                    if (!migration && eheader.getCommitCycle().signum() == 0) {
+                    if (migration || eheader.getCommitCycle().signum() == 0) {
                         if (legacyBeforeTables.isEmpty()) {
-                            legacyBeforeFloor = offsetContext.entryPosition(eheader).setProcessed(false);
+                            legacyBeforeFloor = migration
+                                    ? new JournalProcessedPosition(ownedPosition, eheader.getTime(), false)
+                                    : offsetContext.entryPosition(eheader).setProcessed(false);
                         }
                         legacyBeforeTables.add(tableId);
                         offsetContext.legacyReplayFloor(legacyFloor(null));
@@ -453,9 +459,7 @@ public class As400StreamingChangeEventSource implements StreamingChangeEventSour
 
                     dispatchRow(partition, tableId, eheader, rowEmitter(partition, offsetContext, tableId, eheader,
                             Operation.UPDATE, dataBefore, dataNext, migration));
-                    if (!migration) {
-                        releaseLegacyBefore(offsetContext, tableId);
-                    }
+                    releaseLegacyBefore(offsetContext, tableId);
                 }
                     break;
                 case ADD_ROW1, ADD_ROW2: {
@@ -553,22 +557,81 @@ public class As400StreamingChangeEventSource implements StreamingChangeEventSour
     }
 
     private void selectRowTransaction(As400Partition partition, As400OffsetContext offset, EntryHeader entry) throws InterruptedException {
-        String id = entry.getCommitCycle().toString();
+        selectRowTransaction(partition, offset, entry.getCommitCycle(), entry.getTime());
+    }
+
+    private void selectRowTransaction(As400Partition partition, As400OffsetContext offset, BigInteger cycle, java.time.Instant timestamp)
+            throws InterruptedException {
+        String id = cycle.toString();
         TransactionContext transaction = txMap.get(id);
-        if (transaction == null && entry.getCommitCycle().signum() != 0) {
+        if (transaction == null && cycle.signum() != 0) {
             transaction = new TransactionContext();
             txMap.put(id, transaction);
             offset.setTransaction(transaction);
             // A snapshot or restart may begin after C/SC. Metadata describes the
             // observed suffix; it cannot reconstruct counters preceding this offset.
             if (connectorConfig.shouldProvideTransactionMetadata()) {
-                dispatcher.dispatchTransactionStartedEvent(partition, id, offset, entry.getTime());
+                dispatcher.dispatchTransactionStartedEvent(partition, id, offset, timestamp);
             }
             else {
                 transaction.beginTransaction(id);
             }
         }
         offset.setTransaction(transaction);
+    }
+
+    private void finishTransaction(As400Partition partition, As400OffsetContext offset, BigInteger cycle, java.time.Instant timestamp)
+            throws InterruptedException {
+        String id = cycle.toString();
+        var transaction = txMap.get(id);
+        if (transaction != null) {
+            offset.setTransaction(transaction);
+            dispatcher.dispatchTransactionCommittedEvent(partition, offset, timestamp);
+            transaction.endTransaction();
+            txMap.remove(id);
+            offset.endTransaction();
+        }
+    }
+
+    /** The caller pins every source offset until this complete, verified outcome is delivered. */
+    void publishDeferredClear(As400Partition partition, As400OffsetContext offset, As400NativeLegacyClear.Prepared prepared)
+            throws InterruptedException {
+        prepared.definitions.forEach(definition -> schema.forwardSchema(definition.schema()));
+        var resolved = prepared.resolution;
+        if (resolved.committed().isPresent()) {
+            var batch = resolved.committed().orElseThrow();
+            for (var change : batch.changes()) {
+                if (change.operation() == Operation.TRUNCATE) {
+                    truncateIncrementalWindow(change.table().tableId());
+                }
+                offset.updateSourceInfo(change.source());
+                selectRowTransaction(partition, offset, change.source().commitCycle(), change.source().timestamp());
+                var emitter = new As400ChangeRecordEmitter(partition, offset, change.operation(),
+                        change.before() == null ? null : change.before().values(), change.after() == null ? null : change.after().values(), clock, connectorConfig);
+                try {
+                    if (!dispatcher.dispatchDataChangeEvent(partition, change.table().tableId(), emitter)) {
+                        throw new TruncateException("Deferred clear dispatch failed at " + change.position());
+                    }
+                }
+                finally {
+                    emitter.rethrowDispatchInterruption();
+                }
+            }
+        }
+    }
+
+    void finishDeferredTransaction(As400Partition partition, As400OffsetContext offset, As400SourceMetadata terminal)
+            throws InterruptedException {
+        // Other tables can have already emitted a legacy suffix. Close that
+        // existing context only after every held table's rows have been released.
+        offset.updateSourceInfo(terminal);
+        finishTransaction(partition, offset, terminal.commitCycle(), terminal.timestamp());
+    }
+
+    private void truncateIncrementalWindow(TableId table) {
+        if (dispatcher.getIncrementalSnapshotChangeEventSource() instanceof As400TruncateAwareIncrementalSnapshot snapshot) {
+            snapshot.truncate(table);
+        }
     }
 
     private JournalProcessedPosition legacyFloor(TableId completed) {
@@ -581,6 +644,7 @@ public class As400StreamingChangeEventSource implements StreamingChangeEventSour
 
     private void releaseLegacyBefore(As400OffsetContext offset, TableId table) {
         beforeMap.remove(String.format("%s-%s", table.schema(), table.table()));
+        migrationBeforeHeaders.remove(table);
         legacyBeforeTables.remove(table);
         if (legacyBeforeTables.isEmpty()) {
             legacyBeforeFloor = null;
@@ -648,6 +712,7 @@ public class As400StreamingChangeEventSource implements StreamingChangeEventSour
                 throw new TruncateException("Missing table schema for " + tableId + " at journal entry " + entry.getSequenceNumber());
             }
             beforeMap.remove(String.format("%s-%s", tableId.schema(), tableId.table()));
+            truncateIncrementalWindow(tableId);
             offsetContext.updateSourceInfo(entry);
             offsetContext.setTransaction(null);
             As400ChangeRecordEmitter emitter = new As400ChangeRecordEmitter(partition,

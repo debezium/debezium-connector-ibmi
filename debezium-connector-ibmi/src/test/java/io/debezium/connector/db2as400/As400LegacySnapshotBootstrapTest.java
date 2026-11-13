@@ -146,6 +146,46 @@ class As400LegacySnapshotBootstrapTest {
     }
 
     @Test
+    void shouldPinEveryRecordAndAutomaticBoundaryUntilTheDeferredOutcomeIsComplete() throws Exception {
+        var records = new ArrayList<SourceRecord>();
+        var acknowledged = new ArrayList<Map<String, ?>>();
+        var delivery = new As400LegacySnapshotBootstrap.Delivery(new As400TaskHandoff.Output() {
+            @Override
+            public void emit(SourceRecord record) {
+                records.add(record);
+            }
+
+            @Override
+            public void barrier(SourceRecord record) {
+            }
+
+            @Override
+            public String acknowledge(SourceRecord record) {
+                acknowledged.add(record.sourceOffset());
+                return "acknowledged";
+            }
+        }, offset -> record(offset, "boundary"));
+        var safe = Fixture.legacyOffset(29);
+        var scanned = Fixture.legacyOffset(1000);
+        delivery.pin(safe);
+        for (int i = 0; i < 600; i++) {
+            var row = record(scanned, "row-" + i);
+            row.headers().addInt("row-number", i);
+            delivery.enqueue(new DataChangeEvent(row));
+        }
+        delivery.flush(scanned);
+        assertThat(records).hasSize(600).allSatisfy(row -> assertThat(row.sourceOffset()).isEqualTo(safe));
+        assertThat(acknowledged).hasSize(4).allMatch(safe::equals);
+        for (int i = 0; i < records.size(); i++) {
+            assertThat(records.get(i).value()).isEqualTo("row-" + i);
+            assertThat(records.get(i).headers().lastWithName("row-number").value()).isEqualTo(i);
+        }
+        delivery.releasePin();
+        delivery.flush(scanned);
+        assertThat(acknowledged.get(acknowledged.size() - 1)).isEqualTo(scanned);
+    }
+
+    @Test
     void shouldBoundSnapshotDeliveryBeyondTheFormerCeilingAndPreserveIncompleteOffsetsUntilCompletion() throws Exception {
         var acknowledgements = new ArrayList<Map<String, ?>>();
         var delivered = new AtomicInteger();

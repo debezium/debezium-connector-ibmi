@@ -64,6 +64,23 @@ versions could log some failures and continue, losing the row. `warn` and `skip`
 retain their explicitly lossy behavior for ordinary row processing. Truncate and
 online handoff failures remain fatal; those paths cannot safely skip a clear.
 
+Before upgrading an existing deployment, check these behavior changes even if
+transactional truncate remains disabled:
+
+- Unsupported row decoding now stops a task in `fail` mode instead of silently
+  dropping the row. This does not add support for captured CLOB/BLOB columns.
+- An existing `skipped.operations=none` configuration now captures F/CR clears.
+  The legacy reader still rejects transactional and ambiguous member clears.
+- The optional `source.rrn` field changes the source schema. Check consumer schema
+  compatibility; it does not change the event key.
+
+Keep the original offsets and history when installing a corrected build. After
+online handoff, the original connector cannot read the native F/W checkpoints or
+binding history: replacing the binary with the original version is not an
+in-place rollback. Do not erase offsets or history to bypass a startup failure.
+The [compatibility and performance comparison](docs/dcg-compatibility-comparison.md)
+records measured costs and the remaining qualification limits.
+
 A queue interrupted by the watchdog is retried from its retained offset rather
 than being treated as malformed data. As with other interrupted deliveries, an
 already emitted prefix can repeat. When transaction metadata is enabled and a

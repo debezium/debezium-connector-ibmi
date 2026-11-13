@@ -88,6 +88,7 @@ final class As400SchemaHistory {
         }
         Cursor[] previous = { As400SchemaState.ORIGIN };
         boolean[] completed = { required.completed().equals(As400SchemaState.ORIGIN) };
+        boolean[] floorFound = { required.floor().equals(As400SchemaState.ORIGIN) };
         read(record -> {
             if (record.cursor().ordinal() < previous[0].ordinal()) {
                 return; // A delayed duplicate append cannot move the selected chain backwards.
@@ -98,19 +99,26 @@ final class As400SchemaHistory {
             }
             require(record.previous().equals(previous[0]), "Missing or reordered schema history");
             var change = record.change();
-            require(java.util.Objects.equals(change.before(), tables.get(key(change.after()))), "Schema history lost its previous table definition");
-            tables.put(key(change.after()), change.after());
+            String key = key(change.after() == null ? change.before() : change.after());
+            require(java.util.Objects.equals(change.before(), tables.get(key)), "Schema history lost its previous table definition");
+            if (change.after() == null) {
+                tables.remove(key);
+            }
+            else {
+                tables.put(key, change.after());
+            }
             previous[0] = record.cursor();
             if (previous[0].ordinal() == required.floor().ordinal()) {
                 require(previous[0].equals(required.floor()), "Replay-floor schema history changed");
                 floor.addAll(tables.values());
+                floorFound[0] = true;
             }
             if (previous[0].ordinal() == required.completed().ordinal()) {
                 require(previous[0].equals(required.completed()), "Completed-output schema history changed");
                 completed[0] = true;
             }
         });
-        require(!floor.isEmpty() && completed[0], "Required schema history is missing");
+        require(floorFound[0] && completed[0], "Required schema history is missing");
         return List.copyOf(floor);
     }
 

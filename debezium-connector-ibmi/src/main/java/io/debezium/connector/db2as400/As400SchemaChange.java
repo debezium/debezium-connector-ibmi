@@ -33,7 +33,8 @@ record As400SchemaChange(As400BindingDefinition before, As400BindingDefinition a
     record Mark(String type, JournalPosition position, String receiverIdentity, String digest) {
         Mark {
             As400Checkpoint.validatePosition(position);
-            require((TYPES.contains(type) || CREATION_TYPES.contains(type)) && receiverIdentity != null && !receiverIdentity.isBlank()
+            require((TYPES.contains(type) || CREATION_TYPES.contains(type) || List.of("D/DT", "F/MD", "D/DF", "C/RB").contains(type))
+                    && receiverIdentity != null && !receiverIdentity.isBlank()
                     && digest != null && digest.matches("[0-9a-f]{64}"), "Incomplete schema transition record");
         }
     }
@@ -41,9 +42,15 @@ record As400SchemaChange(As400BindingDefinition before, As400BindingDefinition a
     As400SchemaChange {
         records = List.copyOf(records);
         boolean memberCreation = !records.isEmpty() && records.get(0).type().equals("F/JM");
-        require(records.stream().map(Mark::type).toList().equals(before == null ? CREATION_TYPES : memberCreation ? As400MemberCreation.TYPES : TYPES),
+        boolean deletion = !records.isEmpty() && records.get(0).type().equals("D/DT");
+        require(before != null || after != null, "Schema transition requires a definition");
+        require(after != null || deletion, "Only a physical-file deletion can retire a binding");
+        require(!deletion || before != null && (after == null || before.equals(after)), "Rolled-back deletion must retain its exact binding");
+        require(records.stream().map(Mark::type).toList()
+                .equals(deletion ? deletionTypes(before, after == null, records.size() > 1 && records.get(1).type().equals("C/CM"))
+                        : before == null ? CREATION_TYPES : memberCreation ? As400MemberCreation.TYPES : TYPES),
                 "Incomplete schema transition lifecycle");
-        if (before != null) {
+        if (before != null && after != null) {
             var a = before.identity();
             var b = after.identity();
             require(a.tableId().equals(b.tableId()) && a.physicalFile().equals(b.physicalFile()) && a.member().equals(b.member())
@@ -54,7 +61,6 @@ record As400SchemaChange(As400BindingDefinition before, As400BindingDefinition a
                     && before.excluded() == after.excluded() && before.usesRrn() == after.usesRrn(),
                     "Schema refresh cannot replace a file/member or change capture selection");
         }
-        java.util.Objects.requireNonNull(after);
         require(records.stream().map(Mark::position).distinct().count() == records.size(), "Repeated schema transition position");
     }
 
@@ -63,7 +69,21 @@ record As400SchemaChange(As400BindingDefinition before, As400BindingDefinition a
     }
 
     boolean creationLifecycle() {
-        return before == null || memberCreation();
+        return before == null || memberCreation() || records.get(0).type().equals("D/DT");
+    }
+
+    private static List<String> deletionTypes(As400BindingDefinition before, boolean deleted, boolean transactional) {
+        if (!deleted) {
+            return List.of("D/DT", "C/RB");
+        }
+        var types = new ArrayList<String>();
+        types.add("D/DT");
+        if (transactional) {
+            types.add("C/CM");
+        }
+        before.members().forEach((name, jid) -> types.add("F/MD"));
+        types.add("D/DF");
+        return types;
     }
 
     JournalPosition start() {
@@ -71,9 +91,9 @@ record As400SchemaChange(As400BindingDefinition before, As400BindingDefinition a
     }
 
     JournalPosition change() {
-        // Creation's complete future association was qualified before accepting
-        // its opening. Persist it here: unrelated output may complete between
-        // the opening and F/MC, while F still pins that full sequence for replay.
+        // The complete future creation/deletion was qualified before accepting
+        // its opening. Persist it here: unrelated output may complete during
+        // that lifecycle, while F still pins its full sequence for replay.
         return records.get(creationLifecycle() ? 0 : 5).position();
     }
 
@@ -121,6 +141,17 @@ record As400SchemaChange(As400BindingDefinition before, As400BindingDefinition a
             var header = new EntryHeaderDecoder(RawJournalPage.METADATA_CCSID).decode(bytes, 0);
             String type = header.getJournalCode() + "/" + header.getEntryType();
             boolean target = header.getFile().equals(before.identity().physicalFile()) && header.getLibrary().equals(before.identity().tableId().schema());
+            boolean control = header.getJournalCode() == 'C' && producer.equals(producer(entry));
+            if (!target && !control) {
+                // The interval proves this file's committed definition, not the
+                // definition of every other file at the observation tail. Another
+                // file can be created, altered or re-journaled here; its binding
+                // must be selected when normal replay reaches that operation.
+                // Keep transport/position checks without interpreting unrelated
+                // lifecycle flags as row flags or borrowing an obsolete layout.
+                As400JournalRecordContent.digest(bytes, entry.position());
+                continue;
+            }
             if (target && List.of("F/CH", "F/EJ", "D/EF", "D/JF", "F/JM").contains(type)) {
                 // Journaling companions deliberately carry the apply/remove
                 // ignore flag. Validate their exact existing lifecycle profile;
@@ -137,15 +168,11 @@ record As400SchemaChange(As400BindingDefinition before, As400BindingDefinition a
                             (file, library) -> after.binding(65536))) {
                 continue;
             }
-            boolean control = header.getJournalCode() == 'C' && producer.equals(producer(entry));
             if (marks.size() == TYPES.size()) {
                 // A second DDL or journaling transition makes today's catalog
                 // ambiguous, even if its final format ID equals the old one.
                 require(!target || header.getJournalCode() == 'R', "Another table transition precedes the metadata observation");
                 continue;
-            }
-            if (!target && !control) {
-                continue; // Other tables/jobs do not establish this schema's outcome.
             }
             require(type.equals(TYPES.get(marks.size())) && producer.equals(producer(entry)), "Unqualified schema-change lifecycle");
             if (type.equals("D/CG")) {
@@ -190,6 +217,9 @@ record As400SchemaChange(As400BindingDefinition before, As400BindingDefinition a
         if (h.getControlInfo().logicalFile()) {
             return false; // The logical-file classifier validates these separately.
         }
+        if (h.getJournalCode() == 'D' && h.getEntryType().equals("DT")) {
+            return true;
+        }
         if (h.getJournalCode() == 'D' && h.getEntryType().equals("CT")) {
             io.debezium.ibmi.db2.journal.retrieve.FileCreationEntryDecoder.metadata(h, entry.data(), 0);
             return true;
@@ -224,7 +254,7 @@ record As400SchemaChange(As400BindingDefinition before, As400BindingDefinition a
     Map<String, String> fields() throws Exception {
         var fields = new TreeMap<String, String>();
         fields.put("before", before == null ? "" : As400BindingEncoding.encode(List.of(before), false));
-        fields.put("after", As400BindingEncoding.encode(List.of(after), false));
+        fields.put("after", after == null ? "" : As400BindingEncoding.encode(List.of(after), false));
         for (int i = 0; i < records.size(); i++) {
             var mark = records.get(i);
             String key = "record." + i + ".";
@@ -240,17 +270,19 @@ record As400SchemaChange(As400BindingDefinition before, As400BindingDefinition a
 
     static As400SchemaChange restore(Map<String, String> fields) throws Exception {
         var before = "".equals(fields.get("before")) ? List.<As400BindingDefinition> of() : As400BindingEncoding.decode(fields.get("before"));
-        var after = As400BindingEncoding.decode(fields.get("after"));
-        require(before.size() <= 1 && after.size() == 1, "Schema transition must describe one table");
+        var after = "".equals(fields.get("after")) ? List.<As400BindingDefinition> of() : As400BindingEncoding.decode(fields.get("after"));
+        require(before.size() <= 1 && after.size() <= 1 && !(before.isEmpty() && after.isEmpty()), "Schema transition must describe one table");
         var marks = new ArrayList<Mark>();
-        var expectedTypes = before.isEmpty() ? CREATION_TYPES : "F/JM".equals(fields.get("record.0.type")) ? As400MemberCreation.TYPES : TYPES;
+        var expectedTypes = "D/DT".equals(fields.get("record.0.type"))
+                ? deletionTypes(before.get(0), after.isEmpty(), "C/CM".equals(fields.get("record.1.type")))
+                : before.isEmpty() ? CREATION_TYPES : "F/JM".equals(fields.get("record.0.type")) ? As400MemberCreation.TYPES : TYPES;
         for (int i = 0; i < expectedTypes.size(); i++) {
             String key = "record." + i + ".";
             marks.add(new Mark(fields.get(key + "type"),
                     new JournalPosition(new BigInteger(fields.get(key + "sequence")), new JournalReceiver(fields.get(key + "receiver"), fields.get(key + "library"))),
                     fields.get(key + "receiver.identity"), fields.get(key + "hash")));
         }
-        var restored = new As400SchemaChange(before.isEmpty() ? null : before.get(0), after.get(0), marks);
+        var restored = new As400SchemaChange(before.isEmpty() ? null : before.get(0), after.isEmpty() ? null : after.get(0), marks);
         require(restored.fields().equals(fields), "Noncanonical or incomplete schema transition");
         return restored;
     }

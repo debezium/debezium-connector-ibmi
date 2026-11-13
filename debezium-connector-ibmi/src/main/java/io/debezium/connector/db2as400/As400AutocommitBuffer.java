@@ -74,6 +74,16 @@ final class As400AutocommitBuffer implements AutoCloseable {
             }
             else {
                 require(record != null && record.table().equals(table) && row != null, "Missing autocommit row identity/image");
+                if (!row.included()) {
+                    require(List.of("R/PT", "R/PX", "R/UB", "R/UP", "R/DL").contains(type), "Unsupported excluded autocommit operation");
+                    // The normalizer validates excluded identities and physical
+                    // images. No before-image is needed for output we do not
+                    // produce; an AFTER-only file must not stop unrelated CDC.
+                    if (!type.equals("R/UB")) {
+                        pending = new CommittedBatch(new TransactionId(journal, BigInteger.ZERO, source.position()), source, source, List.of());
+                    }
+                    return Optional.ofNullable(pending);
+                }
                 Image earlier = before.get(record);
                 if (type.equals("R/UB")) {
                     require(earlier == null, "Repeated autocommit before-image");
@@ -112,8 +122,10 @@ final class As400AutocommitBuffer implements AutoCloseable {
 
     void complete(CommittedBatch batch) {
         require(!stopped && batch != null && batch == pending, "Wrong autocommit completion");
-        bytes -= batch.changes().get(0).bytes();
-        entries--;
+        if (!batch.changes().isEmpty()) {
+            bytes -= batch.changes().get(0).bytes();
+            entries--;
+        }
         pending = null;
     }
 

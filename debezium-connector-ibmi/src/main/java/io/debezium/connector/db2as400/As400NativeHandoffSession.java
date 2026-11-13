@@ -366,6 +366,17 @@ class As400NativeHandoffSession implements As400TaskHandoff {
             }
             return candidate;
         }
+        catch (As400NativeBoundaryCollector.MetadataUnavailable unavailable) {
+            check();
+            // The wrapper only covers read-only work outside pulse.attempt().
+            // A later holder-close failure is suppressed on the wrapper itself
+            // and must not be converted to an ordinary admission retry.
+            if (unavailable.getSuppressed().length != 0 || As400NativeBoundaryPulse.hasUnverifiedCleanup(unavailable)) {
+                throw unavailable;
+            }
+            LOGGER.info("Transactional truncate metadata is busy; retrying admission with backoff while legacy capture continues");
+            return Optional.empty();
+        }
         catch (As400NativeBoundaryCollector.AuditRejected rejected) {
             observe("rejected-boundary-" + attempt, () -> Map.of("from", rejected.window.from().toString(), "through", rejected.window.through().toString(),
                     "reason", rejected.getCause().toString(), "raw", raw(rejected.page.entries()),
@@ -420,15 +431,17 @@ class As400NativeHandoffSession implements As400TaskHandoff {
             }
         }
         Future<Optional<Discovered>> candidate = pending.isEmpty() ? collect() : null;
-        // Preserve clear capture during the legacy prefix. A transactional clear
-        // before a qualified boundary must stop explicitly, never disappear.
+        // The prefix keeps unrelated tables moving while a transactional clear
+        // waits for its verified outcome. Publication offsets remain pinned.
         var legacyConfig = config;
         var scan = new As400OffsetContext.Loader(legacyConfig).load(loaded);
         @SuppressWarnings("unchecked")
         TopicNamingStrategy<TableId> topics = config.getTopicNamingStrategy(As400ConnectorConfig.TOPIC_NAMING_STRATEGY, true);
         // The real legacy JDBC decoder acquires its own metadata. It must
         // never decode older rows using the later boundary's acquired schemas.
-        try (var jdbc = new As400JdbcConnection(legacyConfig.getJdbcConfig(), ignored -> foreground.connection(false))) {
+        try (var jdbc = new As400JdbcConnection(legacyConfig.getJdbcConfig(), ignored -> foreground.connection(false));
+                var legacyWork = foreground.handoffWork(limits, this::check);
+                var legacyStore = legacyWork.transactionStore()) {
             var schemas = new As400DatabaseSchema(legacyConfig, jdbc, topics, config.schemaNameAdjuster(),
                     config.getServiceRegistry().tryGetService(CustomConverterRegistry.class), taskContext);
             var legacyNotifications = new java.util.concurrent.atomic.AtomicReference<io.debezium.pipeline.notification.NotificationService<As400Partition, As400OffsetContext>>();
@@ -457,7 +470,7 @@ class As400NativeHandoffSession implements As400TaskHandoff {
                     var notifications = new io.debezium.pipeline.notification.NotificationService<As400Partition, As400OffsetContext>(
                             signals.notifications(), config, io.debezium.schema.SchemaFactory.get(), dispatcher::enqueueNotification);
                     legacyNotifications.set(notifications);
-                    var incremental = new io.debezium.pipeline.source.snapshot.incremental.SignalBasedIncrementalSnapshotChangeEventSource<As400Partition, TableId>(
+                    var incremental = new As400TruncateAwareIncrementalSnapshot(
                             config, jdbc, dispatcher, schemas, Clock.system(), signals.progress(), signals.changes(), notifications);
                     dispatcher.setIncrementalSnapshotChangeEventSource(Optional.of(incremental));
                     signals.processor().setContext(io.debezium.pipeline.spi.Offsets.of(partition(), scan));
@@ -466,8 +479,11 @@ class As400NativeHandoffSession implements As400TaskHandoff {
                 }
                 var source = new As400StreamingChangeEventSource(legacyConfig, null, jdbc, dispatcher,
                         new ErrorHandler(As400RpcConnector.class, legacyConfig, delivery, null), Clock.system(), schemas);
+                var clearEvidence = new As400NativeLegacyClear(foreground, journal, limits, this::check);
+                var clears = new As400LegacyClearBuffer(partition(), scan, source, staging, clearEvidence::prepare,
+                        limits.transactions().maxTransactions(), legacyStore);
                 var prefix = new As400LegacyNativePrefix(foreground.journals, foreground.identities, foreground.reader, source,
-                        partition(), scan, this::check, new As400OperatorCutReader.Limits(32, 500, 16 * 1024 * 1024));
+                        partition(), scan, this::check, new As400OperatorCutReader.Limits(32, 500, 16 * 1024 * 1024), clears);
                 while (true) {
                     check();
                     if (signals != null) {
@@ -478,7 +494,7 @@ class As400NativeHandoffSession implements As400TaskHandoff {
                         progress = prefix.publishNext();
                     }
                     catch (As400OperatorCutReader.UnstableCutException race) {
-                        LOGGER.info("Receiver changed during legacy prefix read; discarding the unexposed page and retrying");
+                        LOGGER.info("Receiver changed during legacy prefix qualification; retrying from the last observed scan");
                         Thread.sleep(250);
                         continue;
                     }
@@ -524,7 +540,7 @@ class As400NativeHandoffSession implements As400TaskHandoff {
                     // Deterministic test fault: retain history while ordinary
                     // row publication progresses, then kill this task before activation.
                     var complete = prefix.completePosition();
-                    if (pending.isPresent() && complete.isPresent() && !activationDeferred()
+                    if (pending.isPresent() && complete.isPresent() && !prefix.hasDeferredWork() && !activationDeferred()
                             && !scan.getIncrementalSnapshotContext().snapshotRunning()
                             && prefix.scan().offset().compareTo(pending.orElseThrow().origin().offset()) >= 0) {
                         try (var history = historyReader()) {
@@ -634,7 +650,7 @@ class As400NativeHandoffSession implements As400TaskHandoff {
         check();
         var change = new As400NativeSchemaRefresh(foreground, journal, identity, foreground.server(), this::check)
                 .collect(before, opening, verifiedBindings);
-        requireTopics(List.of(change.after()));
+        requireTopics(change.after() == null ? List.of() : List.of(change.after()));
         return change;
     }
 
