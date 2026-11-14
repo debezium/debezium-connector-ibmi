@@ -35,6 +35,10 @@ Java unit tests use captured fixtures and controlled transports. They do not
 connect to IBM i or an external Kafka broker. Avro tests use an in-memory schema
 registry. `-DskipITs` skips live integration tests, not unit tests.
 
+The sanitized journal samples in each module's `src/test/resources` are test
+data, not connection profiles. Tests replay their bytes and metadata from the
+checkout; contributors do not need the original server, libraries or accounts.
+
 If the required `3.8.0-SNAPSHOT` core dependencies are unavailable, obtain the
 matching [Debezium core](https://github.com/debezium/debezium) checkout and build
 the same modules as [Cross Maven CI](../.github/workflows/cross-maven.yml).
@@ -117,6 +121,13 @@ Provide an owner-only (0600) JSON file outside the checkout with `host`, `user`,
 installed driver; the default is `IBM i Access ODBC Driver`. Set
 `IBMI_TEST_CONFIG` to the file. The runner refuses symlinks, permissive modes,
 implicit server selection and missing write opt-in.
+
+Live runners have no built-in host or private credentials. They create their own
+schemas, tables, journals and sample rows on the supplied system; they do not
+depend on existing application data. Recorded native qualification used IBM i
+7.5. A different release, PTF level or system configuration must supply the
+required native services, journal settings and authorities; the recorded results
+do not qualify every such environment.
 
 ```sh
 IBMI_TEST_CONFIG=/path/to/private/ibmi-test.json \
