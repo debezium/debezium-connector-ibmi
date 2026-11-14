@@ -30,7 +30,7 @@ Current-upstream CI remains a separate merge gate.
 | Current-definition refresh and new-table discovery | Refreshes current JDBC metadata | Qualified CREATE/ALTER, full rollback, LABEL/COMMENT and same-library physical renames; statements may share a final definition when no captured row requires an unavailable intermediate layout. History is retained for restart |
 | Moving a file to another library | Excluded-file native comparison continues unrelated CDC | Native plain, ALTER/row/move and CREATE/row/move tests pass, including original/destination capture selection, replacement and move-back. Both-library capture also passes with Kafka source transactions; cross-pool save/restore remains unqualified |
 | Arbitrary historical DDL reconstruction | Not provided | Not added to the compatibility requirements; ambiguous historical layouts reject |
-| File/receiver count | No fixed connector file-count limit | No arbitrary connector count ceiling; bounded acquisition/history processing. Largest live scope tested: 56 files on a preceding build; the current dedicated runs use smaller scopes. Larger local fixtures are not native capacity evidence |
+| File/receiver count | No fixed connector file-count limit | No arbitrary connector count ceiling; bounded acquisition/history processing. Largest live scope tested: 128 journaled files, with three captured tables. Handoff after a deliberate blocker was released took 437 seconds; this is not a large-catalog throughput qualification |
 | Large transaction payloads | No equivalent transaction buffer | H2 MVStore working storage by default; explicit memory profile available. Excluded rows do not retain individual output entries; transaction context is still journal-wide. Metadata scales with catalog size |
 | Multiple Kafka data partitions | Supported | Accepted; whole-table ordering of keyless truncates and keyed rows requires one partition or equivalent downstream ordering |
 | Native storage pools | No explicit ASP-1-only admission | System/basic pools 1–32 accepted by evidence validation; live qualification used pool 1. Independent ASPs remain unqualified |
@@ -94,43 +94,55 @@ See the [baseline audit](dcg-compatibility-baseline.md) and
 
 ## Performance
 
-The published candidate at `96a395a` was compared with the original connector in six serial
-runs: original, disabled, enabled, then the reverse order. Each used a fresh
-native fixture and local Kafka. After two warm-up rounds, every run delivered all
-24,000 expected changes at about 200.8 changes/second for 120 seconds: 144,000 changes
-in total. Every key, mixed value and update before-image was checked. All six
-runs passed fixture, session and local-runtime cleanup.
+The published runtime at `96a395a` has two matched native comparisons against
+original connector/parser `2e19ad27`, with byte-matched shared dependencies and
+local Kafka 4.3.1. Six earlier 120-second runs covered approximately 201 submitted
+changes/second (144,000 verified changes, two repetitions per profile). Ten later
+120-second runs compared reader, buffer storage and the legacy delay at two
+requested rates (768,300 verified changes, one run per profile/rate). Every
+measured key, mixed value, update before-image and final count passed.
 
-| Profile | Median delay | p95 delay | CPU ms/change | CPU vs. original | Peak worker RSS |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| Original connector | 5.124 s | 5.193 s | 0.737 | Baseline | 412.1–435.6 MiB |
-| Candidate, feature disabled | 5.130 s | 5.197 s | 0.763 | +3.6% | 408.9–471.6 MiB |
-| Candidate, disk buffer | 1.934 s | 2.688 s | 0.911 | +23.6% | 440.7–482.4 MiB |
+The 500-change/second comparison reached approximately its requested rate in
+all five profiles:
 
-Delay and CPU columns are medians of the two run-level measurements; RSS lists
-the range of their peaks. Feature-off median delay increased 0.12%, with 3.6%
-more CPU per change. Enabled median delay was 62.3% lower, with 23.6% more CPU.
-All profiles sustained the offered workload; this is not a claim of equal CPU
-cost or maximum throughput. RSS is resident memory, not Java heap. Delay measures
-SQL submission to independent Kafka observation, not database commit time. Two
-short runs per profile do not establish statistical equivalence, large-catalog
-capacity, large-transaction memory behavior or multi-day stability. The
-memory-buffer profile and schema-change latency were not rerun in this matrix.
-The published build includes the CREATE/move correction at `7587127`.
+| Profile | Median delay | p95 delay | Worker CPU ms/change | Peak worker RSS |
+| --- | ---: | ---: | ---: | ---: |
+| Original, default 5 s margin | 5.214 s | 5.301 s | 0.323 | 411.7 MiB |
+| Candidate, feature disabled | 5.212 s | 5.298 s | 0.323 | 414.7 MiB |
+| Transactional, disk | 2.310 s | 3.155 s | 0.453 | 453.2 MiB |
+| Transactional, memory | 2.256 s | 3.129 s | 0.377 | 450.0 MiB |
+| Original, zero-delay diagnostic | 0.172 s | 0.252 s | 0.320 | 457.6 MiB |
+
+The disk path's median delay was 55.7% lower than the original default, with
+40.1% more whole-worker CPU per change. Disk was not faster than memory. The
+zero-delay control shows that the original's fixed margin accounts for most of
+the latency difference; it does not validate removing that safety margin under
+delayed journal visibility. The legacy default remains unchanged.
+
+At a requested 1,000 changes/second, the writer achieved 769–783, so those runs do
+not establish 1,000-change/second capacity. Median delays were 5.226 s original,
+5.231 s disabled, 2.491 s disk, 2.372 s memory and 0.181 s zero-delay diagnostic.
+CPU/change was 8.9% above the original with the feature disabled and 67.3%
+above it with disk buffering at these slightly different achieved loads. The
+earlier two-repeat 201-change/second comparison found a 62.3% median delay
+reduction and 23.6% CPU increase for disk; these observations must not be combined
+into a single load-independent performance guarantee.
+
+Delay is SQL submission to independent `read_committed` Kafka observation,
+including database/network and Kafka transaction visibility, not sink latency.
+Kafka source transactions used poll boundaries for legacy and connector
+boundaries after enablement. RSS is whole-worker resident memory, not retained
+heap. These are bounded workloads, not maximum throughput, statistical
+equivalence, large-catalog latency or multi-day stability results. The storage
+comparison changes only `truncate.buffer.storage` within the transactional path;
+its memory limits and remaining scratch/history requirements still apply.
 
 The candidate ZIP is
 `c8a28302ff5b8bebf54d7922c40dba9e937842d9dacfaa01d7b3d1727a96cd80`.
 The matched baseline ZIP is
 `46f4010f4c0683a43ad6c3602e881b13d125c8d04de940d250b370bc07c1ef6c`.
-Its original connector and parser jars are unchanged. Its driver override differs
-from the preceding baseline only in manifest metadata; driver classes and resources
-are identical. Shared Debezium and driver dependencies match the candidate; the
-candidate additionally includes history and disk storage. The Kafka image was
-identical across runs. Kafka source transactions used poll boundaries for the
-original/disabled paths and connector boundaries after enablement. See the
-[reproduction method and per-run ranges](dcg-performance-comparison.md#published-build-performance-comparison--2026-11-14).
-Earlier results retain their own artifact identities in the
-[validation report](dcg-validation.md#matched-dependency-performance-comparison).
+See the [per-run results and exact test settings](dcg-performance-comparison.md#matched-reader-and-storage-controls--2026-11-14)
+and the [earlier repeated comparison](dcg-performance-comparison.md#published-build-performance-comparison--2026-11-14).
 
 A separate final-build disk-buffer run completed 20 minutes with three task
 restarts, three receiver rotations during an open clear, and 5,000-row
@@ -142,12 +154,26 @@ an offset-inspector limit; the test-only correction and complete fresh rerun are
 documented in the [endurance evidence](dcg-validation.md#published-build-performance-and-endurance--2026-11-14).
 Independent cleanup confirmed all fixtures and owned local runtimes absent.
 
+A subsequent fresh run completed 3,605.4 seconds without a task restart during
+the timed hour. Its 660 serial-burst rounds produced 99,000 mixed changes;
+116,851 total events passed the independent count, duplicate, rollback and
+clear/reload audit. Timed-quarter median worker RSS was 454.4, 451.8, 452.6 and
+453.7 MiB, with a timed peak of 495.0 MiB. All 120 storage observations reported
+the same 3.125 MiB working file in the same worker process. Thirty-second storage
+samples can miss transient peaks. This is continuous-runtime endurance evidence,
+separate from both the restart test and the paced throughput/latency comparisons;
+it does not establish multi-day stability. See the
+[one-hour validation](dcg-validation.md#one-hour-without-task-restarts--2026-11-14).
+
 ## Verification and review
 
 Full Maven verification at `7587127` passed 5,285 Java test executions (5,029
 connector and 256 parser). The Python
-harness suite passed 153 with the published-build validation harness changes. Assembly,
-formatter and import validation also passed. Bounded packaged native
+harness suite passed 153 with the published-build validation harness changes.
+Later observer/spill-test corrections passed 875 distinct focused Java cases in
+each configured execution, and the larger-profile harness passed 155 Python
+tests. Assembly, formatter and import validation also passed on the matching
+production sources. Bounded packaged native
 runs cover the review's transactional DDL, overlapping clears, catalog churn,
 program-described files, member removal, retained receivers and restart cases.
 Each run retains its own artifact identity; earlier native or performance results
