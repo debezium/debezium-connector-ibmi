@@ -18,6 +18,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -25,6 +26,7 @@ import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.function.Consumer;
 
 import org.apache.kafka.clients.consumer.ConsumerConfig;
+import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.KafkaConsumer;
 import org.apache.kafka.clients.producer.ProducerInterceptor;
 import org.apache.kafka.clients.producer.ProducerRecord;
@@ -356,13 +358,14 @@ public class As400ConnectProbeConnector extends SourceConnector {
             }
             return;
         }
-        if (args.length != 4 || !List.of("read_committed", "read_uncommitted").contains(args[2])) {
-            throw new IllegalArgumentException("bootstrap topic isolation output-json");
+        if ((args.length != 4 && args.length != 5) || !List.of("read_committed", "read_uncommitted").contains(args[2])
+                || args.length == 5 && !args[4].equals("latest-per-key")) {
+            throw new IllegalArgumentException("bootstrap topic isolation output-json [latest-per-key]");
         }
         Map<String, Object> config = Map.of(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, args[0], ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, false,
                 ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class, ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class,
                 ConsumerConfig.ISOLATION_LEVEL_CONFIG, args[2], ConsumerConfig.DEFAULT_API_TIMEOUT_MS_CONFIG, 10000);
-        List<Map<String, Object>> records = new ArrayList<>();
+        SnapshotRows records = new SnapshotRows(args.length == 5);
         try (KafkaConsumer<String, String> consumer = new KafkaConsumer<>(config)) {
             TopicPartition partition = new TopicPartition(args[1], 0);
             consumer.assign(List.of(partition));
@@ -370,22 +373,63 @@ public class As400ConnectProbeConnector extends SourceConnector {
             long end = consumer.endOffsets(List.of(partition)).get(partition);
             long deadline = System.nanoTime() + Duration.ofSeconds(15).toNanos();
             while (consumer.position(partition) < end) {
-                if (System.nanoTime() > deadline || records.size() > 1000) {
+                if (System.nanoTime() > deadline) {
                     throw new IllegalStateException("Snapshot bound exceeded");
                 }
-                consumer.poll(Duration.ofMillis(200)).forEach(record -> {
-                    Map<String, Object> row = new HashMap<>();
-                    row.put("offset", record.offset());
-                    row.put("key", record.key());
-                    row.put("value", record.value());
-                    row.put("timestamp", record.timestamp());
-                    if (record.headers().lastHeader("probe") != null) {
-                        row.put("probe", new String(record.headers().lastHeader("probe").value(), java.nio.charset.StandardCharsets.UTF_8));
-                    }
-                    records.add(row);
-                });
+                consumer.poll(Duration.ofMillis(200)).forEach(record -> records.accept(record, end));
             }
         }
-        JSON.writerWithDefaultPrettyPrinter().writeValue(Path.of(args[3]).toFile(), records);
+        JSON.writerWithDefaultPrettyPrinter().writeValue(Path.of(args[3]).toFile(), records.rows());
+    }
+
+    /** Latest offsets need bounded retained state, not every obsolete offset value. */
+    static final class SnapshotRows {
+        private final boolean latestPerKey;
+        private final Map<Object, Map<String, Object>> records = new LinkedHashMap<>();
+        private long retainedCharacters;
+        private int scanned;
+
+        SnapshotRows(boolean latestPerKey) {
+            this.latestPerKey = latestPerKey;
+        }
+
+        void accept(ConsumerRecord<String, String> record, long end) {
+            if (record.offset() >= end) {
+                return;
+            }
+            if (++scanned > 100_000 || latestPerKey && record.key() == null) {
+                throw new IllegalStateException("Snapshot scan bound or offset key violated");
+            }
+            Object identity = latestPerKey ? record.key() : record.offset();
+            Map<String, Object> previous = records.get(identity);
+            String probe = record.headers().lastHeader("probe") == null ? null
+                    : new String(record.headers().lastHeader("probe").value(), java.nio.charset.StandardCharsets.UTF_8);
+            long characters = retainedCharacters - characters(previous) + length(record.key()) + length(record.value()) + length(probe);
+            if (previous == null && records.size() >= 1000 || characters > 8 * 1024 * 1024) {
+                throw new IllegalStateException("Snapshot retained-state bound exceeded");
+            }
+            Map<String, Object> row = new HashMap<>();
+            row.put("offset", record.offset());
+            row.put("key", record.key());
+            row.put("value", record.value());
+            row.put("timestamp", record.timestamp());
+            if (probe != null) {
+                row.put("probe", probe);
+            }
+            records.put(identity, row);
+            retainedCharacters = characters;
+        }
+
+        List<Map<String, Object>> rows() {
+            return new ArrayList<>(records.values());
+        }
+
+        private static long characters(Map<String, Object> row) {
+            return row == null ? 0 : length((String) row.get("key")) + length((String) row.get("value")) + length((String) row.get("probe"));
+        }
+
+        private static long length(String value) {
+            return value == null ? 0 : value.length();
+        }
     }
 }

@@ -236,8 +236,9 @@ exit 1'''
     def snapshot(self, worker, scenario, label, offsets=False, isolation="read_committed"):
         topic = ("offsets-" if offsets else "events-") + scenario
         file = scenario + "-" + label + ("-offsets" if offsets else "-records") + "-" + isolation + ".json"
+        mode = ["latest-per-key"] if offsets and getattr(self, "latest_offsets", False) else []
         self.command("docker", "exec", worker, "java", "-cp", "/probe/*:/opt/kafka/libs/*", CLASS,
-                     "broker:9092", topic, isolation, "/control/" + file, timeout=35)
+                     "broker:9092", topic, isolation, "/control/" + file, *mode, timeout=35)
         rows = json.loads((self.control / file).read_text())
         for row in rows:
             row["value"] = None if row["value"] is None else json.loads(row["value"])

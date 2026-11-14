@@ -16,9 +16,13 @@ class Experiment(performance.Experiment):
         if self.args.mode != 'transactional':
             raise ValueError('Transaction soak requires transactional mode')
         super().stage()
+        self.latest_offsets = True
+        self.report['offset_observation'] = 'read_committed broker snapshot through a fixed end offset; latest value/tombstone per key, bounded keys/bytes/scan/time'
         self.report['harness_sha256']['tools/dcg-soak-probe.py'] = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
         self.report['soak'] = {'requested_seconds': self.args.duration, 'large_transaction_rows': 5000,
                                'held_clear_minimum_seconds': 60, 'maximum_rows': 150000,
+                               'requested_held_clear_rotations': self.args.held_clear_rotations,
+                               'requested_restarts': self.args.restart_count,
                                'offered_load': 'Serial mixed-column bursts; not a saturation benchmark'}
         self.save()
 
@@ -67,6 +71,7 @@ class Experiment(performance.Experiment):
                 self.write_rows(transaction, 'A', 6000000+i, 250, 'c')
             round_number = 0
             held = None
+            rotations = []
             while time.monotonic()-started < 60:
                 rows = self.measured_rows(writer, 'B', 7000000+round_number*100, 100, 'unrelated-during-clear', round_number)
                 self.check('Unrelated burst progresses within 15 seconds while clear is open',
@@ -78,6 +83,12 @@ class Experiment(performance.Experiment):
                     held = self.row_progress(rows[-1], 'held-clear-progress')
                     self.check('Durable replay floor stays behind completed unrelated output',
                                int(held['replay_from.sequence']) < int(held['completed_through.sequence']), 'control/')
+                if (len(rotations) < self.args.held_clear_rotations
+                        and time.monotonic()-started >= 60 * len(rotations) / self.args.held_clear_rotations):
+                    previous, current = self.fixture.rotate()
+                    rotations.append({'previous': previous, 'current': current, 'held_seconds': time.monotonic()-started})
+                    self.report['soak']['receiver_rotations'] = rotations
+                    self.save()
                 round_number += 1
                 if round_number > 60:
                     raise RuntimeError('Held-clear workload bound exceeded')
@@ -98,6 +109,8 @@ class Experiment(performance.Experiment):
                        int(completed['replay_from.sequence']) > int(held['replay_from.sequence']), 'control/')
             self.report['soak'].update(held_clear_seconds=held_seconds, unrelated_bursts=round_number,
                                        held_checkpoint=held, completed_checkpoint=completed)
+            self.check('Requested receiver rotations completed while the clear remained open',
+                       len(rotations) == self.args.held_clear_rotations, '../native/native/receivers-before-cleanup.json')
         finally:
             self.close_session(transaction)
 
@@ -108,38 +121,43 @@ class Experiment(performance.Experiment):
         started = time.monotonic()
         self.report['soak']['started_ms'] = time.time_ns()/1e6
         round_number = 0
-        restarted = False
+        restarts = []
         while time.monotonic()-started < self.args.duration:
             first = 8000000+round_number*1000
             self.burst(writer, 'A', first, 'c', 1000+round_number)
             self.burst(writer, 'M', first, 'c', 1000+round_number)
             self.burst(writer, 'M', first, 'u', 1000+round_number)
-            if not restarted and time.monotonic()-started >= self.args.duration/2:
+            if (len(restarts) < self.args.restart_count
+                    and time.monotonic()-started >= self.args.duration * (len(restarts)+1) / (self.args.restart_count+1)):
                 self.stop_connector(worker)
-                saved = self.checkpoint(self.observer_container, 'automatic', 'soak-before-restart')
-                history = self.records(self.observer_container, 'bindings-automatic', 'soak-history-before')
+                restart_number = len(restarts)+1
+                label = 'soak-restart-' + str(restart_number)
+                saved = self.checkpoint(self.observer_container, 'automatic', label + '-before')
+                history = self.records(self.observer_container, 'bindings-automatic', label + '-history-before')
                 self.request(worker, 'automatic', 'PUT', '/resume')
-                rows = self.measured_rows(writer, 'B', 7500000, 100, 'soak-restart-progress', 0)
-                recovered = self.row_progress(rows[-1], 'soak-recovered')
-                self.check('Soak restart preserves history and durable F/W progress',
-                           history == self.records(self.observer_container, 'bindings-automatic', 'soak-history-after')
+                rows = self.measured_rows(writer, 'B', 7500000 + (restart_number-1)*100, 100, 'soak-restart-progress', restart_number)
+                recovered = self.row_progress(rows[-1], label + '-recovered')
+                self.check('Soak restart ' + str(restart_number) + ' preserves history and durable F/W progress',
+                           history == self.records(self.observer_container, 'bindings-automatic', label + '-history-after')
                            and int(recovered['completed_through.sequence']) >= int(saved['completed_through.sequence'])
                            and int(recovered['replay_from.sequence']) >= int(saved['replay_from.sequence']), 'control/')
-                self.report['soak']['restart'] = {'before': saved, 'after': recovered}
-                restarted = True
+                restarts.append({'before': saved, 'after': recovered})
+                self.report['soak']['restarts'] = restarts
             round_number += 1
             if sum(m['rows'] for m in self.measurements)+getattr(self,'additional_events',0) > 145000:
                 raise RuntimeError('Soak record bound exceeded')
         self.report['soak'].update(finished_ms=time.time_ns()/1e6, elapsed_seconds=time.monotonic()-started,
-                                   rounds=round_number, task_restarted=restarted)
-        self.check('Sustained workload ran for the requested duration with a real task restart',
-                   restarted and time.monotonic()-started >= self.args.duration, 'report.json')
+                                   rounds=round_number, task_restarted=bool(restarts))
+        self.check('Sustained workload ran for the requested duration with every requested task restart',
+                   len(restarts) == self.args.restart_count and time.monotonic()-started >= self.args.duration, 'report.json')
         self.save()
 
 
 def configure(parser):
     parser.set_defaults(mode='transactional')
     parser.add_argument('--duration', type=int, choices=[600,900,1200], default=900)
+    parser.add_argument('--held-clear-rotations', type=int, choices=[0,1,3], default=3)
+    parser.add_argument('--restart-count', type=int, choices=[1,3], default=3)
 
 
 if __name__ == '__main__':

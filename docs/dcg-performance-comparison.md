@@ -593,3 +593,49 @@ repetitions do not establish statistical equivalence, large-catalog or
 long-transaction behavior, maximum capacity or multi-day stability. These runs
 exercise ordinary row traffic; they do not remeasure the memory-buffer profile
 or schema-change latency. Earlier results retain their own artifact scope.
+
+## Published-build performance comparison — 2026-11-14
+
+The published `96a395a` artifact passed six serial runs in forward/reverse order:
+original, feature disabled, disk buffer, disk buffer, feature disabled, original.
+Each used a fresh native fixture, two warm-up rounds and 120 seconds of paced
+writes. All 144,000 measured changes (24,000 per run) passed exact key, mixed-value,
+update-before-image and final-count checks. Offered rates were 200.75–200.77
+changes/second. Each run's native fixture, session and local Kafka cleanup passed.
+
+| Profile | Run median-delay range | Median p95 delay | CPU ms/change range | Median CPU vs. original | Peak worker RSS range |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Original connector | 5.123–5.124 s | 5.193 s | 0.729–0.744 | Baseline | 412.1–435.6 MiB |
+| Candidate, feature disabled | 5.129–5.131 s | 5.197 s | 0.760–0.766 | +3.6% | 408.9–471.6 MiB |
+| Candidate, disk buffer | 1.933–1.935 s | 2.688 s | 0.907–0.914 | +23.6% | 440.7–482.4 MiB |
+
+Medians of the two run medians were 5.124 s, 5.130 s and 1.934 s respectively.
+The disabled path's median delay increased 0.12%; enabled delay decreased 62.3%.
+All profiles sustained the offered rate. The enabled path costs more CPU per
+change; this is not a claim of unchanged resource cost or maximum throughput.
+RSS is resident memory for the whole worker JVM, not retained Java heap. The
+two-run ranges do not establish memory equivalence or leak freedom.
+
+The original connector/parser remain at `2e19ad27`. Shared Debezium and driver
+JARs match the candidate; preparing the baseline changed only driver-override
+manifest metadata, not its classes or resources. All runs used the same pinned
+Kafka 4.3.1 image, WARN conversion mode and inherited worker defaults. Kafka
+source transactions were enabled: the original and disabled paths used poll
+boundaries, and the enabled path used connector boundaries. This is a distributed
+Connect comparison, not an Embedded Engine or Debezium Server benchmark.
+No coordinated build, test suite or other native experiment overlapped timing;
+the host and database remain shared.
+
+Exact plugin SHA-256 identities:
+
+- Original with matched dependencies:
+  `46f4010f4c0683a43ad6c3602e881b13d125c8d04de940d250b370bc07c1ef6c`.
+- Published candidate, embedded source revision `96a395a`:
+  `c8a28302ff5b8bebf54d7922c40dba9e937842d9dacfaa01d7b3d1727a96cd80`.
+
+Use the [sustained reproduction commands](#fourth-review-correction-comparison--2026-11-13)
+with `--seconds 120` and these artifacts. Delay measures SQL submission to
+independent Kafka observation, not source commit time; p95 is the median of the
+run-level p95 values. These short repetitions do not establish statistical
+equivalence, saturation capacity, large-catalog behavior or multi-day stability.
+The matrix does not remeasure the memory-buffer profile or schema-change latency.
