@@ -54,8 +54,10 @@ control completion. A LAST row carries a pending offset, never early F/W.
   the current attachment, including W and immutable binding history. No sequence
   reset, replacement, forced receiver deletion, uncoordinated DDL or journaling
   changes. The collector follows exact reciprocal links; names do not define order.
-  At most 128 required receivers may be spanned at once. Retired receivers before
-  F do not impose a lifetime rotation limit. This does not authorize their deletion.
+  The observed native receiver count bounds discovery and exact linked traversal;
+  there is no fixed 128-receiver ceiling. Receiver metadata uses memory proportional
+  to the required directory or chain. Retired receivers before F do not impose a
+  lifetime rotation limit. This does not authorize their deletion.
   Task-owned native journal observations also require
   `JOURNAL_INFO.DELETE_RECEIVER_OPTION=NO`; automatic deletion does not track F/W.
   Manual receiver deletion remains an operator responsibility.
@@ -124,8 +126,9 @@ values were exercised with the complete worker settings retained in the reports,
 including `exactly.once.source.support=enabled` and a policy allowing the declared
 client overrides. The task can verify the public transactional context, but cannot
 inspect every worker setting through `SourceTaskContext`; operators must verify
-the worker configuration. See the [validation scope](dcg-contributor-testing.md)
-and the [validation scope](dcg-validation.md). A new timeout,
+the worker configuration. The [timeout-profile runner](../tools/dcg-timeout-profile-probe.py)
+defines the corrected worker settings; [contributor testing](dcg-contributor-testing.md)
+describes the retained failing control. A new timeout,
 broker topology, transport or worker version requires deployment qualification;
 these local values are not a universal recovery SLA.
 
@@ -137,9 +140,9 @@ validation observed this wait beyond 100 seconds and automatic recovery within
 the experiment's 240-second membership budget. A healthy REST endpoint alone
 does not mean the worker has joined or the task has resumed. Account for the
 configured transaction timeout in startup monitoring; do not reset offsets or
-relax committed reads to bypass it. See the [validation scope](dcg-validation.md)
-for the measured intervals and the distinction between the controlled local
-reproduction and the retained earlier native timeout.
+relax committed reads to bypass it. The [timeout-profile runner](../tools/dcg-timeout-profile-probe.py)
+reproduces this controlled local recovery case; it does not add native IBM i
+qualification.
 
 The [connector configuration template](examples/dcg-connector.json) uses placeholders;
 its source TLS setting must match a qualified server/trust configuration. Supply

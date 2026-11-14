@@ -122,6 +122,10 @@ installed driver; the default is `IBM i Access ODBC Driver`. Set
 `IBMI_TEST_CONFIG` to the file. The runner refuses symlinks, permissive modes,
 implicit server selection and missing write opt-in.
 
+Native runners also require Python assertions to remain enabled. They reject
+`-O`, `-OO` and `PYTHONOPTIMIZE` before reading the connection configuration;
+optimization would remove fixture identity and cleanup checks.
+
 Live runners have no built-in host or private credentials. They create their own
 schemas, tables, journals and sample rows on the supplied system; they do not
 depend on existing application data. Recorded native qualification used IBM i
