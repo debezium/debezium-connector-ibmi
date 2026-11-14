@@ -1,0 +1,259 @@
+{
+  "provenance": "Captured classic RGZPFM ALWCANCEL(*NO) after deleting a row from an isolated keyed file. No startup or retention proof.",
+  "sanitization": "Header job/user/program/system labels replaced; payload, JIDs, receiver and sequence retained.",
+  "startup_proof": false,
+  "library": "DCNC9985",
+  "receiver": "QSQJRN0002",
+  "bindings": [
+    {
+      "type": "CREATE",
+      "id": "\"DCNC9985\".\"A\"",
+      "table": {
+        "defaultCharsetName": null,
+        "comment": null,
+        "primaryKeyColumnNames": [
+          "ID"
+        ],
+        "columns": [
+          {
+            "name": "ID",
+            "jdbcType": 4,
+            "typeName": "INTEGER",
+            "typeExpression": "INTEGER",
+            "charsetName": null,
+            "length": 4,
+            "scale": 0,
+            "position": 1,
+            "optional": false,
+            "autoIncremented": false,
+            "generated": false,
+            "comment": null,
+            "hasDefaultValue": false,
+            "enumValues": []
+          }
+        ],
+        "attributes": [
+          {
+            "name": "ibmi.binding.codec.0",
+            "value": "BIN4:4:0:0"
+          },
+          {
+            "name": "ibmi.binding.file",
+            "value": "A"
+          },
+          {
+            "name": "ibmi.binding.file.jid",
+            "value": "e9400003099c66ab0003"
+          },
+          {
+            "name": "ibmi.binding.format",
+            "value": "A:29087D5938DDA:4:1:false"
+          },
+          {
+            "name": "ibmi.binding.member",
+            "value": "A"
+          },
+          {
+            "name": "ibmi.binding.member.jid",
+            "value": "e9400003099c66ab0004"
+          },
+          {
+            "name": "ibmi.binding.version",
+            "value": "1"
+          }
+        ]
+      }
+    },
+    {
+      "type": "CREATE",
+      "id": "\"DCNC9985\".\"B\"",
+      "table": {
+        "defaultCharsetName": null,
+        "comment": null,
+        "primaryKeyColumnNames": [
+          "ID"
+        ],
+        "columns": [
+          {
+            "name": "ID",
+            "jdbcType": 4,
+            "typeName": "INTEGER",
+            "typeExpression": "INTEGER",
+            "charsetName": null,
+            "length": 4,
+            "scale": 0,
+            "position": 1,
+            "optional": false,
+            "autoIncremented": false,
+            "generated": false,
+            "comment": null,
+            "hasDefaultValue": false,
+            "enumValues": []
+          }
+        ],
+        "attributes": [
+          {
+            "name": "ibmi.binding.codec.0",
+            "value": "BIN4:4:0:0"
+          },
+          {
+            "name": "ibmi.binding.file",
+            "value": "B"
+          },
+          {
+            "name": "ibmi.binding.file.jid",
+            "value": "e9400003099c66ab0005"
+          },
+          {
+            "name": "ibmi.binding.format",
+            "value": "B:29187D5938DDA:4:1:false"
+          },
+          {
+            "name": "ibmi.binding.member",
+            "value": "B"
+          },
+          {
+            "name": "ibmi.binding.member.jid",
+            "value": "e9400003099c66ab0006"
+          },
+          {
+            "name": "ibmi.binding.version",
+            "value": "1"
+          }
+        ]
+      }
+    },
+    {
+      "type": "CREATE",
+      "id": "\"DCNC9985\".\"M\"",
+      "table": {
+        "defaultCharsetName": null,
+        "comment": null,
+        "primaryKeyColumnNames": [
+          "ID"
+        ],
+        "columns": [
+          {
+            "name": "ID",
+            "jdbcType": 4,
+            "typeName": "INTEGER",
+            "typeExpression": "INTEGER",
+            "charsetName": null,
+            "length": 4,
+            "scale": 0,
+            "position": 1,
+            "optional": false,
+            "autoIncremented": false,
+            "generated": false,
+            "comment": null,
+            "hasDefaultValue": false,
+            "enumValues": []
+          }
+        ],
+        "attributes": [
+          {
+            "name": "ibmi.binding.codec.0",
+            "value": "BIN4:4:0:0"
+          },
+          {
+            "name": "ibmi.binding.file",
+            "value": "M"
+          },
+          {
+            "name": "ibmi.binding.file.jid",
+            "value": "e9400003099c66ab0007"
+          },
+          {
+            "name": "ibmi.binding.format",
+            "value": "M:2A387D5938DDA:4:1:false"
+          },
+          {
+            "name": "ibmi.binding.member",
+            "value": "M"
+          },
+          {
+            "name": "ibmi.binding.member.jid",
+            "value": "e9400003099c66ab0008"
+          },
+          {
+            "name": "ibmi.binding.version",
+            "value": "1"
+          }
+        ]
+      }
+    },
+    {
+      "type": "CREATE",
+      "id": "\"DCNC9985\".\"U\"",
+      "table": {
+        "defaultCharsetName": null,
+        "comment": null,
+        "primaryKeyColumnNames": [
+          "ID"
+        ],
+        "columns": [
+          {
+            "name": "ID",
+            "jdbcType": 4,
+            "typeName": "INTEGER",
+            "typeExpression": "INTEGER",
+            "charsetName": null,
+            "length": 4,
+            "scale": 0,
+            "position": 1,
+            "optional": false,
+            "autoIncremented": false,
+            "generated": false,
+            "comment": null,
+            "hasDefaultValue": false,
+            "enumValues": []
+          }
+        ],
+        "attributes": [
+          {
+            "name": "ibmi.binding.codec.0",
+            "value": "BIN4:4:0:0"
+          },
+          {
+            "name": "ibmi.binding.file",
+            "value": "U"
+          },
+          {
+            "name": "ibmi.binding.file.jid",
+            "value": "e9400003099c66ab0009"
+          },
+          {
+            "name": "ibmi.binding.format",
+            "value": "U:2B387D5938DDA:4:1:false"
+          },
+          {
+            "name": "ibmi.binding.member",
+            "value": "U"
+          },
+          {
+            "name": "ibmi.binding.member.jid",
+            "value": "e9400003099c66ab000a"
+          },
+          {
+            "name": "ibmi.binding.version",
+            "value": "1"
+          }
+        ]
+      }
+    }
+  ],
+  "entries": [
+    {
+      "type": "F/RG",
+      "sequence": "447",
+      "hex": "00000000000000ec000000f000000000000000000000000000000000000001bfb02f574eca5a0000000000000000001a0000000000000000000000000000000000000000000000000000000000000003000000000000000000000000000000000000c6d9c7e3c5e2e3d1d6c2404040e3c5e2e3e4e2c5d94040f8f0f0f1f0f2e3c5e2e3d7c7d44040405cd6d4c9e3e3c5c440405cd6d4c9e3e3c5c44040c1404040404040404040c4c3d5c3f9f9f8f54040c1404040404040404040e3c5e2e3e4e2c5d94040e9400003099c66ab0004f0e3c5e2e340404040f0f1005cd8c4c4e240404040400000000000000000000000f0f0f0f0f00000000000000000000000",
+      "sha256": "2e6ff9ac8f1214a5cd10bbcb6c93d44f97db7a8f2bda7721e3e12022d43f54b4"
+    },
+    {
+      "type": "F/RM",
+      "sequence": "449",
+      "hex": "00000000000000ec000000f000000000000000000000000000000000000001c1b02f574ecaf40000000000000000001a0000000000000000000000000000000000000000000000000000000000000004000000000000000000000000000000000000c6d9d4e3c5e2e3d1d6c2404040e3c5e2e3e4e2c5d94040f8f0f0f1f0f2e3c5e2e3d7c7d44040405cd6d4c9e3e3c5c440405cd6d4c9e3e3c5c44040c1404040404040404040c4c3d5c3f9f9f8f54040c1404040404040404040e3c5e2e3e4e2c5d94040e9400003099c66ab0004f0e3c5e2e340404040f0f1005cd8c4c4e240404040400000000000000000000000f0f0f3f1f20000000000000000000000c1404040404040404040c4c3d5c3f9f9f8f54040c1404040404040404040404040404040404040404040404040404040404040404040404040404040000000d000000068000000d0000000680000000000000000000000000000f0f040f1f2f6f1f1f1f1f0f2f0f8f3f70000c5000000000000000000000000000000d7c64040404040404040000000000000000000f0e9400003099c66ab0004f0f000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000d9c7e9d7c6d440c6c9d3c54dc4c3d5c3f9f9f8f561c15d40d4c2d94dc15d40d2c5e8c6c9d3c54d5cd5d6d5c55d40c1d3e6c3c1d5c3c5d34d5cd5d65d40c6d9d6d4d9c3c44d5ce2e3c1d9e35d40d9c2c4c1c3c3d7e3c84d5ce8c5e25d40d3d6c3d24d5cc5e7c3d35d",
+      "sha256": "75e43541700ecdd1edd7b4099fd631ee0a23aed4152787db87bc9b294f87dd14"
+    }
+  ]
+}

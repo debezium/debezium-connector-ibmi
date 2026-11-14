@@ -5,26 +5,44 @@
  */
 package io.debezium.connector.db2as400;
 
-import org.assertj.core.api.Assertions;
+import static org.assertj.core.api.Assertions.assertThat;
+
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+
 import org.junit.jupiter.api.Test;
 
-public class WatchDogTest {
-    private WatchDog createTestSubject() {
-        return new WatchDog(Thread.currentThread(), 10);
-    }
-
+class WatchDogTest {
     @Test
-    public void testRun() throws Exception {
-        final WatchDog testSubject = createTestSubject();
-        testSubject.start();
-        Exception thrown = null;
+    void shouldInterruptBlockedWorkerWhenUpdatesStop() throws Exception {
+        var ready = new CountDownLatch(1);
+        var interrupted = new CountDownLatch(1);
+        var worker = new Thread(() -> {
+            ready.countDown();
+            try {
+                new CountDownLatch(1).await();
+            }
+            catch (InterruptedException expected) {
+                interrupted.countDown();
+            }
+        }, "watchdog-test-worker");
+        var watchdog = new WatchDog(worker, 10);
+        var monitor = new Thread(watchdog, "watchdog-test-monitor");
+        worker.setDaemon(true);
+        monitor.setDaemon(true);
         try {
-            Thread.sleep(200);
+            worker.start();
+            assertThat(ready.await(5, TimeUnit.SECONDS)).isTrue();
+            monitor.start();
+            assertThat(interrupted.await(5, TimeUnit.SECONDS)).isTrue();
         }
-        catch (final Exception e) {
-            thrown = e;
+        finally {
+            watchdog.stop();
+            worker.interrupt();
+            monitor.join(5000);
+            worker.join(5000);
         }
-        Assertions.assertThat(thrown).isInstanceOf(InterruptedException.class);
-        testSubject.stop();
+        assertThat(monitor.isAlive()).isFalse();
+        assertThat(worker.isAlive()).isFalse();
     }
 }

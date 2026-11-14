@@ -1,0 +1,12 @@
+{
+  "scope": "Controlled native acquired single INT NOT NULL primary-key layout; not startup/history proof",
+  "tables": [
+    {
+      "library": "DCNC0919",
+      "file": "B",
+      "member": "B",
+      "fileJournalId": "e9400019fd9515ee0005",
+      "memberJournalId": "e9400019fd9515ee0006"
+    }
+  ]
+}

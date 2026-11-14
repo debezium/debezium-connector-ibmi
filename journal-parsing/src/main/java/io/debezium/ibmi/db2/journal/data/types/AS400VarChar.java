@@ -53,6 +53,11 @@ public class AS400VarChar implements AS400DataType {
         return maxLenght + 2;
     }
 
+    /** Unit of the native length prefix; character bytes or double-byte graphic units. */
+    public int getBytesPerChar() {
+        return bytesPerChar;
+    }
+
     @Override
     public Object getDefaultValue() {
         return defaultValue;

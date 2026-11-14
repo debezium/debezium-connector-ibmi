@@ -1,0 +1,622 @@
+{
+  "startup_proof": false,
+  "sanitization": "Native transactional DROP followed by full rollback, then a different file DROP followed by commit and physical deletion. Library, JIDs and producer fields replaced consistently; opaque object apply data zeroed except documented creation metadata. No server or credential information retained.",
+  "cleanup": {
+    "status": "passed"
+  },
+  "before": {
+    "tables": [
+      {
+        "type": "CREATE",
+        "id": "\"DCNC0004\".\"A\"",
+        "table": {
+          "defaultCharsetName": null,
+          "comment": null,
+          "primaryKeyColumnNames": [
+            "ID"
+          ],
+          "columns": [
+            {
+              "name": "ID",
+              "jdbcType": 4,
+              "typeName": "INTEGER",
+              "typeExpression": "INTEGER",
+              "charsetName": null,
+              "length": 10,
+              "scale": 0,
+              "position": 1,
+              "optional": false,
+              "autoIncremented": false,
+              "generated": false,
+              "comment": null,
+              "hasDefaultValue": false,
+              "enumValues": []
+            }
+          ],
+          "attributes": [
+            {
+              "name": "ibmi.binding.codec.0",
+              "value": "BIN4:4:0:0"
+            },
+            {
+              "name": "ibmi.binding.file",
+              "value": "A"
+            },
+            {
+              "name": "ibmi.binding.file.jid",
+              "value": "00000000000000000001"
+            },
+            {
+              "name": "ibmi.binding.format",
+              "value": "A:29087D5938DDA:4:1:false"
+            },
+            {
+              "name": "ibmi.binding.member",
+              "value": "A"
+            },
+            {
+              "name": "ibmi.binding.member.jid",
+              "value": "00000000000000000002"
+            },
+            {
+              "name": "ibmi.binding.version",
+              "value": "1"
+            }
+          ]
+        }
+      },
+      {
+        "type": "CREATE",
+        "id": "\"DCNC0004\".\"B\"",
+        "table": {
+          "defaultCharsetName": null,
+          "comment": null,
+          "primaryKeyColumnNames": [
+            "ID"
+          ],
+          "columns": [
+            {
+              "name": "ID",
+              "jdbcType": 4,
+              "typeName": "INTEGER",
+              "typeExpression": "INTEGER",
+              "charsetName": null,
+              "length": 10,
+              "scale": 0,
+              "position": 1,
+              "optional": false,
+              "autoIncremented": false,
+              "generated": false,
+              "comment": null,
+              "hasDefaultValue": false,
+              "enumValues": []
+            }
+          ],
+          "attributes": [
+            {
+              "name": "ibmi.binding.codec.0",
+              "value": "BIN4:4:0:0"
+            },
+            {
+              "name": "ibmi.binding.file",
+              "value": "B"
+            },
+            {
+              "name": "ibmi.binding.file.jid",
+              "value": "00000000000000000003"
+            },
+            {
+              "name": "ibmi.binding.format",
+              "value": "B:29187D5938DDA:4:1:false"
+            },
+            {
+              "name": "ibmi.binding.member",
+              "value": "B"
+            },
+            {
+              "name": "ibmi.binding.member.jid",
+              "value": "00000000000000000004"
+            },
+            {
+              "name": "ibmi.binding.version",
+              "value": "1"
+            }
+          ]
+        }
+      },
+      {
+        "type": "CREATE",
+        "id": "\"DCNC0004\".\"M\"",
+        "table": {
+          "defaultCharsetName": null,
+          "comment": null,
+          "primaryKeyColumnNames": [
+            "ID"
+          ],
+          "columns": [
+            {
+              "name": "ID",
+              "jdbcType": 4,
+              "typeName": "INTEGER",
+              "typeExpression": "INTEGER",
+              "charsetName": null,
+              "length": 10,
+              "scale": 0,
+              "position": 1,
+              "optional": false,
+              "autoIncremented": false,
+              "generated": false,
+              "comment": null,
+              "hasDefaultValue": false,
+              "enumValues": []
+            }
+          ],
+          "attributes": [
+            {
+              "name": "ibmi.binding.codec.0",
+              "value": "BIN4:4:0:0"
+            },
+            {
+              "name": "ibmi.binding.file",
+              "value": "M"
+            },
+            {
+              "name": "ibmi.binding.file.jid",
+              "value": "00000000000000000005"
+            },
+            {
+              "name": "ibmi.binding.format",
+              "value": "M:2A387D5938DDA:4:1:false"
+            },
+            {
+              "name": "ibmi.binding.member",
+              "value": "M"
+            },
+            {
+              "name": "ibmi.binding.member.jid",
+              "value": "00000000000000000006"
+            },
+            {
+              "name": "ibmi.binding.version",
+              "value": "1"
+            }
+          ]
+        }
+      },
+      {
+        "type": "CREATE",
+        "id": "\"DCNC0004\".\"U\"",
+        "table": {
+          "defaultCharsetName": null,
+          "comment": null,
+          "primaryKeyColumnNames": [
+            "ID"
+          ],
+          "columns": [
+            {
+              "name": "ID",
+              "jdbcType": 4,
+              "typeName": "INTEGER",
+              "typeExpression": "INTEGER",
+              "charsetName": null,
+              "length": 10,
+              "scale": 0,
+              "position": 1,
+              "optional": false,
+              "autoIncremented": false,
+              "generated": false,
+              "comment": null,
+              "hasDefaultValue": false,
+              "enumValues": []
+            }
+          ],
+          "attributes": [
+            {
+              "name": "ibmi.binding.codec.0",
+              "value": "BIN4:4:0:0"
+            },
+            {
+              "name": "ibmi.binding.file",
+              "value": "U"
+            },
+            {
+              "name": "ibmi.binding.file.jid",
+              "value": "00000000000000000007"
+            },
+            {
+              "name": "ibmi.binding.format",
+              "value": "U:2B387D5938DDA:4:1:false"
+            },
+            {
+              "name": "ibmi.binding.member",
+              "value": "U"
+            },
+            {
+              "name": "ibmi.binding.member.jid",
+              "value": "00000000000000000008"
+            },
+            {
+              "name": "ibmi.binding.version",
+              "value": "1"
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "after": {
+    "tables": [
+      {
+        "type": "CREATE",
+        "id": "\"DCNC0004\".\"A\"",
+        "table": {
+          "defaultCharsetName": null,
+          "comment": null,
+          "primaryKeyColumnNames": [
+            "ID"
+          ],
+          "columns": [
+            {
+              "name": "ID",
+              "jdbcType": 4,
+              "typeName": "INTEGER",
+              "typeExpression": "INTEGER",
+              "charsetName": null,
+              "length": 10,
+              "scale": 0,
+              "position": 1,
+              "optional": false,
+              "autoIncremented": false,
+              "generated": false,
+              "comment": null,
+              "hasDefaultValue": false,
+              "enumValues": []
+            }
+          ],
+          "attributes": [
+            {
+              "name": "ibmi.binding.codec.0",
+              "value": "BIN4:4:0:0"
+            },
+            {
+              "name": "ibmi.binding.file",
+              "value": "A"
+            },
+            {
+              "name": "ibmi.binding.file.jid",
+              "value": "00000000000000000001"
+            },
+            {
+              "name": "ibmi.binding.format",
+              "value": "A:29087D5938DDA:4:1:false"
+            },
+            {
+              "name": "ibmi.binding.member",
+              "value": "A"
+            },
+            {
+              "name": "ibmi.binding.member.jid",
+              "value": "00000000000000000002"
+            },
+            {
+              "name": "ibmi.binding.version",
+              "value": "1"
+            }
+          ]
+        }
+      },
+      {
+        "type": "CREATE",
+        "id": "\"DCNC0004\".\"B\"",
+        "table": {
+          "defaultCharsetName": null,
+          "comment": null,
+          "primaryKeyColumnNames": [
+            "ID"
+          ],
+          "columns": [
+            {
+              "name": "ID",
+              "jdbcType": 4,
+              "typeName": "INTEGER",
+              "typeExpression": "INTEGER",
+              "charsetName": null,
+              "length": 10,
+              "scale": 0,
+              "position": 1,
+              "optional": false,
+              "autoIncremented": false,
+              "generated": false,
+              "comment": null,
+              "hasDefaultValue": false,
+              "enumValues": []
+            }
+          ],
+          "attributes": [
+            {
+              "name": "ibmi.binding.codec.0",
+              "value": "BIN4:4:0:0"
+            },
+            {
+              "name": "ibmi.binding.file",
+              "value": "B"
+            },
+            {
+              "name": "ibmi.binding.file.jid",
+              "value": "00000000000000000003"
+            },
+            {
+              "name": "ibmi.binding.format",
+              "value": "B:29187D5938DDA:4:1:false"
+            },
+            {
+              "name": "ibmi.binding.member",
+              "value": "B"
+            },
+            {
+              "name": "ibmi.binding.member.jid",
+              "value": "00000000000000000004"
+            },
+            {
+              "name": "ibmi.binding.version",
+              "value": "1"
+            }
+          ]
+        }
+      },
+      {
+        "type": "CREATE",
+        "id": "\"DCNC0004\".\"M\"",
+        "table": {
+          "defaultCharsetName": null,
+          "comment": null,
+          "primaryKeyColumnNames": [
+            "ID"
+          ],
+          "columns": [
+            {
+              "name": "ID",
+              "jdbcType": 4,
+              "typeName": "INTEGER",
+              "typeExpression": "INTEGER",
+              "charsetName": null,
+              "length": 10,
+              "scale": 0,
+              "position": 1,
+              "optional": false,
+              "autoIncremented": false,
+              "generated": false,
+              "comment": null,
+              "hasDefaultValue": false,
+              "enumValues": []
+            }
+          ],
+          "attributes": [
+            {
+              "name": "ibmi.binding.codec.0",
+              "value": "BIN4:4:0:0"
+            },
+            {
+              "name": "ibmi.binding.file",
+              "value": "M"
+            },
+            {
+              "name": "ibmi.binding.file.jid",
+              "value": "00000000000000000005"
+            },
+            {
+              "name": "ibmi.binding.format",
+              "value": "M:2A387D5938DDA:4:1:false"
+            },
+            {
+              "name": "ibmi.binding.member",
+              "value": "M"
+            },
+            {
+              "name": "ibmi.binding.member.jid",
+              "value": "00000000000000000006"
+            },
+            {
+              "name": "ibmi.binding.version",
+              "value": "1"
+            }
+          ]
+        }
+      },
+      {
+        "type": "CREATE",
+        "id": "\"DCNC0004\".\"U\"",
+        "table": {
+          "defaultCharsetName": null,
+          "comment": null,
+          "primaryKeyColumnNames": [
+            "ID"
+          ],
+          "columns": [
+            {
+              "name": "ID",
+              "jdbcType": 4,
+              "typeName": "INTEGER",
+              "typeExpression": "INTEGER",
+              "charsetName": null,
+              "length": 10,
+              "scale": 0,
+              "position": 1,
+              "optional": false,
+              "autoIncremented": false,
+              "generated": false,
+              "comment": null,
+              "hasDefaultValue": false,
+              "enumValues": []
+            }
+          ],
+          "attributes": [
+            {
+              "name": "ibmi.binding.codec.0",
+              "value": "BIN4:4:0:0"
+            },
+            {
+              "name": "ibmi.binding.file",
+              "value": "U"
+            },
+            {
+              "name": "ibmi.binding.file.jid",
+              "value": "00000000000000000007"
+            },
+            {
+              "name": "ibmi.binding.format",
+              "value": "U:2B387D5938DDA:4:1:false"
+            },
+            {
+              "name": "ibmi.binding.member",
+              "value": "U"
+            },
+            {
+              "name": "ibmi.binding.member.jid",
+              "value": "00000000000000000008"
+            },
+            {
+              "name": "ibmi.binding.version",
+              "value": "1"
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "entries": [
+    {
+      "type": "R/PT",
+      "position": {
+        "library": "DCNC0004",
+        "receiver": "QSQJRN0002",
+        "sequence": "44"
+      },
+      "raw": "AAAAAAAAAQwAAAEQAAAAAAAAAAAAAADsAAAAAAAAACywMYnWHTcAAAAAAAAAAADMAAAAAAAAAAAAAAAAAAAAAwAAAAAAAAAAAAAAAAAAAAMAAAAAAAAAAAAAAAAAAAAAAADZ1+PjxeLj0dbCQEBA48Xi4+TixdlAQPDw8PDw8ePF4uPXx9RAQEDjxeLj08nCQEBAXNbUyePjxcRAQORAQEBAQEBAQEDEw9XD8PDw9EBA5EBAQEBAQEBAQOPF4uPk4sXZQEAAAAAAAAAAAAAI8OPF4uNAQEBA8PEAXNjExOJAQEBAQAAAAAAAAADY4tjR2dXw8PDyxMPVw/Dw8PRAQFzi6OLCweJAQEAAAQAAAADw8PDw9AAAAAAAAAAAAAAAAAAAAwAAAAAAAAAAAAAAAA==",
+      "sha256": "8a624ea2efd5ddbe1685ede32e1bec76291c46da84870744d11feb57a9858905"
+    },
+    {
+      "type": "C/BC",
+      "position": {
+        "library": "DCNC0004",
+        "receiver": "QSQJRN0002",
+        "sequence": "45"
+      },
+      "raw": "AAAAAAAAAOwAAADwAAAAAAAAAAAAAAAAAAAAAAAAAC2wMYnjqIwAAAAAAAAAAADMAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAADDwsPjxeLj0dbCQEBA48Xi4+TixdlAQPDw8PDw8ePF4uPXx9RAQEDjxeLj08nCQEBAXNbUyePjxcRAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQOPF4uPk4sXZQEAAAAAAAAAAAAAA8OPF4uNAQEBA8PAAQEBAQEBAQEBAQAAAAAAAAAAAAAAA8PDw8PAAAAAAAAAAAAAAAA==",
+      "sha256": "46789f4f3f66995f114ad2ccf3700090ec14e62d202f58a2aeaa8a4ddc405d00"
+    },
+    {
+      "type": "C/SC",
+      "position": {
+        "library": "DCNC0004",
+        "receiver": "QSQJRN0002",
+        "sequence": "46"
+      },
+      "raw": "AAAAAAAAAOwAAADwAAAAAAAAAAAAAAAAAAAAAAAAAC6wMYnjsiMAAAAAAAAAAADMAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAuAAAAAAAAAAUAAAAAAAAAAAAAAAAAAAAAAADD4sPjxeLj0dbCQEBA48Xi4+TixdlAQPDw8PDw8ePF4uPXx9RAQEDjxeLj08nCQEBAXNbUyePjxcRAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQOPF4uPk4sXZQEAAAAAAAAAAAAAA8OPF4uNAQEBA8PAAQEBAQEBAQEBAQAAAAAAAAAAAAAAA8PDw8PAAAAAAAAAAAAAAAA==",
+      "sha256": "e5f1677eb71bc6438edd80add9827c89b80b8bb75cf517c47dcb31e87354fa61"
+    },
+    {
+      "type": "D/DT",
+      "position": {
+        "library": "DCNC0004",
+        "receiver": "QSQJRN0002",
+        "sequence": "47"
+      },
+      "raw": "AAAAAAAAAOwAAADwAAAAAAAAAAAAAAAAAAAAAAAAAC+wMYnjsiYAAAAAAAAAAADMAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAuAAAAAAAAAAUAAAAAAAAAAAAAAAAAAAAAAADExOPjxeLj0dbCQEBA48Xi4+TixdlAQPDw8PDw8ePF4uPXx9RAQEDjxeLj08nCQEBAXNbUyePjxcRAQMJAQEBAQEBAQEDEw9XD8PDw9EBAQEBAQEBAQEBAQOPF4uPk4sXZQEAAAAAAAAAAAAAD8OPF4uNAQEBA8PEAXMbJ08VAQEBAQAAAAAAAAAAAAAAA8PDy8vEAAAAAAAAAAAAAAMJAQEBAQEBAQEDEw9XD8PDw9EBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "sha256": "0667d26f5724e4da7db2b781f58edb32db81a3832149358116cca4ea4c1ebf2d"
+    },
+    {
+      "type": "C/RB",
+      "position": {
+        "library": "DCNC0004",
+        "receiver": "QSQJRN0002",
+        "sequence": "48"
+      },
+      "raw": "AAAAAAAAAOwAAADwAAAAAAAAAAAAAAAAAAAAAAAAADCwMYnjt70AAAAAAAAAAADMAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAuAAAAAAAAAAUAAAAAAAAAAAAAAAAAAAAAAADD2cLjxeLj0dbCQEBA48Xi4+TixdlAQPDw8PDw8ePF4uPXx9RAQEDjxeLj08nCQEBAXNbUyePjxcRAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQOPF4uPk4sXZQEAAAAAAAAAAAAAA8OPF4uNAQEBA8PAAQEBAQEBAQEBAQAAAAAAAAAAAAAAA8PDw8PAAAAAAAAAAAAAAAA==",
+      "sha256": "7c2c99b0135e64099077ff1eb14a7533ce5ec48d2c7d24e46405c0f13693d811"
+    },
+    {
+      "type": "C/SC",
+      "position": {
+        "library": "DCNC0004",
+        "receiver": "QSQJRN0002",
+        "sequence": "49"
+      },
+      "raw": "AAAAAAAAAOwAAADwAAAAAAAAAAAAAAAAAAAAAAAAADGwMYnkACgAAAAAAAAAAADMAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAxAAAAAAAAAAYAAAAAAAAAAAAAAAAAAAAAAADD4sPjxeLj0dbCQEBA48Xi4+TixdlAQPDw8PDw8ePF4uPXx9RAQEDjxeLj08nCQEBAXNbUyePjxcRAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQOPF4uPk4sXZQEAAAAAAAAAAAAAA8OPF4uNAQEBA8PAAQEBAQEBAQEBAQAAAAAAAAAAAAAAA8PDw8PAAAAAAAAAAAAAAAA==",
+      "sha256": "ee67b03f64dba7330c934dafdb3fdd68b106412e7345f804b8a141354ecbd8b2"
+    },
+    {
+      "type": "D/DT",
+      "position": {
+        "library": "DCNC0004",
+        "receiver": "QSQJRN0002",
+        "sequence": "50"
+      },
+      "raw": "AAAAAAAAAOwAAADwAAAAAAAAAAAAAAAAAAAAAAAAADKwMYnkACwAAAAAAAAAAADMAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAxAAAAAAAAAAYAAAAAAAAAAAAAAAAAAAAAAADExOPjxeLj0dbCQEBA48Xi4+TixdlAQPDw8PDw8ePF4uPXx9RAQEDjxeLj08nCQEBAXNbUyePjxcRAQORAQEBAQEBAQEDEw9XD8PDw9EBAQEBAQEBAQEBAQOPF4uPk4sXZQEAAAAAAAAAAAAAH8OPF4uNAQEBA8PEAXMbJ08VAQEBAQAAAAAAAAAAAAAAA8PDy8vEAAAAAAAAAAAAAAORAQEBAQEBAQEDEw9XD8PDw9EBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "sha256": "164f6ae621ccbc274870328d7c8f917f97eb1a64b81d588a2b4a98c7e71c3690"
+    },
+    {
+      "type": "C/CM",
+      "position": {
+        "library": "DCNC0004",
+        "receiver": "QSQJRN0002",
+        "sequence": "51"
+      },
+      "raw": "AAAAAAAAAOwAAADwAAAAAAAAAAAAAAAAAAAAAAAAADOwMYnkBjIAAAAAAAAAAADMAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAxAAAAAAAAAAYAAAAAAAAAAAAAAAAAAAAAAADDw9TjxeLj0dbCQEBA48Xi4+TixdlAQPDw8PDw8ePF4uPXx9RAQEDjxeLj08nCQEBAXNbUyePjxcRAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQOPF4uPk4sXZQEAAAAAAAAAAAAAA8OPF4uNAQEBA8PAAQEBAQEBAQEBAQAAAAAAAAAAAAAAA8PDw8PAAAAAAAAAAAAAAAA==",
+      "sha256": "9356441ae15948276e192c4b9de3e894bc089b744ee3044b28f2d913a09211d2"
+    },
+    {
+      "type": "F/MD",
+      "position": {
+        "library": "DCNC0004",
+        "receiver": "QSQJRN0002",
+        "sequence": "53"
+      },
+      "raw": "AAAAAAAAAOwAAADwAAAAAAAAAAAAAAAAAAAAAAAAADWwMYnkC9QAAAAAAAAAAADMAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAcAAAAAAAAAAAAAAAAAAAAAAADG1MTjxeLj0dbCQEBA48Xi4+TixdlAQPDw8PDw8ePF4uPXx9RAQEDjxeLj08nCQEBAXNbUyePjxcRAQORAQEBAQEBAQEDEw9XD8PDw9EBA5EBAQEBAQEBAQOPF4uPk4sXZQEAAAAAAAAAAAAAI8OPF4uNAQEBA8PEAXNjExOJAQEBAQAAAAAAAAAAAAAAA8PDw8PAAAAAAAAAAAAAAAA==",
+      "sha256": "2faf20b3165adb03e8afa6268c3b7c185481a3fd932efa53b81085692fe82f08"
+    },
+    {
+      "type": "D/DF",
+      "position": {
+        "library": "DCNC0004",
+        "receiver": "QSQJRN0002",
+        "sequence": "55"
+      },
+      "raw": "AAAAAAAAAOwAAADwAAAAAAAAAAAAAAAAAAAAAAAAADewMYnkDpYAAAAAAAAAAADMAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAkAAAAAAAAAAAAAAAAAAAAAAADExMbjxeLj0dbCQEBA48Xi4+TixdlAQPDw8PDw8ePF4uPXx9RAQEDjxeLj08nCQEBAXNbUyePjxcRAQORAQEBAQEBAQEDEw9XD8PDw9EBAQEBAQEBAQEBAQOPF4uPk4sXZQEAAAAAAAAAAAAAH8OPF4uNAQEBA8PEAXMbJ08VAQEBAQAAAAAAAAAAAAAAA8PDw8PAAAAAAAAAAAAAAAA==",
+      "sha256": "62bcac661cd5f3d00424b624fc2e65169b7171676b7a61e4a92fc1f2b9d59507"
+    },
+    {
+      "type": "R/PT",
+      "position": {
+        "library": "DCNC0004",
+        "receiver": "QSQJRN0002",
+        "sequence": "57"
+      },
+      "raw": "AAAAAAAAAOwAAADwAAAAAAAAAAAAAAAAAAAAAAAAADmwMYnkdOoAAAAAAAAAAACDAAAAAAAAAAAAAAAAAAAABAAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAAAAADZ1+PjxeLj0dbCQEBA48Xi4+TixdlAQPDw8PDw8ePF4uPXx9RAQEDjxeLj08nCQEBAXNbUyePjxcRAQMFAQEBAQEBAQEDEw9XD8PDw9EBAwUBAQEBAQEBAQOPF4uPk4sXZQEAAAAAAAAAAAAAC8OPF4uNAQEBA8PEAXNjExOJAQEBAQAAAAAAAAAAAAAAA8PDw8PQAAAAAAAAAAAAAAAAAAFE=",
+      "sha256": "cd3c67f273aeb152c3a5f332f1b318ec079876eac18d41d4c3d330b756bce4ed"
+    }
+  ],
+  "rollback_rows": [
+    {
+      "type": "R/PT",
+      "position": {
+        "library": "DCNC0004",
+        "receiver": "QSQJRN0002",
+        "sequence": "49"
+      },
+      "raw": "AAAAAAAAAOwAAADwAAAAAAAAAAAAAAAAAAAAAAAAADGwMYnkACwAAAAAAAAAAADMAAAAAAAAAAAAAAAAAAAAAgAAAAAAAAAxAAAAAAAAAAIAAAAAAAAAAAAAAAAAAAAAAADZ1+PjxeLj0dbCQEBA48Xi4+TixdlAQPDw8PDw8ePF4uPXx9RAQEDjxeLj08nCQEBAXNbUyePjxcRAQORAQEBAQEBAQEDEw9XD8PDw9EBA5EBAQEBAQEBAQOPF4uPk4sXZQEAAAAAAAAAAAAAI8OPF4uNAQEBA8PEAXNjExOJAQEBAQAAAAAAAAAAAAAAA8PDw8PQAAAAAAAAAAAAAAAAABw4AAAAAAAAAAAAAAAA=",
+      "sha256": "20f752cf5c9a3dd9ea6e1abe728abb54f42881ba5d10a8d683d4c6d97aa2fc39"
+    },
+    {
+      "type": "R/DR",
+      "position": {
+        "library": "DCNC0004",
+        "receiver": "QSQJRN0002",
+        "sequence": "58"
+      },
+      "raw": "AAAAAAAAAOwAAADwAAAAAAAAAAAAAAAAAAAAAAAAADqwMYnkACwAAAAAAAAAAADMAAAAAAAAAAAAAAAAAAAAAgAAAAAAAAAxAAAAAAAAAAUAAAAAAAAAAAAAAAAAAAAAAADZxNnjxeLj0dbCQEBA48Xi4+TixdlAQPDw8PDw8ePF4uPXx9RAQEDjxeLj08nCQEBAXNbUyePjxcRAQORAQEBAQEBAQEDEw9XD8PDw9EBA5EBAQEBAQEBAQOPF4uPk4sXZQEAAAAAAAAAAAAAI8OPF4uNAQEBA8PEAXNjExOJAQEBAQAAAAAAAAAAAAAAA8PDw8PQAAAAAAAAAAAAAAAAABw4AAAAAAAAAAAAAAAA=",
+      "sha256": "92ecb379653542b323d494a795d1e6ddac4d5e48b93a1d7838b7d079febeeaf2"
+    }
+  ],
+  "rollback_rows_provenance": "Native INSERT then DROP then full rollback: row 113 and compensation 118, reduced to controlled fixture coordinates. File/member and producer identities use the public pseudonyms from this fixture; row layout and fixture ID 1806 preserved. Not startup proof."
+}

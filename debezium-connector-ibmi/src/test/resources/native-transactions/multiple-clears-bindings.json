@@ -1,0 +1,110 @@
+{
+  "scope": "Controlled fixture candidate observations, not protected startup/history proof",
+  "tables": [
+    {
+      "library": "DCCV1107",
+      "file": "MC",
+      "member": "MC",
+      "fileJournalId": "00000000000000000001",
+      "memberJournalId": "00000000000000000002",
+      "fileObservation": {
+        "sequence": "7",
+        "type": "D/CT"
+      },
+      "memberObservation": {
+        "sequence": "9",
+        "type": "F/JM"
+      }
+    },
+    {
+      "library": "DCCV1107",
+      "file": "MR",
+      "member": "MR",
+      "fileJournalId": "00000000000000000003",
+      "memberJournalId": "00000000000000000004",
+      "fileObservation": {
+        "sequence": "17",
+        "type": "D/CT"
+      },
+      "memberObservation": {
+        "sequence": "19",
+        "type": "F/JM"
+      }
+    },
+    {
+      "library": "DCCV1107",
+      "file": "MS",
+      "member": "MS",
+      "fileJournalId": "00000000000000000005",
+      "memberJournalId": "00000000000000000006",
+      "fileObservation": {
+        "sequence": "27",
+        "type": "D/CT"
+      },
+      "memberObservation": {
+        "sequence": "29",
+        "type": "F/JM"
+      }
+    },
+    {
+      "library": "DCCV1107",
+      "file": "NC",
+      "member": "NC",
+      "fileJournalId": "00000000000000000007",
+      "memberJournalId": "00000000000000000008",
+      "fileObservation": {
+        "sequence": "37",
+        "type": "D/CT"
+      },
+      "memberObservation": {
+        "sequence": "39",
+        "type": "F/JM"
+      }
+    },
+    {
+      "library": "DCCV1107",
+      "file": "NR",
+      "member": "NR",
+      "fileJournalId": "00000000000000000009",
+      "memberJournalId": "0000000000000000000a",
+      "fileObservation": {
+        "sequence": "47",
+        "type": "D/CT"
+      },
+      "memberObservation": {
+        "sequence": "49",
+        "type": "F/JM"
+      }
+    },
+    {
+      "library": "DCCV1107",
+      "file": "A",
+      "member": "A",
+      "fileJournalId": "0000000000000000000b",
+      "memberJournalId": "0000000000000000000c",
+      "fileObservation": {
+        "sequence": "57",
+        "type": "D/CT"
+      },
+      "memberObservation": {
+        "sequence": "59",
+        "type": "F/JM"
+      }
+    },
+    {
+      "library": "DCCV1107",
+      "file": "B",
+      "member": "B",
+      "fileJournalId": "0000000000000000000d",
+      "memberJournalId": "0000000000000000000e",
+      "fileObservation": {
+        "sequence": "67",
+        "type": "D/CT"
+      },
+      "memberObservation": {
+        "sequence": "69",
+        "type": "F/JM"
+      }
+    }
+  ]
+}

@@ -14,7 +14,6 @@ import java.math.BigInteger;
 import java.util.Date;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicLong;
-import java.util.function.Supplier;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -24,106 +23,65 @@ import io.debezium.ibmi.db2.journal.retrieve.rnrn0200.JournalReceiverInfo;
 import io.debezium.ibmi.db2.journal.retrieve.rnrn0200.JournalStatus;
 
 class DelayedDetailedJournalReceiverTest {
-    private AtomicLong fakeTime;
-    private Supplier<Long> timeSupplier;
+    private AtomicLong time;
     private DelayedDetailedJournalReceiver buffer;
 
-    private DetailedJournalReceiver createReceiver(String id) {
-        JournalReceiverInfo info = new JournalReceiverInfo(null, new Date(0), JournalStatus.Attached, Optional.empty());
-        return new DetailedJournalReceiver(info, BigInteger.ZERO, BigInteger.ZERO, Optional.empty(), 0L, 0L);
-    }
-
     @BeforeEach
-    void setup() {
-        fakeTime = new AtomicLong(0);
-        timeSupplier = fakeTime::get;
-        // 2 second delay, 1000ms poll interval
-        buffer = new DelayedDetailedJournalReceiver(2000, 1000, timeSupplier);
+    void setUpClockAndBuffer() {
+        time = new AtomicLong();
+        buffer = new DelayedDetailedJournalReceiver(2000, 1000, time::get);
     }
 
     @Test
-    void testReceiverIsDelayed() {
-        DetailedJournalReceiver receiver = createReceiver("A");
-        buffer.addDetailedReceiver(receiver);
-        // Should not be available before 2 seconds
-        assertNull(buffer.getDelayedReceiver(), "Should be null before delay");
-        fakeTime.addAndGet(1999);
-        assertNull(buffer.getDelayedReceiver(), "Should still be null just before delay");
-        fakeTime.addAndGet(2); // Now at 2001ms
-        DetailedJournalReceiver result = buffer.getDelayedReceiver();
-        assertEquals(receiver, result, "Should return receiver after delay");
-    }
-
-    @Test
-    void testMultipleReceiversOrderAndDelay() {
-        DetailedJournalReceiver r1 = createReceiver("R1");
-        DetailedJournalReceiver r2 = createReceiver("R2");
-        buffer.addDetailedReceiver(r1);
-        fakeTime.addAndGet(1000); // 1s later
-        buffer.addDetailedReceiver(r2);
-        // Not enough time for either
-        fakeTime.addAndGet(999);
-        assertNull(buffer.getDelayedReceiver(), "Should be null before delay for r1");
-        fakeTime.addAndGet(2); // Now at 2001ms since r1
-        DetailedJournalReceiver result1 = buffer.getDelayedReceiver();
-        assertEquals(r1, result1, "Should return r1 after delay");
-        assertEquals(r1, buffer.getDelayedReceiver(), "Should stay r1 before delay for r2");
-        fakeTime.addAndGet(999); // Now at 2000ms since r2
-        fakeTime.addAndGet(2); // Now at 2001ms since r2
-        DetailedJournalReceiver result2 = buffer.getDelayedReceiver();
-        assertEquals(r2, result2, "Should return r2 after delay");
-    }
-
-    @Test
-    void testAddTooQuicklyIsSkipped() {
-        DetailedJournalReceiver r1 = createReceiver("R1");
-        DetailedJournalReceiver r2 = createReceiver("R2");
-        buffer.addDetailedReceiver(r1);
-        // Try to add r2 immediately, should be skipped
-        buffer.addDetailedReceiver(r2);
-        fakeTime.addAndGet(2001);
-        DetailedJournalReceiver result = buffer.getDelayedReceiver();
-        assertEquals(r1, result, "Should return r1 after delay");
-        assertEquals(r1, buffer.getDelayedReceiver(), "Should remain as r1 until r2");
-    }
-
-    @Test
-    void testNullIfNothingAdded() {
+    void shouldExposeFirstReceiverOnlyWhenConfiguredDelayHasElapsed() {
         assertNull(buffer.getDelayedReceiver());
+        var receiver = receiver("FIRST");
+        assertTrue(buffer.addDetailedReceiver(receiver));
+        assertNull(buffer.getDelayedReceiver());
+        time.set(1999);
+        assertNull(buffer.getDelayedReceiver());
+        time.set(2000);
+        assertEquals(receiver, buffer.getDelayedReceiver());
     }
 
     @Test
-    void testAddRateAllows20PercentFasterAdddition() {
-        DetailedJournalReceiver receiver1 = createReceiver("INITIAL");
-        boolean added1 = buffer.addDetailedReceiver(receiver1);
-        assertTrue(added1, "First receiver should be added successfully");
-        // Try to add another receiver 20% faster than poll interval
-        long minInterval = buffer.minDelayBetweenReadingsWithAllowance();
-        fakeTime.addAndGet(minInterval - 1); // Just before allowed interval
-        DetailedJournalReceiver receiver2 = createReceiver("TOO_FAST");
-        boolean addedTooFast = buffer.addDetailedReceiver(receiver2); // Should be skipped
-        assertFalse(addedTooFast, "skipped adding too fast");
-        // Add after allowed interval
-        fakeTime.addAndGet(2); // Now at minInterval
-        DetailedJournalReceiver receiver3 = createReceiver("JUST_ALLOWED");
-        boolean addedJustAllowed = buffer.addDetailedReceiver(receiver3); // Should be accepted
-        assertTrue(addedJustAllowed, "added slightly fast but within allowance");
-        // Advance time to allow retrieval
-        fakeTime.addAndGet(2000);
+    void shouldReturnNewestMatureReceiverWhenSeveralSamplesAreQueued() {
+        var first = receiver("FIRST");
+        var second = receiver("SECOND");
+        var third = receiver("THIRD");
+        buffer.addDetailedReceiver(first);
+        time.set(1000);
+        buffer.addDetailedReceiver(second);
+        time.set(2000);
+        buffer.addDetailedReceiver(third);
+        assertEquals(first, buffer.getDelayedReceiver());
+        time.set(2999);
+        assertEquals(first, buffer.getDelayedReceiver());
+        time.set(3500);
+        assertEquals(second, buffer.getDelayedReceiver());
+        time.set(4000);
+        assertEquals(third, buffer.getDelayedReceiver());
+    }
 
-        fakeTime.set(0);
-        assertNull(buffer.getDelayedReceiver(), "no receiver if too quick");
+    @Test
+    void shouldKeepAcceptedSamplesWhenRapidAdditionIsRejected() {
+        var first = receiver("FIRST");
+        var rejected = receiver("REJECTED");
+        var next = receiver("NEXT");
+        assertTrue(buffer.addDetailedReceiver(first));
+        assertFalse(buffer.addDetailedReceiver(rejected));
+        time.set(1000);
+        assertTrue(buffer.addDetailedReceiver(next));
+        time.set(2000);
+        assertEquals(first, buffer.getDelayedReceiver());
+        time.set(2999);
+        assertEquals(first, buffer.getDelayedReceiver());
+        time.set(3000);
+        assertEquals(next, buffer.getDelayedReceiver());
+    }
 
-        fakeTime.set(2000 + 1); // Ensure enough time has passed for first receiver
-        DetailedJournalReceiver firstResult = buffer.getDelayedReceiver();
-        assertEquals(receiver1, buffer.getDelayedReceiver(), "Should return first receiver");
-
-        fakeTime.addAndGet(minInterval - 1);
-        assertEquals(receiver1, firstResult, "nothing there for the too fast");
-
-        fakeTime.addAndGet(1);
-        // get latest receiver
-        DetailedJournalReceiver resultJustInTime = buffer.getDelayedReceiver();
-        assertEquals(receiver3, resultJustInTime, "Should return third receiver after delay (second was skipped)");
+    private static DetailedJournalReceiver receiver(String name) {
+        var info = new JournalReceiverInfo(new JournalReceiver(name, "LIB"), new Date(0), JournalStatus.Attached, Optional.empty());
+        return new DetailedJournalReceiver(info, BigInteger.ZERO, BigInteger.ZERO, Optional.empty(), 0L, 0L);
     }
 }
