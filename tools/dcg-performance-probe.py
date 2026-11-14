@@ -76,6 +76,7 @@ class Experiment(public.Experiment):
                            mode=self.args.mode, version=self.args.label, rows_per_burst=self.args.rows,
                            buffer_storage=self.args.buffer_storage,
                            failure_handling=self.args.failure_handling,
+                           legacy_additional_delay_ms=getattr(self.args, 'journal_additional_delay', None),
                            inherited_worker_defaults=self.args.worker_defaults,
                            migration_enabled=self.args.mode == 'transactional', backlog_rows=self.args.backlog_rows,
                            warmup_rounds=2, measured_rounds=max(0, self.timed_rounds-2), samples=self.samples, measurements=self.measurements,
@@ -103,6 +104,11 @@ class Experiment(public.Experiment):
     def configuration(self, enabled):
         config = super().configuration(enabled)
         config['event.converting.failure.handling.mode'] = self.args.failure_handling
+        delay = getattr(self.args, 'journal_additional_delay', None)
+        if delay is not None:
+            if self.args.mode != 'legacy':
+                raise ValueError('Legacy delay control applies only to the legacy reader')
+            config['journal.additional.delay'] = str(delay)
         if self.args.worker_defaults:
             for key in ['key.converter', 'value.converter', 'key.converter.schemas.enable', 'value.converter.schemas.enable',
                         'tasks.max', 'errors.tolerance']:
@@ -309,6 +315,8 @@ def main(experiment_type=Experiment, configure_parser=None):
                         help='Use the same ordinary row-error policy for baseline and candidate measurements')
     parser.add_argument('--worker-defaults', action='store_true', help='Inherit worker converters and standard task/error defaults')
     parser.add_argument('--backlog-rows',type=int,default=0, help='Optional even backlog, split between A and M; two restart trials')
+    parser.add_argument('--journal-additional-delay', type=int, choices=[0, 5000], default=None,
+                        help='Isolated legacy-reader timing control only; not a production tuning recommendation')
     parser.add_argument('--heap-histogram',action='store_true', help='After task stop and all measurements, request a full-GC histogram using host JDK jcmd')
     if configure_parser:
         configure_parser(parser)
@@ -319,6 +327,13 @@ def main(experiment_type=Experiment, configure_parser=None):
         parser.error('Backlog must be 0, 2000 or 5000 records')
     if args.mode == 'legacy' and args.buffer_storage != 'memory':
         parser.error('Disk transaction storage applies only to transactional mode')
+    if args.journal_additional_delay is not None and args.mode != 'legacy':
+        parser.error('Legacy delay control applies only to the legacy reader')
+    if hasattr(args, "profile_validator"):
+        try:
+            args.profile_validator(args)
+        except ValueError as error:
+            parser.error(str(error))
     import pyodbc
     pyodbc.pooling=False
     args.directory=args.directory.resolve(); args.directory.mkdir(exist_ok=False)

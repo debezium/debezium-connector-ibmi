@@ -38,6 +38,8 @@ class Experiment(automatic.Experiment):
     transaction_metadata = False
     metadata_on_restart = False
     first_start = None
+    worker_lifetime_seconds = 2400
+    observer_lifetime_seconds = 3600
 
     def snapshot_rows(self, table):
         return 0 if self.first_start == 'no_data' else 303 if self.first_start and table == 'A' else 3
@@ -93,7 +95,7 @@ class Experiment(automatic.Experiment):
         worker = base.Experiment.container(self, name, ['--user', f'{os.getuid()}:{os.getgid()}', '--add-host', self.native_host,
                 '-v', f'{self.plugin}:/connector:ro', '-v', f'{self.audit}:/probe:ro', '-v', f'{self.audit}:/audit:ro',
                 '-v', f'{self.control}:/control', '-v', f'{config}:/worker.properties:ro',
-                '--entrypoint', '/bin/sh', base.IMAGE, '-c', 'sleep 2400'])
+                '--entrypoint', '/bin/sh', base.IMAGE, '-c', f'sleep {self.worker_lifetime_seconds}'])
         self.command('docker', 'network', 'connect', '--gw-priority', '1', self.egress, worker)
         installed = subprocess.run(['docker', 'exec', '-i', worker, 'sh', '-c', 'umask 077; cat > /dev/shm/dcg-credentials.properties'],
                                    input=self.fixture.properties(), text=True, capture_output=True, timeout=10)
@@ -132,7 +134,7 @@ class Experiment(automatic.Experiment):
     def observer(self):
         self.observer_container = base.Experiment.container(self, 'observer', ['--user', f'{os.getuid()}:{os.getgid()}',
                 '-v', f'{self.audit}:/probe:ro', '-v', f'{self.audit}:/audit:ro', '-v', f'{self.control}:/control',
-                '--entrypoint', '/bin/sh', base.IMAGE, '-c', 'sleep 3600'])
+                '--entrypoint', '/bin/sh', base.IMAGE, '-c', f'sleep {self.observer_lifetime_seconds}'])
 
     rest_request = packaged.PackagedExperiment.rest_request
     rest = packaged.PackagedExperiment.rest

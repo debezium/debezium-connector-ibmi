@@ -15,6 +15,10 @@ class Experiment(performance.Experiment):
     def stage(self):
         if self.args.mode != 'transactional':
             raise ValueError('Transaction soak requires transactional mode')
+        validate_profile(self.args)
+        if self.args.duration == 3600:
+            self.worker_lifetime_seconds = 7200
+            self.observer_lifetime_seconds = 7200
         super().stage()
         self.latest_offsets = True
         self.report['offset_observation'] = 'read_committed broker snapshot through a fixed end offset; latest value/tombstone per key, bounded keys/bytes/scan/time'
@@ -23,11 +27,12 @@ class Experiment(performance.Experiment):
                                'held_clear_minimum_seconds': 60, 'maximum_rows': 150000,
                                'requested_held_clear_rotations': self.args.held_clear_rotations,
                                'requested_restarts': self.args.restart_count,
+                               'minimum_round_seconds': 5 if self.args.duration == 3600 else 0,
                                'offered_load': 'Serial mixed-column bursts; not a saturation benchmark'}
         self.save()
 
     def observer_arguments(self):
-        return ['soak']
+        return ['soak-long' if self.args.duration == 3600 else 'soak']
 
     def measured_rows(self, session, table, first, count, scenario, round_number):
         started = time.time_ns() / 1e6
@@ -123,6 +128,7 @@ class Experiment(performance.Experiment):
         round_number = 0
         restarts = []
         while time.monotonic()-started < self.args.duration:
+            round_started = time.monotonic()
             first = 8000000+round_number*1000
             self.burst(writer, 'A', first, 'c', 1000+round_number)
             self.burst(writer, 'M', first, 'c', 1000+round_number)
@@ -146,6 +152,8 @@ class Experiment(performance.Experiment):
             round_number += 1
             if sum(m['rows'] for m in self.measurements)+getattr(self,'additional_events',0) > 145000:
                 raise RuntimeError('Soak record bound exceeded')
+            if self.args.duration == 3600:
+                time.sleep(max(0, 5 - (time.monotonic() - round_started)))
         self.report['soak'].update(finished_ms=time.time_ns()/1e6, elapsed_seconds=time.monotonic()-started,
                                    rounds=round_number, task_restarted=bool(restarts))
         self.check('Sustained workload ran for the requested duration with every requested task restart',
@@ -153,11 +161,18 @@ class Experiment(performance.Experiment):
         self.save()
 
 
+def validate_profile(args):
+    # 720 paced rounds * 150 operations plus setup stays below the unchanged
+    # 145,000-workload / 150,000-observer limits. No restart masks JVM growth.
+    if args.duration == 3600 and (args.rows != 50 or args.restart_count != 0):
+        raise ValueError('The one-hour profile requires --rows 50 --restart-count 0')
+
+
 def configure(parser):
-    parser.set_defaults(mode='transactional')
-    parser.add_argument('--duration', type=int, choices=[600,900,1200], default=900)
+    parser.set_defaults(mode='transactional', profile_validator=validate_profile)
+    parser.add_argument('--duration', type=int, choices=[600,900,1200,3600], default=900)
     parser.add_argument('--held-clear-rotations', type=int, choices=[0,1,3], default=3)
-    parser.add_argument('--restart-count', type=int, choices=[1,3], default=3)
+    parser.add_argument('--restart-count', type=int, choices=[0,1,3], default=3)
 
 
 if __name__ == '__main__':

@@ -192,3 +192,48 @@ per key through a fixed broker endpoint. It bounds scanned records, retained
 keys/data and elapsed time, so obsolete offset updates do not exhaust the
 ordinary event inspector's 1,000-record limit. Data-topic observations still
 retain every record and check exact counts; duplicate output is not collapsed.
+
+## Larger bounded profiles
+
+The extended profiles retain the ordinary packaged connector and the same exact
+output, rollback, checkpoint and ownership/cleanup assertions. They do not change
+production resource limits or the original harness defaults. Use different fresh
+libraries and evidence directories for every invocation, with the explicit native
+configuration above.
+
+```sh
+# 128 journaled files; busy final allocation group, unrelated progress,
+# excluded layout, keyless clear, worker replacement and rollback.
+python tools/dcg-online-scope-probe.py NEW_SCOPE_DIRECTORY DCNCdddd --files 128
+
+# Independent paced writer; repeat for the original, disabled and enabled ZIPs.
+python tools/dcg-sustained-probe.py NEW_RATE_DIRECTORY DCNCeeee \
+  --distribution PLUGIN.zip --label candidate --mode transactional \
+  --buffer-storage disk --rows 250 --seconds 120 --operations-per-second 1000 \
+  --failure-handling warn --worker-defaults
+
+# One hour with no scheduled task restarts in the timed interval.
+python tools/dcg-soak-probe.py NEW_HOUR_DIRECTORY DCNCffff \
+  --distribution PLUGIN.zip --label candidate --mode transactional \
+  --buffer-storage disk --duration 3600 --rows 50 --restart-count 0 \
+  --backlog-rows 5000
+```
+
+The scope runner defaults to 56 files; `--files 128` expands only the owned test
+journal. The sustained runner defaults to 200 operations/second; 500 and 1,000
+are higher *requested* rates. Report the achieved submission rate as well as
+observed delivery. Higher-rate profiles cap source operations at 120,000 and use
+the existing 150,000-record/256 MiB observer; original-rate behavior is unchanged.
+
+The hour profile requires 50 rows per burst and zero scheduled timed restarts,
+with at least five seconds per three-burst round. This bounds timed changes to
+108,000 while retaining the 145,000 workload and 150,000 observer record limits.
+Its observer deadline is 90 minutes and owned worker/observer containers live at
+most two hours. The preceding two backlog/restart trials, 5,000-row commit and
+rollback, open-clear checks and receiver rotations happen **before** the timed
+hour. Verify task continuity during the hour from the worker lifecycle evidence;
+zero requested restarts alone does not prove that the task never restarted.
+
+This endurance workload is serial bursts, not an hour at the higher sustained
+rate. Keep those results separate. Short rate runs do not establish saturation;
+a one-hour pass does not establish multi-day leak freedom or every fault schedule.

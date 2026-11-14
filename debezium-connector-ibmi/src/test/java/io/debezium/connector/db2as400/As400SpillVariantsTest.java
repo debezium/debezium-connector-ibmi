@@ -13,6 +13,8 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.io.TempDir;
 
+import io.debezium.config.Configuration;
+
 /** Run the same public-behavior contracts against disk storage, without copied test bodies. */
 class As400SpillVariantsTest {
     @TempDir
@@ -20,7 +22,11 @@ class As400SpillVariantsTest {
     private final List<As400SpillStore> stores = new ArrayList<>();
 
     private As400SpillStore store() {
-        var store = new As400SpillStore(new As400SpillStore.Settings(directory, 1, 16, 128L * 1024 * 1024));
+        return store(new As400SpillStore.Settings(directory, 1, 16, 128L * 1024 * 1024));
+    }
+
+    private As400SpillStore store(As400SpillStore.Settings settings) {
+        var store = new As400SpillStore(settings);
         stores.add(store);
         return store;
     }
@@ -42,7 +48,12 @@ class As400SpillVariantsTest {
     class Dispatch extends As400BatchDispatcherTest {
         @Override
         protected As400SpillStore spill() {
-            return store();
+            // The large key-change contract uses configured output/buffer limits.
+            // Match its disk profile too: an unrelated 128 MiB fixture quota can
+            // reject valid output during MVStore chunk reclamation on slower CI.
+            // Explicit small-budget rejection remains in As400SpillStoreTest.
+            var settings = new As400DcgConfig(Configuration.from(As400DcgConfigTest.properties())).runtimeLimits.storage();
+            return store(new As400SpillStore.Settings(directory, settings.cacheMegabytes(), settings.writeBufferKilobytes(), settings.maximumBytes()));
         }
     }
 
