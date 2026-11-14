@@ -522,7 +522,11 @@ final class As400RecoverySource implements StreamingChangeEventSource<As400Parti
                             journalMetrics.setLastProcessedMs(System.currentTimeMillis());
                         }
                     }
-                    if (!progress.deferred() && active.publishCheckpoint(output, progress.entries() > 0 || !progress.checkpoint().equals(published))) {
+                    // A deferred later schema observation can follow completed
+                    // output in this same verified cut. Acknowledge that safe
+                    // prefix before the next poll, including in synchronous EOS.
+                    if ((!progress.deferred() || !progress.checkpoint().equals(published))
+                            && active.publishCheckpoint(output, progress.entries() > 0 || !progress.checkpoint().equals(published))) {
                         SourceRecord barrier = lastEnqueued;
                         if (!barrier.sourceOffset().equals(progress.checkpoint())) {
                             throw new IllegalStateException("Checkpoint barrier differs from completed output");
@@ -715,6 +719,13 @@ final class As400RecoverySource implements StreamingChangeEventSource<As400Parti
             }
         }
         catch (Exception error) {
+            if (!publication && admission.isStopped()) {
+                // The source can queue a retriable transport failure and close
+                // between doPoll's stopped check and this admission check. Let
+                // queue.poll surface that original failure; replacing it with
+                // the closed session's error would disable normal task restart.
+                return;
+            }
             requestStop();
             errors.setProducerThrowable(error);
             throw new IllegalStateException("Recovery publication admission lost", error);

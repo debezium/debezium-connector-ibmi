@@ -197,7 +197,14 @@ final class As400SpillStore implements AutoCloseable {
         try {
             store.commit();
             if (store.getFileStore().size() > settings.maximumBytes()) {
-                throw new IllegalStateException("Transaction spill file exceeded its disk budget");
+                // Obsolete MVStore chunks can temporarily exhaust the physical
+                // budget even when the live dataset fits. Reclaim with a bounded
+                // effort before deciding; never increase or bypass the budget.
+                store.compactFile(1000);
+            }
+            if (store.getFileStore().size() > settings.maximumBytes()) {
+                throw new IllegalStateException("Transaction spill file exceeded its disk budget after reclamation: file="
+                        + store.getFileStore().size() + ", live encoded data=" + encodedBytes + ", budget=" + settings.maximumBytes());
             }
         }
         catch (RuntimeException e) {

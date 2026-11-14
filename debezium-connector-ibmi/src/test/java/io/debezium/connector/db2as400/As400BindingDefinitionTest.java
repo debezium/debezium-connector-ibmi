@@ -113,6 +113,21 @@ class As400BindingDefinitionTest {
                 java.util.Map.of(single.identity().member(), single.identity().memberJournalId(), "SECOND", single.identity().memberJournalId())));
     }
 
+    @Test
+    void shouldPersistAnExcludedIdentityWithoutTreatingItsUnobservedLayoutAsOutputSchema() throws Exception {
+        var original = definition(codecs().findFirst().orElseThrow(), false);
+        var identityOnly = original.withoutObservedLayout();
+        var recovered = As400BindingEncoding.decode(As400BindingEncoding.encode(List.of(identityOnly), false)).get(0);
+        assertThat(recovered).isEqualTo(identityOnly);
+        assertThat(recovered.unobservedLayout()).isTrue();
+        assertThat(recovered.members()).isEqualTo(original.members());
+        assertThat(recovered.codecs()).isEmpty();
+        assertThat(recovered.schema().columns()).isEmpty();
+        assertThrows(IllegalArgumentException.class, () -> new As400BindingDefinition(recovered.identity(), original.schema(), original.codecs()));
+        assertThrows(IllegalArgumentException.class, () -> new As400OnlineCensusRecovery.Output(List.of(recovered)));
+        assertThrows(IllegalStateException.class, () -> recovered.binding(1024).values(null, null, 0));
+    }
+
     private static As400BindingDefinition definition(Example example, boolean nullable) {
         Codec codec = example.codec();
         var id = new TableId(null, "LIB", "T");

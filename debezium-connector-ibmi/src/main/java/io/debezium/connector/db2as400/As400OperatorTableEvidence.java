@@ -77,7 +77,11 @@ final class As400OperatorTableEvidence {
         }
     }
 
-    record Format(String name, String level, int recordBytes, int fields, boolean varying, int members, boolean lob) {
+    record Format(String name, String level, int recordBytes, int fields, boolean varying, int members, boolean lob, boolean programDescribed) {
+        Format(String name, String level, int recordBytes, int fields, boolean varying, int members, boolean lob) {
+            this(name, level, recordBytes, fields, varying, members, lob, false);
+        }
+
         Format(String name, String level, int recordBytes, int fields, boolean varying) {
             this(name, level, recordBytes, fields, varying, 1, false);
         }
@@ -152,13 +156,28 @@ final class As400OperatorTableEvidence {
 
     /** Bounded catalog batches and exact-path object queries. All connections are owned and closed. */
     List<Observation> collect(List<Request> requested) throws SQLException {
+        List<Request> requests = requests(requested);
+        checkInterrupted();
+        try (Connection connection = Objects.requireNonNull(connections.open())) {
+            return collectOn(connection, requests);
+        }
+    }
+
+    private List<Request> requests(List<Request> requested) {
         List<Request> requests = List.copyOf(requested);
         if (requests.isEmpty() || requests.size() > limits.maximumTables()
                 || requests.stream().map(request -> request.library() + "/" + request.file()).distinct().count() != requests.size()) {
             throw new IllegalArgumentException("Distinct bounded physical-file requests required");
         }
+        return requests;
+    }
+
+    /** Fresh observations on the caller's qualified connection; only results and statements are owned here. */
+    List<Observation> collectOn(Connection connection, List<Request> requested) throws SQLException {
+        List<Request> requests = requests(requested);
         checkInterrupted();
-        try (Connection connection = Objects.requireNonNull(connections.open())) {
+        Objects.requireNonNull(connection);
+        try {
             connection.setReadOnly(true);
             check(connection);
             List<Observation> result = new ArrayList<>();
@@ -168,7 +187,16 @@ final class As400OperatorTableEvidence {
             var single = requests.stream().collect(Collectors.toMap(request -> request, request -> 1));
             var formats = catalog(connection, FORMAT_SQL, requests, single, As400OperatorTableEvidence::format);
             var counts = requests.stream().collect(Collectors.toMap(request -> request, request -> formats.get(request).get(0).members()));
-            var members = catalog(connection, MEMBER_SQL, requests, counts, As400OperatorTableEvidence::member);
+            var members = catalog(connection, MEMBER_SQL, requests, counts, As400OperatorTableEvidence::member, true);
+            for (var request : requests) {
+                if (members.getOrDefault(request, List.of()).isEmpty()) {
+                    requireProgramDescribed(connection, request);
+                    var format = formats.get(request).get(0);
+                    formats.put(request, List.of(new Format(format.name(), format.level(), format.recordBytes(), format.fields(),
+                            format.varying(), format.members(), format.lob(), true)));
+                    members.put(request, nativeMembers(connection, request, counts.get(request)));
+                }
+            }
             var targets = new LinkedHashMap<Target, Request>();
             for (Request request : requests) {
                 String path = "/QSYS.LIB/" + request.library() + ".LIB/" + request.file() + ".FILE";
@@ -213,6 +241,12 @@ final class As400OperatorTableEvidence {
     }
 
     private <T> Map<Request, List<T>> catalog(Connection connection, String sql, List<Request> requests, Map<Request, Integer> counts, CatalogDecode<T> decode)
+            throws SQLException {
+        return catalog(connection, sql, requests, counts, decode, false);
+    }
+
+    private <T> Map<Request, List<T>> catalog(Connection connection, String sql, List<Request> requests, Map<Request, Integer> counts, CatalogDecode<T> decode,
+                                              boolean allowAbsent)
             throws SQLException {
         var result = new LinkedHashMap<Request, List<T>>();
         var libraries = requests.stream().collect(Collectors.groupingBy(Request::library, LinkedHashMap::new, Collectors.toList()));
@@ -261,8 +295,9 @@ final class As400OperatorTableEvidence {
                     }
                     warning(statement.getWarnings());
                     check(connection);
-                    if (batch.stream().anyMatch(request -> result.getOrDefault(request, List.of()).size() != counts.get(request))) {
-                        throw new As400NativeEvidenceException("Required native catalog observation is absent");
+                    if (batch.stream().anyMatch(request -> result.getOrDefault(request, List.of()).size() != counts.get(request)
+                            && !(allowAbsent && result.getOrDefault(request, List.of()).isEmpty()))) {
+                        throw As400NativeEvidenceException.absentCatalog();
                     }
                 }
             }
@@ -309,6 +344,66 @@ final class As400OperatorTableEvidence {
         }
         return new Format(trim(row, "FORMAT_NAME"), trim(row, "FORMAT_LEVEL_ID"), number(row, "RECORD_LENGTH").intValueExact(),
                 number(row, "NUMBER_FIELDS").intValueExact(), varying.equals("YES"), members, lob.equals("YES"));
+    }
+
+    private void requireProgramDescribed(Connection connection, Request request) throws SQLException {
+        try (var statement = connection.prepareStatement("SELECT SYSTEM_TABLE_SCHEMA, SYSTEM_TABLE_NAME, PROGRAM_DESCRIBED"
+                + " FROM QSYS2.SYSFILES WHERE SYSTEM_TABLE_SCHEMA = ? AND SYSTEM_TABLE_NAME = ?")) {
+            statement.setString(1, request.library());
+            statement.setString(2, request.file());
+            statement.setMaxRows(2);
+            statement.setQueryTimeout(limits.queryTimeoutSeconds());
+            try (var rows = statement.executeQuery()) {
+                warning(statement.getWarnings());
+                warning(rows.getWarnings());
+                if (!rows.next()) {
+                    throw As400NativeEvidenceException.absentCatalog();
+                }
+                exact(rows, "SYSTEM_TABLE_SCHEMA", request.library());
+                exact(rows, "SYSTEM_TABLE_NAME", request.file());
+                exact(rows, "PROGRAM_DESCRIBED", "YES");
+                if (rows.next()) {
+                    throw new As400NativeEvidenceException("Ambiguous file-description kind");
+                }
+                warning(rows.getWarnings());
+            }
+            warning(statement.getWarnings());
+            check(connection);
+        }
+    }
+
+    /** Program-described members are absent from SYSPARTITIONSTAT; enumerate only this exact file directory. */
+    private List<Member> nativeMembers(Connection connection, Request request, int count) throws SQLException {
+        String path = "/QSYS.LIB/" + request.library() + ".LIB/" + request.file() + ".FILE";
+        var result = new ArrayList<Member>();
+        try (var statement = connection.prepareStatement(OBJECT_SQL)) {
+            statement.setString(1, path);
+            statement.setString(2, "*MBR");
+            statement.setMaxRows(count + 1);
+            statement.setFetchSize(Math.min(128, count + 1));
+            statement.setQueryTimeout(limits.queryTimeoutSeconds());
+            warning(statement.getWarnings());
+            try (var rows = statement.executeQuery()) {
+                warning(statement.getWarnings());
+                while (rows.next()) {
+                    check(connection);
+                    warning(rows.getWarnings());
+                    String memberPath = rows.getString("PATH_NAME");
+                    if (result.size() >= count || memberPath == null || !memberPath.startsWith(path + "/")
+                            || !memberPath.substring(path.length() + 1).matches("[A-Z0-9_#$@]{1,10}\\.MBR")) {
+                        throw new As400NativeEvidenceException("Foreign or excess native member observation");
+                    }
+                    object(rows, request, new Target(memberPath, Kind.MEMBER));
+                    result.add(new Member(memberPath.substring(path.length() + 1, memberPath.length() - 4), request.file()));
+                }
+                warning(rows.getWarnings());
+            }
+            warning(statement.getWarnings());
+        }
+        if (result.size() != count) {
+            throw new As400NativeEvidenceException("Incomplete native member directory");
+        }
+        return result;
     }
 
     private static NativeObject object(ResultSet row, Request request, Target target) throws SQLException {
@@ -411,6 +506,7 @@ final class As400OperatorTableEvidence {
     }
 
     private static void warning(SQLWarning value) throws SQLException {
+        As400OperatorJournalEvidence.incompleteWarnings(value);
         if (value != null) {
             throw new As400NativeEvidenceException("Native table query warning; partial evidence rejected", value);
         }

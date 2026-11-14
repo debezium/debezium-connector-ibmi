@@ -186,37 +186,52 @@ final class As400JdbcNativeIdentityEvidence {
 
     private Candidates collect(Connection connection, List<Target> targets) throws SQLException {
         Map<Target, Identity> result = new LinkedHashMap<>();
-        for (Target target : targets) {
+        // A journal and its current receiver need the same exact-path proof as
+        // a longer replay chain. Batch both without caching any observation;
+        // each requested object must appear exactly once in every fresh result.
+        int batchSize = 16;
+        for (int at = 0; at < targets.size(); at += batchSize) {
+            var batch = targets.subList(at, Math.min(at + batchSize, targets.size()));
+            var expected = new LinkedHashMap<String, Target>();
+            batch.forEach(target -> expected.put(target.path(), target));
             interrupted();
-            // A warning from an earlier query/close must not disappear on the next execution.
             noWarnings(connection.getWarnings());
             if (!connection.isReadOnly()) {
                 throw new SQLException("Native evidence connection is no longer read-only");
             }
-            try (PreparedStatement statement = connection.prepareStatement(SQL)) {
+            String sql = String.join(" UNION ALL ", java.util.Collections.nCopies(batch.size(), SQL));
+            try (PreparedStatement statement = connection.prepareStatement(sql)) {
                 statement.setQueryTimeout(limits.queryTimeoutSeconds());
-                statement.setMaxRows(2); // One candidate plus a duplicate/unexpected-row sentinel.
-                statement.setString(1, target.path());
-                statement.setString(2, target.kind().objectType());
+                statement.setMaxRows(batch.size() + 1);
+                for (int i = 0; i < batch.size(); i++) {
+                    statement.setString(i * 2 + 1, batch.get(i).path());
+                    statement.setString(i * 2 + 2, batch.get(i).kind().objectType());
+                }
                 noWarnings(statement.getWarnings());
                 noWarnings(connection.getWarnings());
                 try (ResultSet rows = statement.executeQuery()) {
                     noWarnings(statement.getWarnings());
                     noWarnings(rows.getWarnings());
-                    if (!rows.next()) {
-                        throw new SQLException("Exact native identity object is absent or unavailable");
-                    }
-                    interrupted();
-                    noWarnings(rows.getWarnings());
-                    Identity identity = decode(rows, target);
-                    // ResultSet.next() may clear warnings associated with the current row.
-                    noWarnings(rows.getWarnings());
-                    if (rows.next()) {
-                        throw new SQLException("Exact native identity result is ambiguous");
+                    int count = 0;
+                    while (rows.next()) {
+                        interrupted();
+                        noWarnings(rows.getWarnings());
+                        var target = expected.get(rows.getString("PATH_NAME"));
+                        if (target == null) {
+                            throw new SQLException("Unexpected path in native identity result");
+                        }
+                        if (result.containsKey(target) || ++count > batch.size()) {
+                            throw new SQLException("Exact native identity result is ambiguous");
+                        }
+                        Identity identity = decode(rows, target);
+                        noWarnings(rows.getWarnings());
+                        result.put(target, identity);
                     }
                     noWarnings(rows.getWarnings());
                     noWarnings(statement.getWarnings());
-                    result.put(target, identity);
+                    if (count != batch.size()) {
+                        throw new SQLException("Exact native identity object is absent or unavailable");
+                    }
                 }
                 noWarnings(statement.getWarnings());
             }
@@ -251,6 +266,7 @@ final class As400JdbcNativeIdentityEvidence {
     }
 
     private static void noWarnings(SQLWarning warning) throws SQLException {
+        As400OperatorJournalEvidence.incompleteWarnings(warning);
         if (warning != null) {
             throw new SQLException("Native identity SQL warning; incomplete observations are rejected", warning.getSQLState(), warning.getErrorCode(), warning);
         }

@@ -11,6 +11,7 @@ import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.isNull;
+import static org.mockito.ArgumentMatchers.same;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -62,7 +63,7 @@ class As400NativeBindingAcquisitionTest {
         // YES, while SYSCOLUMNS2 and the actual R/PT payload contain only ID.
         var remaining = new Observation(original.request(), original.table(), original.member(), original.fileObject(), original.memberObject(),
                 new Format("M", "29187D5938DDA", 4, 1, true));
-        when(f.tables.collect(anyList())).thenReturn(List.of(remaining));
+        when(f.tables.collectOn(same(f.connection), anyList())).thenReturn(List.of(remaining));
         var acquired = f.acquire().definitions().get(0);
         assertThat(acquired.schema().columns()).extracting(io.debezium.relational.Column::name).containsExactly("ID");
         assertThat(acquired.identity().recordFormat()).isEqualTo("M:29187D5938DDA:4:1:true");
@@ -137,7 +138,7 @@ class As400NativeBindingAcquisitionTest {
         var original = f.observation;
         var observation = new Observation(original.request(), original.table(), original.member(), original.fileObject(), original.memberObject(),
                 new Format("M", "29087D5938DDA", position - 1, f.columns.size(), true));
-        when(f.tables.collect(anyList())).thenReturn(List.of(observation));
+        when(f.tables.collectOn(same(f.connection), anyList())).thenReturn(List.of(observation));
         var definition = f.acquire().definitions().get(0);
         assertThat(definition.codecs().get(index).kind()).isEqualTo(kind);
         assertThat(definition.codecs().get(index).decoder().getByteLength()).isEqualTo(bytes);
@@ -160,7 +161,7 @@ class As400NativeBindingAcquisitionTest {
         var original = f.observation;
         var named = new Observation(original.request(), new TableId(null, "LIB", "LONG_ORDER_TABLE"), original.member(),
                 original.fileObject(), original.memberObject(), original.format());
-        when(f.tables.collect(anyList())).thenReturn(List.of(named));
+        when(f.tables.collectOn(same(f.connection), anyList())).thenReturn(List.of(named));
         f.columns.forEach(row -> row.put("TABLE_NAME", "LONG_ORDER_TABLE"));
         f.outputColumns.forEach(row -> row.put("TABLE_NAME", "LONG_ORDER_TABLE"));
         f.controls.get(0).put("TABLE_NAME", "LONG_ORDER_TABLE");
@@ -217,7 +218,7 @@ class As400NativeBindingAcquisitionTest {
         var shape = old.format();
         var lob = new Observation(old.request(), old.table(), old.member(), old.fileObject(), old.memberObject(),
                 new Format(shape.name(), shape.level(), shape.recordBytes(), shape.fields(), shape.varying(), 1, true));
-        when(f.tables.collect(anyList())).thenReturn(List.of(lob));
+        when(f.tables.collectOn(same(f.connection), anyList())).thenReturn(List.of(lob));
         assertThrows(SQLException.class, f::acquire);
         var excluded = new As400NativeBindingAcquisition(() -> f.connection, f.tables, new Limits(4, 5), false, table -> false)
                 .collect(List.of(lob.request())).definitions().get(0);
@@ -246,7 +247,7 @@ class As400NativeBindingAcquisitionTest {
         assertThat(definition.schema().columns()).isEmpty();
         assertThat(As400BindingEncoding.decode(As400BindingEncoding.encode(List.of(definition), false))).containsExactly(definition);
         verify(excluded.connection, never()).prepareStatement(anyString());
-        verify(excluded.tables, times(2)).collect(List.of(excluded.observation.request()));
+        verify(excluded.tables, times(2)).collectOn(excluded.connection, List.of(excluded.observation.request()));
     }
 
     @Test
@@ -259,7 +260,7 @@ class As400NativeBindingAcquisitionTest {
         assertThat(definition.schema().primaryKeyColumnNames()).containsExactly("ID");
         assertThat(definition.schema().columns().stream().map(c -> c.isOptional())).containsExactly(false, true, true, true, true, true, true, true, true, true, true);
         assertThat(As400BindingDefinition.restore(definition.storedTable())).isEqualTo(definition);
-        verify(f.tables, times(2)).collect(List.of(f.observation.request()));
+        verify(f.tables, times(2)).collectOn(f.connection, List.of(f.observation.request()));
         verify(f.connection).close();
         for (PreparedStatement st : f.statements) {
             verify(st).setMaxRows(st == f.statements.get(0) ? 2 : f.observation.format().fields() + 1);
@@ -269,6 +270,50 @@ class As400NativeBindingAcquisitionTest {
             verify(st).close();
         }
         verify(f.connection, never()).commit();
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = { "stable", "changed", "failed", "stopped" })
+    void shouldReobserveBindingsOnTheBorrowedConnectionAndLeaveItsLifetimeToTheCaller(String outcome) throws Exception {
+        var f = new Fixture();
+        var observations = new AtomicInteger();
+        when(f.tables.collectOn(same(f.connection), anyList())).thenAnswer(invocation -> {
+            if (observations.incrementAndGet() == 2) {
+                switch (outcome) {
+                    case "changed":
+                        return List.of();
+                    case "failed":
+                        throw new SQLException("Second observation failed", "08006");
+                    case "stopped":
+                        Thread.currentThread().interrupt();
+                        break;
+                    default:
+                        break;
+                }
+            }
+            return List.of(f.observation);
+        });
+        var acquisition = new As400NativeBindingAcquisition(() -> {
+            throw new AssertionError("Borrowed acquisition must not open another connection");
+        }, f.tables, new Limits(4, 5));
+        try (var connection = f.connection) {
+            if (outcome.equals("stable")) {
+                assertThat(acquisition.collectOn(connection, List.of(f.observation.request())).definitions()).singleElement()
+                        .satisfies(definition -> assertThat(definition.schema().primaryKeyColumnNames()).containsExactly("ID"));
+            }
+            else {
+                assertThrows(SQLException.class, () -> acquisition.collectOn(connection, List.of(f.observation.request())));
+            }
+            assertThat(observations).hasValue(2);
+            verify(connection, never()).close();
+            for (var statement : f.statements) {
+                verify(statement).close();
+            }
+        }
+        finally {
+            Thread.interrupted();
+        }
+        verify(f.connection).close();
     }
 
     @ParameterizedTest
@@ -285,7 +330,7 @@ class As400NativeBindingAcquisitionTest {
         assertThat(definition.identity()).isEqualTo(f.observation.tableIdentity());
         assertThat(definition.codecs()).hasSize(unsupported ? 0 : 11);
         assertThat(As400BindingEncoding.decode(As400BindingEncoding.encode(List.of(definition), false))).containsExactly(definition);
-        verify(f.tables, times(2)).collect(List.of(f.observation.request()));
+        verify(f.tables, times(2)).collectOn(f.connection, List.of(f.observation.request()));
     }
 
     @ParameterizedTest
@@ -298,11 +343,11 @@ class As400NativeBindingAcquisitionTest {
         if (state.equals("42501")) {
             assertThat(acquisition.collect(List.of(f.observation.request())).definitions()).singleElement()
                     .satisfies(definition -> assertThat(definition.excluded()).isTrue());
-            verify(f.tables, times(2)).collect(List.of(f.observation.request()));
+            verify(f.tables, times(2)).collectOn(f.connection, List.of(f.observation.request()));
         }
         else {
             assertThat(assertThrows(SQLException.class, () -> acquisition.collect(List.of(f.observation.request()))).getSQLState()).isEqualTo(state);
-            verify(f.tables, times(1)).collect(List.of(f.observation.request()));
+            verify(f.tables, times(1)).collectOn(f.connection, List.of(f.observation.request()));
         }
         verify(f.connection).close();
     }
@@ -398,7 +443,7 @@ class As400NativeBindingAcquisitionTest {
         var observed = f.observation;
         var wide = new Observation(observed.request(), observed.table(), observed.member(), observed.fileObject(), observed.memberObject(),
                 new Format("M", "29087D5938DDA", 16000, 8000, false));
-        when(f.tables.collect(anyList())).thenReturn(List.of(wide));
+        when(f.tables.collectOn(same(f.connection), anyList())).thenReturn(List.of(wide));
         var acquired = f.acquire().definitions().get(0);
         var restored = As400BindingEncoding.decode(As400BindingEncoding.encode(List.of(acquired), false)).get(0);
         assertThat(restored).isEqualTo(acquired);
@@ -554,7 +599,7 @@ class As400NativeBindingAcquisitionTest {
             case "wrong-key" -> f.keys.get(0).put("COLUMN_NAME", "MISSING");
             case "key-order" -> f.keys.get(0).put("ORDINAL_POSITION", 2);
             case "warning" -> when(f.connection.getWarnings()).thenReturn(new SQLWarning("partial"));
-            case "changed" -> when(f.tables.collect(anyList())).thenReturn(List.of(f.observation), List.of());
+            case "changed" -> when(f.tables.collectOn(same(f.connection), anyList())).thenReturn(List.of(f.observation), List.of());
             case "not-read-only" -> when(f.connection.isReadOnly()).thenReturn(false);
             default -> throw new AssertionError(fault);
         }
@@ -622,7 +667,7 @@ class As400NativeBindingAcquisitionTest {
             observation = new Observation(new Request(original.request().journal(), "LIB", "M"), new TableId(null, "LIB", "M"), "M",
                     original.fileObject(), original.memberObject(), temporal ? new Format("M", "40BFA08CB67A6", 119, 7, false)
                             : new Format("M", "29087D5938DDA", 65, 11, true));
-            when(tables.collect(anyList())).thenReturn(List.of(observation));
+            when(tables.collectOn(same(connection), anyList())).thenReturn(List.of(observation));
             when(connection.isReadOnly()).thenReturn(true);
             when(connection.prepareStatement(anyString())).thenAnswer(i -> {
                 String sql = i.getArgument(0);

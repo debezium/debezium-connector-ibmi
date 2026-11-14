@@ -227,6 +227,143 @@ class As400LegacyClearBufferTest {
         }
     }
 
+    @ParameterizedTest
+    @ValueSource(strings = { "transactional", "member" })
+    void shouldRecoverAnOlderCycleAfterAnotherJobClearsTheSameTable(String earlierClear) throws Exception {
+        var jobs = new TwoJobs();
+        long second = jobs.begin(false);
+        jobs.markRow(second, false);
+        if (earlierClear.equals("transactional")) {
+            long first = jobs.begin(true);
+            jobs.truncateAndReload(first, true);
+            jobs.commit(first, true);
+        }
+        else {
+            jobs.memberClearAndReload(true);
+        }
+        long clear = jobs.truncateAndReload(second, false);
+        jobs.commit(second, false);
+        Map<String, ?> saved;
+        try (var run = new Running(jobs.journal, jobs.bindings, null)) {
+            for (var entry : run.entries) {
+                run.process(entry);
+                if (entry.position().offset().longValueExact() == clear) {
+                    break;
+                }
+                run.buffer.resolve(entry.position(), "FIXTURE_ONLY");
+            }
+            assertThat(run.buffer.pending()).isTrue();
+            saved = Map.copyOf(run.acknowledged.get(run.acknowledged.size() - 1));
+            assertThat(new BigInteger(saved.get(As400OffsetContext.EVENT_SEQUENCE).toString())).isLessThan(BigInteger.valueOf(clear));
+            assertThat(As400IncrementalLifecycleTest.data(run.records)).containsExactly("c:MARK:1000", "t:TC2", "c:TC2:101");
+        }
+        try (var replacement = new Running(jobs.journal, jobs.bindings, saved)) {
+            var from = new JournalProcessedPosition(replacement.scan.getPosition());
+            for (var entry : replacement.entries) {
+                int relative = entry.position().offset().compareTo(from.getOffset());
+                if (relative > 0 || relative == 0 && !from.processed()) {
+                    replacement.process(entry);
+                    replacement.buffer.resolve(entry.position(), "FIXTURE_ONLY");
+                }
+            }
+            assertThat(replacement.buffer.pending()).isFalse();
+            assertThat(As400IncrementalLifecycleTest.data(replacement.records)).containsExactly("t:TC2", "c:TC2:101");
+            replacement.delivery.flush(replacement.scan.getOffset());
+            assertThat(replacement.acknowledged.get(replacement.acknowledged.size() - 1)).isEqualTo(replacement.scan.getOffset());
+        }
+    }
+
+    /** Copy a native entry to a new sequence; optionally move it to another job/thread and retarget a C/SQ. */
+    static RawJournalPage.Entry copy(As400JournalLifecycle.Entry e, long sequence, long cycle, boolean otherJob, Long savepoint) {
+        byte[] bytes = e.bytes().clone();
+        var buffer = java.nio.ByteBuffer.wrap(bytes);
+        buffer.putLong(24, sequence);
+        if (e.header().getCommitCycle().signum() > 0 || e.type().equals("C/SC")) {
+            buffer.putLong(64, cycle);
+        }
+        if (otherJob) {
+            // RJNE0200 thread identifier (offset 40) and job number (offset 121): a different producer.
+            buffer.putLong(40, 197);
+            new com.ibm.as400.access.AS400Text(6, 37).toBytes("800001", bytes, 121);
+        }
+        if (savepoint != null) {
+            int offset = e.header().getEntrySpecificDataOffset() + 16;
+            new com.ibm.as400.access.AS400Text(20, 37).toBytes(String.format("%020d", savepoint), bytes, offset);
+        }
+        var header = new io.debezium.ibmi.db2.journal.retrieve.rjne0200.EntryHeaderDecoder().decode(bytes, 0);
+        return new RawJournalPage.Entry(new JournalPosition(header.getSequenceNumber(), e.position().receiver()), header, bytes);
+    }
+
+    static final class TwoJobs {
+        final List<As400JournalLifecycle.Entry> original;
+        final Map<String, As400SourceNormalizer.TableBinding> bindings;
+        final io.debezium.ibmi.db2.journal.retrieve.JournalReceiver receiver;
+        final List<RawJournalPage.Entry> journal = new ArrayList<>();
+        long next = 1000;
+
+        TwoJobs() throws Exception {
+            original = As400IncrementalLifecycleTest.entries("thread-enabled", "T_commit");
+            bindings = As400IncrementalLifecycleTest.bindings("thread-enabled");
+            receiver = original.get(0).position().receiver();
+            // The native C/SQ completes the statement savepoint opened by its C/SB.
+            var sq = find("C/SQ", null);
+            String target = new com.ibm.as400.access.AS400Text(20, 37).toObject(sq.bytes(), sq.header().getEntrySpecificDataOffset() + 16).toString();
+            assertThat(new BigInteger(target)).isEqualTo(find("C/SB", null).position().offset());
+        }
+
+        As400JournalLifecycle.Entry find(String type, String file) {
+            return original.stream().filter(e -> e.type().equals(type) && (file == null || e.header().getFile().equals(file))).findFirst().orElseThrow();
+        }
+
+        long add(As400JournalLifecycle.Entry e, long cycle, boolean other, Long savepoint) {
+            long sequence = next++;
+            journal.add(copy(e, sequence, e.type().equals("C/SC") ? sequence : cycle, other, savepoint));
+            return sequence;
+        }
+
+        long begin(boolean other) {
+            add(find("C/BC", null), 0, other, null);
+            return add(find("C/SC", null), 0, other, null);
+        }
+
+        void markRow(long cycle, boolean other) {
+            add(find("R/PT", "MARK"), cycle, other, null);
+        }
+
+        /** Native TRUNCATE TC2 lifecycle plus one replacement row (ID 101) in the given transaction. */
+        long truncateAndReload(long cycle, boolean other) {
+            long sb = add(find("C/SB", null), cycle, other, null);
+            for (String type : List.of("F/CH", "F/EJ", "D/EF", "D/JF", "F/JM")) {
+                add(find(type, null), cycle, other, null);
+            }
+            long clear = add(find("D/CG", null), cycle, other, null);
+            add(find("C/SQ", null), cycle, other, sb);
+            add(find("R/PT", "TC2"), cycle, other, null);
+            return clear;
+        }
+
+        long commit(long cycle, boolean other) {
+            return add(find("C/CM", null), cycle, other, null);
+        }
+
+        /** Cycle-zero F/CR (CLRPFM) built like the PR's own appendMemberClearAndReload, plus an autocommit reload row. */
+        void memberClearAndReload(boolean other) {
+            var row = find("R/PT", "TC2");
+            byte[] clear = java.util.Arrays.copyOf(row.bytes(), 236);
+            long sequence = next++;
+            java.nio.ByteBuffer.wrap(clear).putInt(0, 0).putInt(4, 0).putInt(8, 0).putInt(20, 0).putLong(24, sequence).putLong(56, 0).putLong(64, 0);
+            new com.ibm.as400.access.AS400Text(3, 37).toBytes("FCR", clear, 98);
+            if (other) {
+                java.nio.ByteBuffer.wrap(clear).putLong(40, 197);
+                new com.ibm.as400.access.AS400Text(6, 37).toBytes("800001", clear, 121);
+            }
+            var header = new io.debezium.ibmi.db2.journal.retrieve.rjne0200.EntryHeaderDecoder().decode(clear, 0);
+            journal.add(new RawJournalPage.Entry(new JournalPosition(header.getSequenceNumber(), receiver), header, clear));
+            add(row, 0, other, null);
+        }
+
+    }
+
     private final class Running extends As400ConnectorTask implements AutoCloseable {
         final List<RawJournalPage.Entry> entries;
         final Map<String, As400SourceNormalizer.TableBinding> bindings;
@@ -247,9 +384,13 @@ class As400LegacyClearBufferTest {
         }
 
         Running(String fixture, String scenario, Map<String, ?> saved) throws Exception {
-            entries = new ArrayList<>(As400IncrementalLifecycleTest.entries(fixture, scenario).stream()
-                    .map(e -> new RawJournalPage.Entry(e.position(), e.header(), e.bytes())).toList());
-            bindings = As400IncrementalLifecycleTest.bindings(fixture);
+            this(As400IncrementalLifecycleTest.entries(fixture, scenario).stream()
+                    .map(e -> new RawJournalPage.Entry(e.position(), e.header(), e.bytes())).toList(), As400IncrementalLifecycleTest.bindings(fixture), saved);
+        }
+
+        Running(List<RawJournalPage.Entry> input, Map<String, As400SourceNormalizer.TableBinding> definitions, Map<String, ?> saved) throws Exception {
+            entries = new ArrayList<>(input);
+            bindings = definitions;
             var raw = Configuration.create().with("topic.prefix", "test").with("database.dbname", "TEST")
                     .with("database.schema", bindings.values().iterator().next().identity().tableId().schema())
                     .with("skipped.operations", "none").with("provide.transaction.metadata", true).build();

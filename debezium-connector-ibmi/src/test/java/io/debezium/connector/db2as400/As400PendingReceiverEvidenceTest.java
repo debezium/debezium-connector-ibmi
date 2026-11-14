@@ -119,7 +119,7 @@ class As400PendingReceiverEvidenceTest {
             }
             case "overflow" -> fixture.receiver.put("LAST_SEQUENCE_NUMBER", new BigDecimal("18446744073709551616"));
             case "fraction" -> fixture.receiver.put("FIRST_SEQUENCE_NUMBER", new BigDecimal("1.5"));
-            case "warning" -> fixture.warning = true;
+            case "warning" -> fixture.warning = new SQLWarning("incomplete");
             case "query-error" -> fixture.queryError = true;
             case "foreign" -> fixture.receiver.put("JOURNAL_NAME", "OTHER");
             case "cache" -> fixture.before.put("JOURNAL_CACHE", "YES");
@@ -131,6 +131,22 @@ class As400PendingReceiverEvidenceTest {
         for (var statement : fixture.statements) {
             verify(statement).close();
         }
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = { "row", "statement", "both", "mixed" })
+    void shouldDiscardCatalogChurnForRecollectionButKeepUnknownWarningsFatal(String source) throws Exception {
+        var fixture = new Fixture();
+        if (!source.equals("statement")) {
+            fixture.warning = new SQLWarning("catalog changed", "01000", 462);
+        }
+        if (!source.equals("row")) {
+            fixture.statementWarning = source.equals("mixed") ? new SQLWarning("other warning", "01004", 0)
+                    : new SQLWarning("catalog changed", "01548", 462);
+        }
+        var failure = assertThrows(SQLException.class, fixture::collect);
+        assertThat(failure instanceof As400OperatorJournalEvidence.IncompleteObservationException).isEqualTo(!source.equals("mixed"));
+        verify(fixture.connection).close();
     }
 
     @Test
@@ -235,7 +251,8 @@ class As400PendingReceiverEvidenceTest {
         final Map<String, Object> receiver = new HashMap<>(Map.of("JOURNAL_LIBRARY", "LIB", "JOURNAL_NAME", "JRN", "JOURNAL_RECEIVER_LIBRARY", "LIB",
                 "JOURNAL_RECEIVER_NAME", "RCV", "STATUS", "ATTACHED", "FIRST_SEQUENCE_NUMBER", 1, "LAST_SEQUENCE_NUMBER", 99, "PENDING_TRANSACTIONS", "YES"));
         final List<Map<String, Object>> receiverRows = new ArrayList<>(List.of(receiver));
-        boolean warning;
+        SQLWarning warning;
+        SQLWarning statementWarning;
         boolean queryError;
         int directories;
 
@@ -260,7 +277,8 @@ class As400PendingReceiverEvidenceTest {
                         var value = data.get(index.get()).get(get.getArgument(0));
                         return value == null ? null : new BigDecimal(value.toString());
                     });
-                    when(rows.getWarnings()).thenReturn(warning ? new SQLWarning("incomplete") : null);
+                    when(rows.getWarnings()).thenReturn(warning);
+                    when(statement.getWarnings()).thenReturn(statementWarning);
                     return rows;
                 });
                 return statement;

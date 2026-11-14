@@ -1,7 +1,7 @@
 # Connector compatibility and performance comparison
 
 This comparison describes the verified transactional-truncate candidate on
-November 12, 2026. Transactional capture remains **opt-in and under review**.
+November 13, 2026. Transactional capture remains **opt-in and under review**.
 An available option is not a claim that every deployment or workload has been
 qualified. Qualified scope and remaining release gates are listed explicitly.
 
@@ -27,15 +27,16 @@ Current-upstream CI remains a separate merge gate.
 | SQL/DDS keys, keyless tables and ordinary output settings | Supported according to existing schema/type handling | Preserved; SQL/system names, supported text/binary/temporal types, CCSID overrides, column/key settings and custom converters covered |
 | Transforms, predicates and operation filters | Applied by the runtime | Uses the same runtime mechanisms; recovery progress must survive filtering and consumers must retain truncate events when required |
 | WARN/SKIP row conversion | Supported | Preserved through `event.converting.failure.handling.mode`; transactional enablement requires processing mode `fail` before handoff. Failed clear delivery, invalid decoding and missing recovery evidence remain fatal |
-| Current-definition refresh and new-table discovery | Refreshes current JDBC metadata | Qualified observed ALTER/creation boundaries are persisted before output and replayed on restart |
+| Current-definition refresh and new-table discovery | Refreshes current JDBC metadata | Qualified CREATE/ALTER, full rollback, LABEL/COMMENT and same-library physical renames; statements may share a final definition when no captured row requires an unavailable intermediate layout. History is retained for restart |
+| Moving an excluded file to another library | Native comparison continues unrelated CDC | Native move, replacement, move-back, ALTER→move and CREATE/load→move catch-up tests pass. Captured routing is tested locally; cross-pool save/restore remains unqualified |
 | Arbitrary historical DDL reconstruction | Not provided | Not added to the compatibility requirements; ambiguous historical layouts reject |
 | File/receiver count | No fixed connector file-count limit | No arbitrary connector count ceiling; bounded acquisition/history processing. Largest live scope tested: 56 files on a preceding build; the current dedicated runs use smaller scopes. Larger local fixtures are not native capacity evidence |
 | Large transaction payloads | No equivalent transaction buffer | H2 MVStore working storage by default; explicit memory profile available. Excluded rows do not retain individual output entries; transaction context is still journal-wide. Metadata scales with catalog size |
 | Multiple Kafka data partitions | Supported | Accepted; whole-table ordering of keyless truncates and keyed rows requires one partition or equivalent downstream ordering |
 | Native storage pools | No explicit ASP-1-only admission | System/basic pools 1–32 accepted by evidence validation; live qualification used pool 1. Independent ASPs remain unqualified |
-| Multiple file members | Row capture shares keys/topic; snapshot reads the first member | Preserves that row/snapshot contract, validates every member identity, discovers newly added members and recovers their history after restart |
+| Multiple file members | Row capture shares keys/topic; snapshot reads the first member | Preserves that row/snapshot contract, validates every member identity, discovers newly added members, preserves same-file member renames and recovers their history after restart. A removed final member leaves a file with no active row identity until a new association is qualified |
 | Mixed journal resources | No whole-journal PF-only admission | Logical files/indexes, data areas, data queues and access paths can coexist with captured physical files; their metadata cannot establish a row binding |
-| Excluded LOB/source physical files | Do not prevent selected ordinary table capture | Retains native identities and transaction effects, releases pointer handles, and recovers mixed transactions without publishing excluded values |
+| Excluded LOB/source/program-described files | Do not prevent selected ordinary table capture | Retains native identities and transaction effects without publishing excluded values; program-described member identities come from the native object catalog |
 | Clearing one member of a multi-member file | No reliable table-wide clear event | Rejects a captured member clear without advancing completed output; no unsafe table-wide `op=t` or new member-aware output contract |
 
 The original two-member native control emitted duplicate keys from separate
@@ -73,69 +74,84 @@ for recovery. Delivery is at least once; an interrupted output batch can replay
 a published prefix. Ordinary offsets do not add broker fencing to an embedded
 application. Unknown source layouts and missing history reject before advancement.
 
+Open CREATE, ALTER and DROP transactions retain raw entries while unrelated
+committed output continues, including across restart. Incomplete physical
+companions or unavailable metadata at the outcome can still defer scanning. Repeated
+ALTERs with captured rows between unavailable historical layouts still reject.
+Removal of an empty final member now retains the file while unrelated capture
+and restart continue; native member addition re-establishes its active identity.
+This does not interpret populated-member removal as a table-wide truncate.
+Constraint-only additions/removals retain
+the decoder and event key already chosen for the capture, matching legacy streaming.
+They do not automatically replace an emitted key with a newly declared database key. These
+are remaining qualification limits, not claims of complete DDL/member parity.
+A rejected clear cannot be repaired simply by disabling truncate capture; doing
+so loses the clear. The configuration contract describes evidence recovery and
+snapshot-based reconciliation when the original evidence cannot be recovered.
+
 See the [baseline audit](dcg-compatibility-baseline.md) and
 [configuration contract](dcg-online-configuration.md) for exact qualifications.
 
 ## Performance
 
-![Bounded native performance comparison](images/transactional-truncate-performance.png)
+The candidate at `04d40bd` was compared with the original connector in six serial
+runs: original, disabled, enabled, then the reverse order. Each used a fresh
+native fixture and local Kafka. After two warm-up rounds, every run delivered all
+12,300 expected changes at about 201.5 changes/second for 60 seconds: 73,800 changes
+in total. Every key, mixed value and update before-image was checked. All six
+runs passed fixture, session and local-runtime cleanup, with absence independently
+verified.
 
-Each profile used a separate disposable native fixture, the ordinary packaged
-connector, local Kafka and an independent `read_committed` observer. Two warm-up
-rounds preceded 60 seconds of independent paced writes: 12,300 measured changes
-at approximately 201 operations/second. All profiles used WARN conversion
-handling and inherited worker defaults. Every expected record, mixed value and
-update before-image was checked, and fixture/session/Kafka cleanup passed.
-
-| Profile | Median delay | p95 delay | p99 delay | Worker CPU ms/operation | Peak worker RSS |
+| Profile | Median delay | p95 delay | CPU ms/change | CPU vs. original | Peak worker RSS |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| Original, matching shared dependencies | 5.227 s | 5.316 s | 5.376 s | 0.849 | 459.5 MiB |
-| Candidate, feature disabled | 5.219 s | 5.323 s | 5.390 s | 0.916 | 440.5 MiB |
-| Candidate, memory buffer | 2.975 s | 4.008 s | 4.133 s | 0.918 | 450.8 MiB |
-| Candidate, disk buffer | 3.017 s | 4.045 s | 4.106 s | 1.029 | 443.9 MiB |
+| Original connector | 5.138 s | 5.233 s | 0.859 | Baseline | 431.6–436.1 MiB |
+| Candidate, feature disabled | 5.130 s | 5.201 s | 0.887 | +3.3% | 464.1–465.4 MiB |
+| Candidate, disk buffer | 1.973 s | 2.713 s | 1.071 | +24.7% | 447.5–449.0 MiB |
 
-Delay is SQL submission to observation, not database commit latency. Resource
-measurements cover the whole worker during the measured interval. Disabled-path
-median delay differed by about 0.1%; CPU was 7.8% higher. Enabled memory
-and disk used 8.1% and 21.1% more CPU than the original, respectively.
-Memory-buffer CPU was close to the candidate's disabled path. Earlier package comparisons
-used different shared core snapshots and remain historical evidence; their
-deltas cannot isolate connector changes. One run per profile does not establish
-CPU equivalence. Disk buffering bounds large transaction payload
-working sets; this small workload does not establish memory savings for large transactions.
-These measurements are **not maximum throughput, statistical equivalence, a
-large-catalog benchmark or a multi-day soak**.
+Delay and CPU columns are medians of the two run-level measurements; RSS lists
+the range of their peaks. Feature-off median delay differed by −0.16%, with 3.3%
+more CPU per change. Enabled median delay was 61.6% lower, with 24.7% more CPU.
+All profiles sustained the offered workload; this is not a claim of equal CPU
+cost or maximum throughput. RSS is resident memory, not Java heap. Delay measures
+SQL submission to independent Kafka observation, not database commit time. Two
+short runs per profile do not establish statistical equivalence, large-catalog
+capacity, large-transaction memory behavior or multi-day stability. The
+memory-buffer profile and schema-change latency were not rerun in this matrix.
+The later CREATE/move correction at `7587127` is not part of these timing results.
 
-The measured candidate ZIP SHA-256 is
-`f04d01a414bfbb93c79d1755b73e31d4deb065dcd1fe16d395ccae13df14c724`.
-This includes the member/mixed-resource/LOB changes and was also used by the
-successful native source-transaction coexistence run. A subsequent review fix
-passes retained bindings into schema-interval validation; its ZIP SHA-256 is
-`2165299640c663344283580c5cf9ed5c9e91d08fed45b0231c280d515f213744`.
-That correction is covered by separate schema/restart tests, not this timed
-binary. The timed workload does not perform ALTER operations.
-The original ZIP SHA-256 is
-`087582d28edf821060153f00b533deb916d78b3ec4681841b9c4480898e4f42b`.
-The baseline was rebuilt and rerun after dependency inspection exposed different
-core snapshots in the earlier comparison. All seven shared dependency jars now
-match by SHA-256; candidate-only history/disk dependencies remain included.
-Reproduction commands and earlier successful/failed qualification results are in
-the [validation report](dcg-validation.md#matched-dependency-performance-comparison).
+The candidate ZIP is
+`6772a7f39e6c45f9584b24e638a38599cf6862971209c7e32a30f7b936fcb614`.
+The matched baseline ZIP is
+`1ecaff67dfe7067c0c493b945d2330eebeaf17d4a16fc79b4e7fdc989ec48dfd`.
+Its original connector and parser jars are unchanged. Its driver override differs
+from the preceding baseline only in manifest metadata; driver classes and resources
+are identical. Shared Debezium and driver dependencies match the candidate; the
+candidate additionally includes history and disk storage. The Kafka image was
+identical across runs. See the [reproduction method and per-run ranges](dcg-performance-comparison.md#library-move-candidate-comparison--2026-11-13).
+Earlier results retain their own artifact identities in the
+[validation report](dcg-validation.md#matched-dependency-performance-comparison).
 
 ## Verification and review
 
-The candidate passed 4,544 Java tests, 152 Python harness tests, Maven verification,
-assembly and formatter/import checks. Packaged native runs cover schema/capture
-selection changes, requested full snapshots, new-table discovery, restart and
-ordered truncate/reload using both ordinary offsets and source transactions.
-Independent Advisor review accessed the actual member/mixed-resource follow-up
-files and found that schema refresh still rejected a verified excluded LOB row
-in its observation interval. The correction passes retained bindings into that
-validation. Memory/disk restart tests cover the valid interval, while captured
-pointers, missing/mismatched identities and incomplete images still reject.
-This was a focused review, not an exhaustive audit; the correction was verified
-afterward and was not independently reviewed a second time.
-The corrected packaged plugin passed ten native checks, including the ALTER/LOB
-interval and replacement from schema history. Owned native fixtures, sessions
-and local runtimes were verified cleaned up.
-No production deployment or universal downstream-sink qualification is claimed.
+Full Maven verification at `7587127` passed 5,285 Java test executions (5,029
+connector and 256 parser). The Python
+harness suite passed 152 on the preceding `012b022` checkpoint. Assembly,
+formatter and import validation also passed. Bounded packaged native
+runs cover the review's transactional DDL, overlapping clears, catalog churn,
+program-described files, member removal, retained receivers and restart cases.
+Each run retains its own artifact identity; earlier native or performance results
+are not automatically attributed to later builds. Advisor inspected the actual
+files and identified a deferred-creation clear issue, which was corrected and
+reverified with targeted negative controls. See the
+[latest correction evidence](dcg-validation.md#fifth-independent-review-corrections--2026-11-13)
+and [schema-change latency measurements](dcg-performance-comparison.md#fifth-review-schema-change-latency--2026-11-13)
+for exact qualifications and remaining limits. Later bounded reviews and native
+runs cover [historical names and excluded lifetimes](dcg-validation.md#historical-names-and-excluded-lifetimes--2026-11-13),
+including committed shared ALTER/DROP transactions and the subsequent
+[full rollback validation](dcg-validation.md#shared-alterdrop-full-rollback--2026-11-13),
+[known-table name boundaries](dcg-validation.md#known-table-name-boundaries--2026-11-13),
+[empty final-member recovery](dcg-validation.md#empty-final-member-recovery--2026-11-13),
+[same-file member renames](dcg-validation.md#same-file-member-rename--2026-11-13)
+and [file moves between libraries](dcg-validation.md#file-moves-between-libraries--2026-11-13).
+Those results do not qualify every DDL composition. Broader review and upstream CI remain
+release gates; this is not a replacement-readiness claim.

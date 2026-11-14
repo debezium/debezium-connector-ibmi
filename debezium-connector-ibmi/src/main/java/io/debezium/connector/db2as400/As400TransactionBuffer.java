@@ -42,6 +42,7 @@ final class As400TransactionBuffer implements AutoCloseable {
     private final Map<TableId, BigInteger> clearOwners;
     private final As400SpillStore spill;
     private JournalPosition lastPosition;
+    private As400SourceMetadata deferredInput;
     private CommittedBatch pendingBatch;
     private long payloadBytes;
     private int retainedEntries;
@@ -323,6 +324,35 @@ final class As400TransactionBuffer implements AutoCloseable {
         return cycles.containsKey(commitCycle);
     }
 
+    void retainDeferred(BigInteger commitCycle, long bytes) {
+        ensureUsable();
+        Cycle cycle = cycle(commitCycle);
+        reserve(cycle, bytes, 1);
+        persist(cycle);
+    }
+
+    void releaseDeferred(BigInteger commitCycle, long bytes) {
+        Cycle cycle = cycle(commitCycle);
+        release(cycle, bytes, 1);
+        persist(cycle);
+    }
+
+    /** Scoped replay of one owned entry whose global ordering was checked before staging. */
+    void replayDeferred(As400SourceMetadata expected, Runnable consume) {
+        ensureUsable();
+        if (deferredInput != null || !cycles.containsKey(expected.commitCycle()) || expected.commitCycle().signum() <= 0
+                || expected.journalCode() == 'C' && Set.of("SC", "CM", "RB").contains(expected.entryType())) {
+            throw fail("Invalid deferred transaction input");
+        }
+        deferredInput = expected;
+        try {
+            consume.run();
+        }
+        finally {
+            deferredInput = null;
+        }
+    }
+
     private JournalPosition acceptInput(As400SourceMetadata source) {
         ensureUsable();
         if (pendingBatch != null) {
@@ -337,6 +367,12 @@ final class As400TransactionBuffer implements AutoCloseable {
                 || position.receiver().name().length() > 10 || position.receiver().library() == null
                 || position.receiver().library().isBlank() || position.receiver().library().length() > 10) {
             throw fail("Journal receiver must be resolved before buffering");
+        }
+        if (deferredInput != null) {
+            if (!deferredInput.equals(source)) {
+                throw fail("Deferred input differs from its validated source metadata");
+            }
+            return position;
         }
         if (lastPosition != null && lastPosition.receiver().equals(position.receiver())
                 && position.offset().compareTo(lastPosition.offset()) <= 0) {

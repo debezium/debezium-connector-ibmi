@@ -94,7 +94,7 @@ final class As400SourceNormalizer {
                     throw new IllegalArgumentException("Unsupported cycle-zero source operation");
                 }
                 return autocommit.accept(source, table.identity(), record(header, table.identity()),
-                        table.materialize(header, data, offset, maximumRowBytes), completedReplay);
+                        materialize(table, header, data, offset, currentPosition), completedReplay);
             }
             if (header.getJournalCode() == 'D' && header.getEntryType().equals("CG")) {
                 var clear = clears.decode(header, data, offset);
@@ -131,7 +131,7 @@ final class As400SourceNormalizer {
                 buffer.compensation(source);
                 return Optional.empty();
             }
-            As400RowData values = table.materialize(header, data, offset, maximumRowBytes);
+            As400RowData values = materialize(table, header, data, offset, currentPosition);
             switch (header.getEntryType()) {
                 case "PT", "PX" -> buffer.insert(source, record, values);
                 case "UB" -> buffer.beforeImage(source, record, values);
@@ -155,8 +155,28 @@ final class As400SourceNormalizer {
         }
     }
 
+    private As400RowData materialize(TableBinding table, EntryHeader header, byte[] data, int offset, JournalPosition position) throws Exception {
+        if (table.excluded() && tables.allowsExcludedHistoricalLayout(header, position)) {
+            // A complete creation/DDL interval proves this excluded row predates
+            // the acquired layout. Validate its physical envelope without using
+            // today's field count or interpreting any historical values.
+            table.validateExcludedRow(header, data, offset, true);
+            return As400RowData.excluded();
+        }
+        return table.materialize(header, data, offset, maximumRowBytes);
+    }
+
     static As400SourceMetadata validateSource(EntryHeader header, byte[] data, int offset, JournalPosition position) {
         return validateSource(header, data, offset, position, false);
+    }
+
+    /** Candidate metadata only: creation/lifetime proof must establish identity and exclusion before consuming this row. */
+    static As400SourceMetadata validateUnobservedRow(EntryHeader header, byte[] data, int offset, JournalPosition position) {
+        if (header.getPointerHandle() == 0) {
+            return validateSource(header, data, offset, position);
+        }
+        io.debezium.ibmi.db2.journal.retrieve.PointerRowEntryDecoder.metadata(header, data, offset);
+        return validateSource(header, data, offset, position, true);
     }
 
     static As400SourceMetadata validateSource(EntryHeader header, byte[] data, int offset, JournalPosition position, TableResolver tables) throws Exception {
@@ -174,6 +194,20 @@ final class As400SourceNormalizer {
     }
 
     private static As400SourceMetadata validateSource(EntryHeader header, byte[] data, int offset, JournalPosition position, boolean excludedPointer) {
+        return validateSource(header, data, offset, position, excludedPointer, 0);
+    }
+
+    static As400SourceMetadata validateMemberJournalAttribute(EntryHeader header, byte[] data, JournalPosition position) {
+        if (header.getJournalCode() != 'F' || !header.getEntryType().equals("JC")) {
+            throw new IllegalArgumentException("Expected member journal-attribute companion");
+        }
+        // IBM marks the F/JC companion ignored during APYJRNCHG/RMVJRNCHG.
+        // This is distinct from incomplete/minimized row data; no row receives this exception.
+        return validateSource(header, data, 0, position, false, 0x10);
+    }
+
+    private static As400SourceMetadata validateSource(EntryHeader header, byte[] data, int offset, JournalPosition position,
+                                                      boolean excludedPointer, int allowedFlags) {
         Objects.requireNonNull(header);
         Objects.requireNonNull(data);
         Objects.requireNonNull(position);
@@ -189,7 +223,7 @@ final class As400SourceNormalizer {
         name(header.getEntryType(), 2);
         var info = Objects.requireNonNull(header.getControlInfo());
         if (info.nestedCommitLevel() < 0 || info.hasTransactionIdentifier() || info.hasLogicalUnitOfWork()
-                || (info.flags() & 0x3f) != (excludedPointer ? 0x20 : 0) || !excludedPointer && header.getPointerHandle() != 0) {
+                || (info.flags() & 0x3f & ~allowedFlags) != (excludedPointer ? 0x20 : 0) || !excludedPointer && header.getPointerHandle() != 0) {
             throw new IllegalArgumentException("Unsupported, minimized, incomplete, or pointer-backed source entry");
         }
         return As400SourceMetadata.from(header, position);
@@ -279,6 +313,15 @@ final class As400SourceNormalizer {
     interface TableResolver {
         TableBinding resolve(String physicalFile, String library) throws Exception;
 
+        /** Apply capture selection to a newly acquired SQL identity, never to a guessed system name. */
+        default boolean needsValues(io.debezium.relational.TableId table) {
+            return true;
+        }
+
+        default boolean allowsExcludedHistoricalLayout(EntryHeader header, JournalPosition position) {
+            return false;
+        }
+
         default TableBinding resolve(String physicalFile, String library, String member) throws Exception {
             TableBinding binding = resolve(physicalFile, library);
             return binding == null || member.isEmpty() ? binding : binding.forMember(member);
@@ -288,12 +331,47 @@ final class As400SourceNormalizer {
             return false;
         }
 
+        default As400JournalLifecycle.FileIdentity lifecycleIdentity(String file, String library, String member) throws Exception {
+            return As400JournalLifecycle.FileIdentity.of(resolve(file, library, member));
+        }
+
         default boolean creationLifecycle(RawJournalPage.Entry entry) throws Exception {
             return false;
         }
 
         default void schemaChange(RawJournalPage.Entry entry) throws Exception {
             throw new IllegalArgumentException("Unsupported transactional D/CG schema change");
+        }
+
+        default boolean deferredSchema(java.math.BigInteger cycle) {
+            return deferredSchemaCycles().contains(cycle);
+        }
+
+        default java.util.Set<java.math.BigInteger> deferredSchemaCycles() {
+            return java.util.Set.of();
+        }
+
+        /** An individually validated object record retained until its schema outcome is known. */
+        default java.math.BigInteger deferredObjectCycle(io.debezium.ibmi.db2.journal.retrieve.rjne0200.EntryHeader header, JournalPosition position) {
+            return null;
+        }
+
+        /** Called only for owned, lifecycle-validated entries from a deferred cycle. */
+        default boolean replaySchemaEntry(RawJournalPage.Entry entry) throws Exception {
+            return false;
+        }
+
+        default boolean schemaChangeRequiresIdle(RawJournalPage.Entry entry) {
+            return false;
+        }
+
+        default void finishDeferredSchema(RawJournalPage.Entry terminal) throws Exception {
+            throw new IllegalStateException("No deferred schema cycle");
+        }
+
+        /** Calculate retention without retiring history; other dependencies may still move F backwards. */
+        default As400Checkpoint retainSchemaContext(As400Checkpoint checkpoint) {
+            return checkpoint;
         }
 
         default As400Checkpoint schemaCheckpoint(As400Checkpoint checkpoint) {
@@ -323,6 +401,7 @@ final class As400SourceNormalizer {
         }
 
         Object[] values(EntryHeader header, byte[] data, int offset) throws java.io.IOException {
+            requireActiveMember();
             if (excluded) {
                 throw new IllegalStateException("Excluded binding cannot decode output columns");
             }
@@ -355,6 +434,7 @@ final class As400SourceNormalizer {
         }
 
         void requireTableWideClear() {
+            requireActiveMember();
             if (members.size() != 1 && !excluded) {
                 throw new IllegalArgumentException("A member clear cannot be emitted as a whole-table truncate for a multi-member file");
             }
@@ -364,11 +444,22 @@ final class As400SourceNormalizer {
             if (!excluded) {
                 return As400RowData.copyOf(values(header, data, offset), maximumBytes);
             }
+            requireActiveMember();
             validateExcludedRow(header, data, offset);
             return As400RowData.excluded();
         }
 
+        private void requireActiveMember() {
+            if (members.isEmpty()) {
+                throw new IllegalArgumentException("Physical file has no active member");
+            }
+        }
+
         void validateExcludedRow(EntryHeader header, byte[] data, int offset) throws java.io.IOException {
+            validateExcludedRow(header, data, offset, false);
+        }
+
+        private void validateExcludedRow(EntryHeader header, byte[] data, int offset, boolean historicalLayout) throws java.io.IOException {
             // No value codecs or nullable guesses for excluded files. Retain the
             // real row/clear effects, pairing and savepoints, and still reject an
             // incomplete physical image or a changed pinned format.
@@ -382,10 +473,12 @@ final class As400SourceNormalizer {
                     || (header.getEntryType().equals("UB") || header.getEntryType().equals("DL")) && header.getControlInfo().indicatorFlag() != '1') {
                 throw new java.io.IOException("Incomplete or unsupported excluded row image");
             }
+            boolean unobserved = excluded && identity.recordFormat().equals(As400BindingDefinition.UNOBSERVED_LAYOUT);
+            historicalLayout |= unobserved;
             String[] format = identity.recordFormat().split(":", -1);
-            int length = Integer.parseInt(format[2]), fields = Integer.parseInt(format[3]);
+            int length = unobserved ? 0 : Integer.parseInt(format[2]), fields = unobserved ? 0 : Integer.parseInt(format[3]);
             int prefix = (int) header.getEntrySpecificDataOffset(), end = header.getEndOffset();
-            if (offset < 0 || (long) offset + end > data.length || prefix < 236 || (long) prefix + 16 + length > end) {
+            if (offset < 0 || (long) offset + end > data.length || prefix < 236 || (long) prefix + 16 > end) {
                 throw new java.io.IOException("Incomplete excluded row payload");
             }
             int declared = 0;
@@ -396,8 +489,14 @@ final class As400SourceNormalizer {
                 }
                 declared = declared * 10 + digit - 0xf0;
             }
-            if (declared != length) {
+            if (!historicalLayout && declared != length) {
                 throw new java.io.IOException("Excluded row differs from pinned physical format");
+            }
+            if (historicalLayout) {
+                length = declared;
+            }
+            if (length <= 0 || (long) prefix + 16 + length > end) {
+                throw new java.io.IOException("Incomplete excluded row payload");
             }
             int map = header.getNullValueOffest();
             if (map != 0) {
@@ -405,7 +504,7 @@ final class As400SourceNormalizer {
                     throw new java.io.IOException("Incomplete excluded null map");
                 }
                 int count = java.nio.ByteBuffer.wrap(data, offset + map, 4).getInt();
-                if (count != 0 && count != fields || (long) map + 4 + count > end
+                if (count < 0 || !historicalLayout && count != 0 && count != fields || (long) map + 4 + count > end
                         || map < prefix + 16 + length && (long) map + 4 + count > prefix) {
                     throw new java.io.IOException("Invalid excluded null map bounds");
                 }

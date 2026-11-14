@@ -48,7 +48,18 @@ class As400RecoveryRestartTest {
         var initial = As400RecoveryTaskFixture.initialize(new Fixture(directory));
         var durable = new AtomicReference<Map<String, ?>>(initial);
         var disconnect = new AtomicBoolean();
+        var disconnectDuringPollAdmission = new AtomicBoolean();
+        Thread poller = Thread.currentThread();
         var first = new As400RecoveryTaskFixture(directory, initial.get("capture_fingerprint")) {
+            @Override
+            public void checkQualified(Configuration config) {
+                if (Thread.currentThread() == poller && disconnectDuringPollAdmission.compareAndSet(true, false)) {
+                    disconnect.set(true);
+                    org.awaitility.Awaitility.await().atMost(Duration.ofSeconds(5)).until(stopped::get);
+                }
+                super.checkQualified(config);
+            }
+
             @Override
             public boolean supportsTaskRestart() {
                 return true;
@@ -93,7 +104,7 @@ class As400RecoveryRestartTest {
             var before = through(task, "42");
             acknowledge(task, durable, before);
             assertThat(As400RecoveryTestSupport.data(before)).containsExactly("c:DCOC1107.A:8");
-            disconnect.set(true);
+            disconnectDuringPollAdmission.set(true);
             var after = through(task, "59");
             assertThat(admissions).hasValue(2);
             assertThat(second.recoveries).hasValue(1);

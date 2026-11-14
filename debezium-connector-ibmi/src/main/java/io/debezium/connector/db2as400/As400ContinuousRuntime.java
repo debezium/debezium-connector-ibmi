@@ -77,6 +77,9 @@ final class As400ContinuousRuntime implements AutoCloseable {
     private As400SchemaTimeline schemas;
     private RawJournalPage.Entry scan;
     private boolean closed;
+    private int incompleteObservations;
+    private JournalPosition pendingSchema;
+    private long pendingSchemaSince;
 
     As400ContinuousRuntime(Map<String, ?> durable, As400BindingHistory.Recovered history, Intervals intervals,
                            As400ReplayCoordinator.RecordFactory dispatcher, As400ReplayCoordinator.RecordSink sink,
@@ -128,29 +131,34 @@ final class As400ContinuousRuntime implements AutoCloseable {
             }
             As400OperatorCutReader.Cut cut = null;
             int retries = 0;
-            boolean incompleteObservation = false;
             while (cut == null) {
                 admission.checkOpen();
                 try {
                     cut = intervals.read(durable, Optional.ofNullable(scan));
                 }
                 catch (As400OperatorJournalEvidence.IncompleteObservationException incomplete) {
-                    incompleteObservation = true;
-                    if (incomplete.getSuppressed().length > 0 || ++retries > 2) {
+                    if (incomplete.getSuppressed().length > 0) {
                         throw incomplete;
                     }
+                    incompleteObservation(incomplete);
+                    if (++retries > 2) {
+                        if (!limits.deferAttachmentRaces()) {
+                            throw incomplete;
+                        }
+                        admission.checkOpen();
+                        return new Progress(expected, replay == null ? Optional.empty() : replay.scanPosition(), 0, retries, true);
+                    }
                     // Reopen and revalidate from the same scan and durable F/W.
-                    // Unlike attachment races, repeated partial observations may
-                    // indicate a permanent authority problem and cannot defer.
-                    LOGGER.warn("Discarded incomplete journal observation (SQLSTATE {}, code {}); recollecting interval, attempt {} of 2",
-                            incomplete.getSQLState(), incomplete.getErrorCode(), retries);
+                    // No partial observation can authorize publication. Foreign
+                    // catalog churn may outlast this poll; the coordinator backs
+                    // off and retries without requiring an operator restart.
                 }
                 catch (As400OperatorCutReader.UnstableCutException race) {
                     if (race.getSuppressed().length > 0) {
                         throw race; // An uncertain connection/resource close cannot authorize another read.
                     }
                     if (++retries > 2) {
-                        if (incompleteObservation || !limits.deferAttachmentRaces()) {
+                        if (!limits.deferAttachmentRaces()) {
                             throw race;
                         }
                         admission.checkOpen();
@@ -166,13 +174,14 @@ final class As400ContinuousRuntime implements AutoCloseable {
             }
             if (replay == null) {
                 order = cut.order();
+                history.verify(completed, order);
                 if (limits.storage() != null) {
                     spill = new As400SpillStore(limits.storage());
                 }
                 var tables = history.resolver(65536);
                 if (history.schemaHistory() != null && schemaChanged != null) {
-                    schemas = new As400SchemaTimeline(history.schemaHistory(), history.definitions(), completed, order,
-                            intervals::schemaChange, schemaChanged, spill);
+                    schemas = new As400SchemaTimeline(history.schemaHistory(), history.definitions(), completed.withSchemaState(history.replaySchemaState()), order,
+                            (before, opening, bindings) -> intervals.schemaChange(before, opening, selectedTables(bindings)), schemaChanged, spill);
                     tables = schemas;
                 }
                 else if (!completed.schemaState().equals(As400SchemaState.EMPTY)) {
@@ -186,6 +195,9 @@ final class As400ContinuousRuntime implements AutoCloseable {
                             admission.checkOpen();
                             return accepted;
                         }, limits.lifecycle(), true, spill);
+                if (schemas != null) {
+                    schemas.bindReplay(replay::schemaCycle, replay::requireIdleTable);
+                }
             }
             else {
                 // The interval already verified every retained receiver. Bound
@@ -207,9 +219,30 @@ final class As400ContinuousRuntime implements AutoCloseable {
                         schemas.before(entry);
                     }
                     catch (As400SchemaTimeline.PendingChangeException pending) {
+                        incompleteObservations = 0;
+                        if (!entry.position().equals(pendingSchema)) {
+                            pendingSchema = entry.position();
+                            pendingSchemaSince = System.nanoTime();
+                            LOGGER.warn("Journal scanning is waiting for schema outcome/evidence at {} for {}.{}; unrelated output is paused until it is qualified",
+                                    entry.position(), entry.header().getLibrary(), entry.header().getFile());
+                        }
                         expected = replay.checkpoint().toOffset();
                         lastDurable = saved;
                         return new Progress(expected, replay.scanPosition(), processed, retries, true);
+                    }
+                    catch (As400OperatorJournalEvidence.IncompleteObservationException incomplete) {
+                        if (!limits.deferAttachmentRaces() || incomplete.getSuppressed().length != 0) {
+                            throw incomplete;
+                        }
+                        incompleteObservation(incomplete);
+                        expected = replay.checkpoint().toOffset();
+                        lastDurable = saved;
+                        return new Progress(expected, replay.scanPosition(), processed, retries, true);
+                    }
+                    if (entry.position().equals(pendingSchema)) {
+                        LOGGER.info("Schema outcome/evidence at {} is qualified; journal scanning resumes after {} ms", pendingSchema,
+                                java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - pendingSchemaSince));
+                        pendingSchema = null;
                     }
                 }
                 if (replay.accept(entry.header(), entry.data(), 0, entry.position()).isPresent()) {
@@ -223,6 +256,7 @@ final class As400ContinuousRuntime implements AutoCloseable {
             admission.checkOpen();
             expected = replay.checkpoint().toOffset();
             lastDurable = saved;
+            incompleteObservations = 0;
             return new Progress(expected, replay.scanPosition(), cut.entries().size(), retries, false);
         }
         catch (Exception failure) {
@@ -242,8 +276,22 @@ final class As400ContinuousRuntime implements AutoCloseable {
         }
     }
 
+    private void incompleteObservation(As400OperatorJournalEvidence.IncompleteObservationException incomplete) {
+        incompleteObservations = As400OperatorJournalEvidence.retryIncomplete(incompleteObservations, incomplete);
+    }
+
     private As400SourceNormalizer.TableResolver selectedTables(As400SourceNormalizer.TableResolver retained) {
         return new As400SourceNormalizer.TableResolver() {
+            @Override
+            public boolean needsValues(io.debezium.relational.TableId table) {
+                return dispatcher.needsValues(table);
+            }
+
+            @Override
+            public boolean allowsExcludedHistoricalLayout(io.debezium.ibmi.db2.journal.retrieve.rjne0200.EntryHeader header, JournalPosition position) {
+                return retained.allowsExcludedHistoricalLayout(header, position);
+            }
+
             @Override
             public As400SourceNormalizer.TableBinding resolve(String file, String library) throws Exception {
                 var binding = retained.resolve(file, library);
@@ -257,6 +305,11 @@ final class As400ContinuousRuntime implements AutoCloseable {
             }
 
             @Override
+            public As400JournalLifecycle.FileIdentity lifecycleIdentity(String file, String library, String member) throws Exception {
+                return retained.lifecycleIdentity(file, library, member);
+            }
+
+            @Override
             public boolean creationLifecycle(RawJournalPage.Entry entry) throws Exception {
                 return retained.creationLifecycle(entry);
             }
@@ -264,6 +317,36 @@ final class As400ContinuousRuntime implements AutoCloseable {
             @Override
             public void schemaChange(RawJournalPage.Entry entry) throws Exception {
                 retained.schemaChange(entry);
+            }
+
+            @Override
+            public java.util.Set<java.math.BigInteger> deferredSchemaCycles() {
+                return retained.deferredSchemaCycles();
+            }
+
+            @Override
+            public java.math.BigInteger deferredObjectCycle(io.debezium.ibmi.db2.journal.retrieve.rjne0200.EntryHeader header, JournalPosition position) {
+                return retained.deferredObjectCycle(header, position);
+            }
+
+            @Override
+            public boolean replaySchemaEntry(RawJournalPage.Entry entry) throws Exception {
+                return retained.replaySchemaEntry(entry);
+            }
+
+            @Override
+            public boolean schemaChangeRequiresIdle(RawJournalPage.Entry entry) {
+                return retained.schemaChangeRequiresIdle(entry);
+            }
+
+            @Override
+            public void finishDeferredSchema(RawJournalPage.Entry terminal) throws Exception {
+                retained.finishDeferredSchema(terminal);
+            }
+
+            @Override
+            public As400Checkpoint retainSchemaContext(As400Checkpoint checkpoint) {
+                return retained.retainSchemaContext(checkpoint);
             }
 
             @Override

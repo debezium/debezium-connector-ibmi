@@ -335,7 +335,7 @@ class As400NativeHandoffSession implements As400TaskHandoff {
                 return Optional.of(new Discovered(c.window().journalToken(), c.origin(), c.window().receiverTokens().get(c.origin().receiver()),
                         definitions, new As400BindingHistory.Discovery(c.historyFloor(), nativeHistory.order().incarnation(c.historyFloor()))));
             }
-            catch (IllegalArgumentException rejected) {
+            catch (IllegalArgumentException | As400OperatorJournalEvidence.IncompleteObservationException rejected) {
                 check();
                 if (hasSuppressedCleanup(rejected)) {
                     throw rejected;
@@ -364,6 +364,21 @@ class As400NativeHandoffSession implements As400TaskHandoff {
             if (candidate.isEmpty()) {
                 observe("busy-" + attempt, () -> Map.of("refused", true));
             }
+            else {
+                var observed = candidate.orElseThrow();
+                try {
+                    requireImages(background, observed.bindings().definitions());
+                }
+                catch (Exception failure) {
+                    try {
+                        observed.close();
+                    }
+                    catch (Exception cleanup) {
+                        failure.addSuppressed(cleanup);
+                    }
+                    throw failure;
+                }
+            }
             return candidate;
         }
         catch (As400NativeBoundaryCollector.MetadataUnavailable unavailable) {
@@ -388,10 +403,11 @@ class As400NativeHandoffSession implements As400TaskHandoff {
             if (hasSuppressedCleanup(rejected)) {
                 throw rejected;
             }
-            LOGGER.warn("Transactional truncate boundary rejected; legacy capture continues: {}", rejected.getMessage());
+            LOGGER.warn("Transactional truncate boundary rejected; legacy capture continues: {}",
+                    rejected.getCause() == null ? rejected.getMessage() : rejected.getCause().getMessage());
             return Optional.empty();
         }
-        catch (IllegalArgumentException | As400NativeEvidenceException rejected) {
+        catch (IllegalArgumentException | As400NativeEvidenceException | As400OperatorJournalEvidence.IncompleteObservationException rejected) {
             check();
             if (hasSuppressedCleanup(rejected)) {
                 throw rejected;
@@ -484,6 +500,7 @@ class As400NativeHandoffSession implements As400TaskHandoff {
                         limits.transactions().maxTransactions(), legacyStore);
                 var prefix = new As400LegacyNativePrefix(foreground.journals, foreground.identities, foreground.reader, source,
                         partition(), scan, this::check, new As400OperatorCutReader.Limits(32, 500, 16 * 1024 * 1024), clears);
+                int incompleteObservations = 0;
                 while (true) {
                     check();
                     if (signals != null) {
@@ -492,14 +509,24 @@ class As400NativeHandoffSession implements As400TaskHandoff {
                     Optional<Map<String, ?>> progress;
                     try {
                         progress = prefix.publishNext();
+                        if (progress.isEmpty() && pending.isPresent() && prefix.scan().offset().compareTo(pending.orElseThrow().origin().offset()) < 0) {
+                            progress = prefix.advanceThroughMarker(pending.orElseThrow().origin());
+                        }
+                        incompleteObservations = 0;
+                    }
+                    catch (As400OperatorJournalEvidence.IncompleteObservationException incomplete) {
+                        if (hasSuppressedCleanup(incomplete)) {
+                            throw incomplete;
+                        }
+                        check();
+                        incompleteObservations = As400OperatorJournalEvidence.retryIncomplete(incompleteObservations, incomplete);
+                        Thread.sleep(1000);
+                        continue;
                     }
                     catch (As400OperatorCutReader.UnstableCutException race) {
                         LOGGER.info("Receiver changed during legacy prefix qualification; retrying from the last observed scan");
                         Thread.sleep(250);
                         continue;
-                    }
-                    if (progress.isEmpty() && pending.isPresent() && prefix.scan().offset().compareTo(pending.orElseThrow().origin().offset()) < 0) {
-                        progress = prefix.advanceThroughMarker(pending.orElseThrow().origin());
                     }
                     if (progress.isEmpty() && staging.pending() && prefix.completePosition().isPresent()) {
                         progress = prefix.completePosition();
@@ -546,12 +573,16 @@ class As400NativeHandoffSession implements As400TaskHandoff {
                         try (var history = historyReader()) {
                             As400NativeHandoffHistory.Prepared prepared = null;
                             try {
+                                // Check before offering HANDOFF: a current clear
+                                // may temporarily end journaling and must leave
+                                // this candidate replaceable while legacy CDC runs.
+                                requireImages(foreground, pending.orElseThrow().definitions());
                                 prepared = history.resume(pending.orElseThrow(), prefix.scan(), config, policy);
                             }
                             catch (As400ProspectiveHandoffReplay.PriorEpochPending | As400HandoffReplay.SelectedPrefixPending deferred) {
                                 observe("deferred-" + steps, () -> Map.of("reason", deferred.getMessage()));
                             }
-                            catch (IllegalArgumentException rejected) {
+                            catch (IllegalArgumentException | As400NativeEvidenceException | As400OperatorJournalEvidence.IncompleteObservationException rejected) {
                                 check();
                                 require(!durable().containsKey(As400LegacyHandoff.VERSION), "Cannot replace an acknowledged handoff");
                                 if (hasSuppressedCleanup(rejected)) {
@@ -630,6 +661,9 @@ class As400NativeHandoffSession implements As400TaskHandoff {
         check();
         var history = foreground.history.recoverOnlineCandidate(durable, identity, policy);
         history.requireStartupOrigin(durable, true);
+        // Replay validates the retained journaling lifecycle. A transactional
+        // clear can temporarily end journaling, so today's OBJECT_STATISTICS
+        // cannot qualify the historical stream on an ordinary restart.
         requireTopics(history.definitions());
         continuation = new As400OperatorCutReader(foreground.journals, foreground.identities, journal, history, foreground.reader, foreground.cutLimits,
                 () -> foreground.connection(false));
@@ -652,6 +686,30 @@ class As400NativeHandoffSession implements As400TaskHandoff {
                 .collect(before, opening, verifiedBindings);
         requireTopics(change.after() == null ? List.of() : List.of(change.after()));
         return change;
+    }
+
+    private void requireImages(As400DcgNativeIo io, List<As400BindingDefinition> definitions) throws Exception {
+        var selected = definitions.stream().filter(definition -> config.getTableFilters().dataCollectionFilter().isIncluded(definition.schema().id())
+                || config.isSignalDataCollection(definition.schema().id())).toList();
+        int incompleteObservations = 0;
+        while (!selected.isEmpty()) {
+            check();
+            try (var connection = io.connection(false)) {
+                As400DcgScope.requireImages(connection, journal, selected);
+                break;
+            }
+            catch (As400OperatorJournalEvidence.IncompleteObservationException incomplete) {
+                if (hasSuppressedCleanup(incomplete)) {
+                    throw incomplete;
+                }
+                if (++incompleteObservations > As400OperatorJournalEvidence.MAX_INCOMPLETE_OBSERVATIONS) {
+                    throw new IllegalStateException("Captured-file catalog remained incomplete; correct the SQL warning before restarting", incomplete);
+                }
+                LOGGER.warn("Captured-file catalog is incomplete; recollecting before publication: {}", incomplete.getCause().getMessage());
+                Thread.sleep(1000);
+            }
+        }
+        check();
     }
 
     private void requireTopics(List<As400BindingDefinition> definitions) {

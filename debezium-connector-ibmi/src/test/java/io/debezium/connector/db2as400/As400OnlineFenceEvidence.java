@@ -231,10 +231,11 @@ public final class As400OnlineFenceEvidence {
                     if (sql.contains("UNION ALL")) {
                         require(parameters.size() >= 4 && parameters.size() <= 32 && parameters.size() % 2 == 0,
                                 "Bounded exact-path object batch required");
-                        require(sql.equals(String.join(" UNION ALL ", java.util.Collections.nCopies(parameters.size() / 2,
-                                As400OperatorTableEvidence.OBJECT_SQL))), "Uncaptured object query");
+                        String original = List.of(As400OperatorTableEvidence.OBJECT_SQL, As400JdbcNativeIdentityEvidence.SQL).stream()
+                                .filter(candidate -> sql.equals(String.join(" UNION ALL ", java.util.Collections.nCopies(parameters.size() / 2, candidate))))
+                                .findFirst().orElseThrow(() -> new SQLException("Uncaptured object query"));
                         for (int i = 1; i <= parameters.size(); i += 2) {
-                            data.addAll(consume(List.of(As400OperatorTableEvidence.OBJECT_SQL, parameters.get(i), parameters.get(i + 1))));
+                            data.addAll(consume(List.of(original, parameters.get(i), parameters.get(i + 1))));
                         }
                     }
                     else if (parameters.size() > 2) {

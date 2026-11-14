@@ -69,6 +69,19 @@ final class As400JournalOrder {
         return order.size();
     }
 
+    /** A separately observed schema outcome cannot extend the streaming reader's verified cut. */
+    boolean covers(JournalPosition position, String receiverIdentity) {
+        As400Checkpoint.validatePosition(position);
+        var range = ranges.get(position.receiver());
+        if (range == null) {
+            return false;
+        }
+        if (!incarnations.get(position.receiver()).equals(receiverIdentity) || position.offset().compareTo(range.first()) < 0) {
+            throw new IllegalArgumentException("Schema outcome changed a verified receiver identity or range");
+        }
+        return position.offset().compareTo(range.last()) <= 0;
+    }
+
     /** Single-owner extension from newly verified evidence; never replace or reorder an existing receiver. */
     void extendVerified(As400JournalOrder next, int maximumReceivers) {
         if (Thread.currentThread() != owner) {

@@ -36,6 +36,7 @@ import org.apache.kafka.connect.source.SourceRecord;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
@@ -224,14 +225,16 @@ class As400IncrementalLifecycleTest {
     }
 
     @ParameterizedTest
-    @ValueSource(strings = { "T_commit", "D_commit", "T_rollback", "D_rollback", "T_savepoint", "D_savepoint" })
-    void shouldPreserveTransactionOutcomeWhenClearRestoresJournalingWithOpenCloseEntries(String name) throws Exception {
+    @CsvSource({ "T_commit,000", "D_commit,000", "T_rollback,000", "D_rollback,000", "T_savepoint,000", "D_savepoint,000",
+            "T_commit,001", "D_rollback,001", "T_savepoint,001", "D_commit,101", "T_rollback,101", "D_savepoint,101" })
+    void shouldPreserveLocalTransactionOutcomeAcrossOpenCloseAndRemoteEligibilitySettings(String name, String attributes) throws Exception {
         var entries = entries("thread-enabled", name);
-        // A documented OMTJRNE(*NONE) variant of the captured *OPNCLO sequences.
-        // The three bytes do not alter image flags, identity or lifecycle order.
+        // Documented OMTJRNE and remote-filter eligibility variants. Remote
+        // eligibility affects transmission to a remote journal, not this local
+        // journal; these bytes do not alter images, identity or lifecycle order.
         for (Entry entry : entries) {
             if (entry.type().equals("D/JF") || entry.type().equals("F/JM")) {
-                new AS400Text(3, 37).toBytes("000", entry.bytes(), entry.header().getEntrySpecificDataOffset() + 16);
+                new AS400Text(3, 37).toBytes(attributes, entry.bytes(), entry.header().getEntrySpecificDataOffset() + 16);
             }
         }
         List<SourceRecord> records = new ArrayList<>();
@@ -246,8 +249,8 @@ class As400IncrementalLifecycleTest {
     }
 
     @ParameterizedTest
-    @ValueSource(strings = { "D/JF:001", "F/JM:001", "D/JF:010", "F/JM:010", "D/JF:200", "F/JM:200", "D/JF:101", "F/JM:101" })
-    void shouldRejectRemoteFilteringInheritanceOrUnknownOmissionBeforeClearPublication(String fault) throws Exception {
+    @ValueSource(strings = { "D/JF:002", "F/JM:102", "D/JF:010", "F/JM:010", "D/JF:200", "F/JM:200" })
+    void shouldRejectInheritanceOrUnknownRecordingAttributesBeforeClearPublication(String fault) throws Exception {
         var entries = entries("thread-enabled", "T_commit");
         String[] fields = fault.split(":");
         Entry entry = entries.get(index(entries, fields[0]));

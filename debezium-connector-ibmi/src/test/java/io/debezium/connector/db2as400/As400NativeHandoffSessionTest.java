@@ -99,7 +99,8 @@ class As400NativeHandoffSessionTest {
     }
 
     @ParameterizedTest
-    @ValueSource(strings = { "rejected-audit", "unsupported-schema", "failed-drain", "wrapped-failed-drain", "native-failure", "stopped" })
+    @ValueSource(strings = { "rejected-audit", "unsupported-schema", "failed-drain", "wrapped-failed-drain", "native-failure", "catalog-churn",
+            "catalog-churn-close-failure", "stopped" })
     void unqualifiedAuditCanRetryButNativeFailureOrUnfinishedDrainCannot(String fault) throws Exception {
         var raw = Configuration.create().with("topic.prefix", "test").with("database.schema", "LIB").with("database.dbname", "DB")
                 .with("skipped.operations", "none").with("provide.transaction.metadata", false).with("heartbeat.interval.ms", 1000)
@@ -125,6 +126,12 @@ class As400NativeHandoffSessionTest {
             cause.addSuppressed(new java.sql.SQLException("Connection close failed"));
             failure = new As400NativeEvidenceException("Unsupported native evidence", cause);
         }
+        if (fault.startsWith("catalog-churn")) {
+            failure = new As400OperatorJournalEvidence.IncompleteObservationException(new java.sql.SQLWarning("catalog changed", "01000", 462));
+            if (fault.endsWith("close-failure")) {
+                failure.addSuppressed(new java.sql.SQLException("Connection close uncertain"));
+            }
+        }
         final Exception expected = failure;
         try (var nativeHandles = mockConstruction(As400DcgNativeIo.class);
                 var collectors = mockConstruction(As400NativeBoundaryCollector.class, (collector, ignored) -> when(collector.collect()).thenThrow(expected));
@@ -136,7 +143,7 @@ class As400NativeHandoffSessionTest {
                 assertThatThrownBy(() -> session.attemptBoundary(1)).hasMessageContaining("stopped");
                 assertThat(collectors.constructed()).isEmpty();
             }
-            else if ((fault.equals("rejected-audit") || fault.equals("unsupported-schema"))) {
+            else if ((fault.equals("rejected-audit") || fault.equals("unsupported-schema") || fault.equals("catalog-churn"))) {
                 assertThat(session.attemptBoundary(1)).isEmpty();
                 assertThat(session.attemptBoundary(2)).isEmpty();
                 assertThat(collectors.constructed()).hasSize(2);
@@ -149,7 +156,8 @@ class As400NativeHandoffSessionTest {
             if (!fault.equals("stopped")) {
                 verifyNoInteractions(nativeHandles.constructed().get(0));
                 var discovery = nativeHandles.constructed().get(1);
-                verify(discovery, times((fault.equals("rejected-audit") || fault.equals("unsupported-schema")) ? 2 : 1)).requireRetention();
+                verify(discovery, times((fault.equals("rejected-audit") || fault.equals("unsupported-schema") || fault.equals("catalog-churn")) ? 2 : 1))
+                        .requireRetention();
                 verifyNoMoreInteractions(discovery);
             }
         }

@@ -273,3 +273,323 @@ remote-filtering checks. Nested artifact comparison found only
 `As400JournalLifecycle.class` changed. The burst matrix was not rerun or relabeled
 after this clear-specific correction; its unit and native verification are
 recorded separately.
+
+## Fourth-review correction comparison — 2026-11-13
+
+The final fourth-review correction artifact was measured against the original
+connector with the sustained runner. Six serial fresh-fixture/fresh-worker runs
+used the order original, disabled, enabled, enabled, disabled, original. Each
+performed two warm-up rounds, followed by 60 seconds of independently paced
+writes. Each delivered all 12,300 expected changes at 201.22–201.27 offered changes
+per second, with exact keys, mixed values, update before-images and final output
+counts. All six native and local-runtime cleanup checks passed.
+
+| Profile | Run median-delay range | Median p95 delay | CPU ms/change range | Median CPU vs. original | Peak RSS range |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Original connector | 5.206–5.226 s | 5.302 s | 0.816–0.839 | Baseline | 421.1–463.3 MiB |
+| Candidate, feature disabled | 5.217–5.218 s | 5.294 s | 0.870–0.872 | +5.2% | 441.4–444.8 MiB |
+| Candidate, disk buffer | 2.999–3.096 s | 4.102 s | 1.013–1.055 | +25.0% | 439.0–441.3 MiB |
+
+The median of the two run medians was 5.216 s for the original, 5.217 s disabled
+and 3.048 s enabled. Feature-off delay differed by 0.03%; enabled delay was 41.6%
+lower. CPU increased in both profiles. The p95 column is the median of the two
+run-level p95 values, not a percentile computed by pooling both runs. Resource
+measurements cover the whole Connect JVM from the first measured SQL submission
+through delivery of the final row. They exclude startup and warm-up. Delay is
+SQL submission to an independent `read_committed` consumer, not source commit to
+delivery. No sink participates.
+
+Both distributions use byte-identical shared driver/core dependencies and the same
+pinned Kafka 4.3.1 image. WARN conversion mode and inherited worker converter/task
+defaults are identical. History and disk-storage dependencies remain part of the
+candidate. No builds or other native experiments ran during the timed workload;
+Advisor performed a read-only source/evidence review. The host and remote server
+are shared, so the two repeats do not establish statistical equivalence.
+
+Artifact SHA-256 identities:
+
+- Original connector/parser with matched shared dependencies:
+  `7926fa3bb7912adc0fcc1948ce5055a382107ef0e40d2d227f93d0cf252481f1`.
+- Final fourth-review candidate, both disabled and enabled:
+  `6a98bbc07a058e5ead251ca5ecf1c94c395010c0a6c2d919e8be4d8065de10a0`.
+
+Reproduce each run with an unused isolated library and the owner-only connection
+configuration from the contributor instructions:
+
+```sh
+IBMI_TEST_CONFIG=/absolute/private-fixture.json python3 tools/dcg-sustained-probe.py \
+  /absolute/new-evidence DCNC9991 \
+  --distribution /absolute/original-plugin.zip --label original --mode legacy \
+  --buffer-storage memory --rows 250 --seconds 60 \
+  --failure-handling warn --worker-defaults
+```
+
+For the disabled case select the candidate ZIP with `--label disabled --mode legacy`.
+For the enabled case select it with `--label disk --mode transactional
+--buffer-storage disk`. Use a fresh library and evidence directory for every run,
+then repeat in reverse order. Keep the same JVM and recording settings. Retain
+each `connect/report.json`, `native/report.json`, sampled resources, raw observer
+records and finalized JFR recording. The current evidence summary checks artifact
+identity, all correctness/cleanup results, runtime image and CPU-sampling continuity
+before calculating the table.
+
+These are bounded latency/resource measurements at the offered rate, not maximum
+throughput or an equal-CPU claim. The memory-buffer profile, very large catalogs,
+long transactions and multi-day memory stability were not remeasured. Earlier
+tables and restart results retain their own artifact qualifications.
+
+## Fifth-review schema-change latency — 2026-11-13
+
+The review's schema-change timing observation measures an unrelated row from
+insertion to broker observation. It does not measure time spent inside the
+connector or establish that all publication stops for that interval. To reproduce
+it, `tools/dcg-schema-refresh-probe.py --schema-timing` runs two rounds of ALTER and
+LABEL on captured table B and excluded table U, inserting a probe into A after
+each statement returns. Baseline probes bracket each round. All 12 probes must
+appear exactly once with their expected keys, and their source offsets must become
+durable. This is a separate workload from the steady row-change comparison above.
+
+Two fresh fixtures ran serially, first with separate evidence connections and then
+with one connection reused within each schema observation. Each identity and
+receiver-directory sample still executes fresh queries; no evidence is cached or
+validation removed. Both runs passed their exact output and native/local cleanup
+checks. The table contains medians of two samples per case:
+
+| Probe follows | Before connection reuse | After connection reuse |
+| --- | ---: | ---: |
+| Baseline before schema changes | 4.107 s | 4.154 s |
+| ALTER on excluded U | 15.761 s | 13.854 s |
+| LABEL on excluded U | 15.163 s | 13.009 s |
+| ALTER on captured B | 16.381 s | 13.133 s |
+| LABEL on captured B | 13.901 s | 12.608 s |
+| Baseline after schema changes | 4.082 s | 4.166 s |
+
+Artifact SHA-256 identities:
+
+- Before reuse: `2cf765ec8b22c3185a4cc5029d949fad92d0ac2539ccf86c988de45b4fc645b6`.
+- After reuse, source checkpoint `deb8139`:
+  `7f00362ce398f6923d1f7b211f1ff97deb0797413e65d5d973310d913aadc46d`.
+
+The revised observation uses one JDBC session instead of eight for its four
+receiver/identity samples. Table-definition acquisition retains its own before
+and after checks. The later artifact also contains the constraint-key correction;
+this timing workload does not change constraints. No other local native experiment
+or build ran during either timed workload, but the database and host are shared.
+Observer polling and process startup are included in the measurement.
+
+The remaining additional schema-change latency is material: these samples do not
+establish parity with the original connector, maximum DDL throughput, or a fixed
+pause duration. They also do not rerun or replace the earlier row-throughput/CPU
+matrix. Retain both reports, their raw intervals and cleanup results when comparing
+future changes; do not infer sustained DDL throughput from these two repetitions.
+
+A separate recorded run of the same workload also passed all 12 probes and
+cleanup. Its JFR snapshot covers the first ten probes, including seven schema
+refreshes. On the coordinator thread, recorded blocking events attributed about
+26.5 seconds to fresh receiver/identity observations, 24.2 seconds to table
+definition acquisition, 1.5 seconds to opening the observation connection and
+0.6 seconds to raw journal reads, accumulated across those refreshes. This points
+to native metadata round trips as the next optimization target. The recording
+excludes waits below its thresholds and is not a complete wall-time accounting;
+its timing samples include profiling overhead and are not pooled into the clean
+comparison above. No validation check was removed to produce these results.
+
+## Fifth-review final-candidate comparison — 2026-11-13
+
+The final candidate at `48978c6`, including the deferred-creation clear correction,
+passed six serial native runs with the same sustained workload and forward/reverse
+ordering described above. Every run delivered all 12,300 measured changes after
+two warm-up rounds: 73,800 measured changes in total, offered at 201.13–201.31
+changes per second. Exact keys, mixed values, update before-images and final output
+counts passed. All six fixtures, native sessions and local Kafka resources were
+cleaned; a separate read-only check confirmed their absence.
+
+| Profile | Run median-delay range | Median p95 delay | CPU ms/change range | Median CPU vs. original | Peak RSS range |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Original connector | 5.220–5.222 s | 5.304 s | 0.870–0.906 | Baseline | 442.2–442.7 MiB |
+| Candidate, feature disabled | 5.211–5.221 s | 5.299 s | 0.857–0.908 | −0.6% | 448.1–465.8 MiB |
+| Candidate, disk buffer | 2.961–3.045 s | 4.060 s | 1.059–1.066 | +19.7% | 434.9–451.0 MiB |
+
+The medians of the two run medians were 5.221 s, 5.216 s and 3.003 s respectively.
+Feature-off delay was 0.10% lower and CPU/change 0.6% lower in these samples;
+those small differences do not establish an improvement. Enabled delay was 42.5%
+lower, with 19.7% more whole-worker CPU/change. The original's additional journal
+cache delay remains unchanged. RSS is resident worker memory, not retained heap;
+these short runs do not establish memory stability or a leak.
+
+Both builds used the same pinned Kafka image, WARN conversion mode, inherited
+worker defaults and byte-identical shared core/driver dependencies. The original
+connector/parser remain unchanged at `2e19ad27`; matching the driver override to
+the candidate changed only its manifest metadata, not driver classes or resources.
+The candidate additionally includes history and disk-buffer dependencies. No
+build, other local benchmark or coordinated native review ran during measurements.
+The host and server remain shared.
+
+Exact plugin SHA-256 identities:
+
+- Original with matched dependencies:
+  `d30e4a8e5a6646a5df009ad4e53b7444dee02dc9486430a023591219fe62e2a8`.
+- Candidate, embedded source revision `48978c6`:
+  `6e317878fe16b2d7fc0655e399ffec18c2a6996a5a3570f96c0dad173c0c6bdb`.
+
+Use the [sustained reproduction commands](#fourth-review-correction-comparison--2026-11-13)
+with these selected artifacts. Retained evidence checks the artifact hashes,
+runtime image, exact output, cleanup and resource-sampling continuity before
+calculating these results. Each p95 is summarized across run-level measurements,
+not calculated from pooled records. Delay remains SQL submission to independent
+Kafka observation, not source-commit latency. Two 60-second repetitions per
+profile do not establish statistical equivalence, maximum capacity, large-catalog
+performance, long-transaction behavior or multi-day stability. The memory profile
+was not remeasured. The separate schema-change latency gap above remains open;
+steady row traffic does not measure that work.
+
+## Metadata transport comparison — 2026-11-13
+
+A later change, `e799b3b`, batches short native identity observations with the
+existing bounded exact-path query and reuses the schema observation's JDBC
+connection for table-definition acquisition. Both complete table observations,
+column/key reads, warning checks and journal re-observations still run. This
+removes repeated connection establishment and queries; it does not cache evidence
+or change offsets, schema-history formats or publication rules.
+
+The same `--schema-timing` workload ran four times in fresh isolated libraries,
+in this order: preceding build `012b022`, optimized build, optimized build,
+preceding build. Each run performed two rounds with captured B and excluded U,
+using Kafka source transactions and transaction metadata. All 48 timed probes
+appeared exactly once with their expected keys and durable acknowledgements.
+Fixture cleanup and separate read-only source/local-resource absence checks
+passed after every run. No other local review build or native experiment ran
+during the comparison.
+
+The table reports medians of four end-to-end probe measurements per build and
+case; ranges include every sample:
+
+| Probe follows | `012b022` median (range) | `e799b3b` median (range) | Median change |
+| --- | ---: | ---: | ---: |
+| Baseline before schema changes | 4.086 s (3.784–4.215) | 2.926 s (2.841–3.901) | −28.4% |
+| ALTER on excluded U | 14.380 s (14.254–14.438) | 11.541 s (11.067–11.759) | −19.7% |
+| LABEL on excluded U | 12.672 s (12.512–12.691) | 11.415 s (10.085–11.533) | −9.9% |
+| ALTER on captured B | 14.337 s (11.354–14.448) | 11.464 s (10.407–11.679) | −20.0% |
+| LABEL on captured B | 12.678 s (12.626–12.881) | 10.275 s (10.009–11.787) | −19.0% |
+| Baseline after schema changes | 3.769 s (2.768–4.162) | 4.325 s (2.784–4.412) | +14.7% |
+
+Artifact SHA-256 identities:
+
+- `012b022`: `3ec09b25e7bfd72d562346a8cae8731ab0ff5e45afa80fe9b1a7dcfcbd039b13`.
+- `e799b3b`: `8acf4abe559abceebdffe3e619be4b8d8b21478801a85c96bce66cfdfbd7fc7d`.
+
+The manifests differ in exactly the four intended transport classes. All 203 main
+source files and 15 packaged JARs are identified; each plugin records its exact
+source revision and matches its compiled classes. Local verification for the
+optimized build passed 4,766 connector and 256 parser tests, plus assembly and
+formatter/import validation. The initial full-suite attempt exposed a fixture
+replay helper that accepted only the former single-object identity query; after
+adapting it to consume the same independently captured observations in batches,
+the full suite passed. No failure or integrity assertion was removed.
+
+These bounded samples support lower latency for the tested schema changes. They
+do not establish steady-row throughput, equal CPU cost, saturation capacity, a
+fixed pause duration or parity with the original connector. Baseline controls
+vary and the after-round baseline median increased; observer polling and process
+startup are included, and the host and IBM i are shared. The earlier steady-row
+comparison remains pinned to its own builds. The remaining schema-change latency
+and the separate correctness review remain open readiness work.
+
+## Shared-rollback candidate comparison — 2026-11-13
+
+The `89ff007` candidate passed six serial native runs after the historical-name,
+excluded-lifetime and shared ALTER/DROP commit/rollback corrections. The order was
+original, disabled, disk, disk, disabled, original. Each run delivered all 12,300
+measured changes after two warm-up rounds: 73,800 changes in total, offered at
+201.14–201.28 changes per second. Exact keys, mixed values, update before-images
+and output counts passed. All fixtures, sessions and local Kafka resources were
+cleaned, and a separate read-only check confirmed their absence.
+
+| Profile | Run median-delay range | Median p95 delay | CPU ms/change range | Median CPU vs. original | Peak RSS range |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Original connector | 5.216–5.244 s | 5.461 s | 0.869–0.871 | Baseline | 431.4–468.6 MiB |
+| Candidate, feature disabled | 5.213–5.224 s | 5.319 s | 0.876–0.901 | +2.1% | 425.7–457.9 MiB |
+| Candidate, disk buffer | 2.164–2.220 s | 3.044 s | 1.058–1.074 | +22.5% | 438.6–440.9 MiB |
+
+Medians of the two run medians were 5.230 s, 5.219 s and 2.192 s respectively.
+Feature-off delay was 0.21% lower and CPU/change 2.1% higher. Enabled delay was
+58.1% lower, with 22.5% more whole-worker CPU/change. All profiles sustained the
+same offered workload; none was driven to saturation. The original journal-cache
+delay remains unchanged. RSS is resident worker memory, not retained heap, and
+its short-run range does not establish a leak or memory equivalence.
+
+The shared core/driver JARs and pinned Kafka image were identical across profiles.
+The original connector and parser remain at `2e19ad27`. Only driver manifest
+metadata changed from the preceding matched baseline; driver classes and resources
+did not. WARN conversion mode and inherited worker defaults were used in every
+run. No coordinated build, test suite or other native experiment overlapped the
+measurements. The host and database server remain shared.
+
+Exact plugin SHA-256 identities:
+
+- Original with matched dependencies:
+  `3aeacf59343b6b08fe70ab5284f9047eb63c1b1db6fa202dcc7e25270be4d5e1`.
+- Candidate, embedded source revision `89ff007`:
+  `9fe97cfbf89f4ebd72e5aff801e323693323efd279a76296cc50597d2c6f03dc`.
+
+Use the [sustained reproduction commands](#fourth-review-correction-comparison--2026-11-13)
+with these artifacts. The summary verifies artifact identity, runtime image,
+correctness, cleanup and resource-sampling continuity before calculating results.
+Each p95 is summarized across run-level measurements rather than pooled records.
+Delay measures SQL submission to independent Kafka observation, not source commit.
+These two 60-second repetitions per profile do not establish maximum capacity,
+statistical equivalence, large-catalog performance, long-transaction behavior or
+multi-day stability. This matrix exercises ordinary row traffic; it does not
+remeasure the memory-buffer profile or the separate schema-change latency cases.
+
+
+## Library-move candidate comparison — 2026-11-13
+
+Build `04d40bd` passed the same six-run matrix after the member-rename, file-move
+and ALTER→move corrections. The runs were serial: original, disabled, disk,
+disk, disabled, original. Each used a fresh isolated native fixture and local
+Kafka, two warm-up rounds and a 60-second measured workload. All 73,800 changes
+passed exact keys, mixed values, update before-images and output counts. Offered
+rates were 201.49–201.52 changes per second. Every run's cleanup passed; an
+independent read-only check found no remaining fixture libraries, journals,
+inquiry messages or owned Docker resources.
+
+| Profile | Run median-delay range | Median p95 delay | CPU ms/change range | Median CPU vs. original | Peak RSS range |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Original connector | 5.135–5.140 s | 5.233 s | 0.846–0.872 | Baseline | 431.6–436.1 MiB |
+| Candidate, feature disabled | 5.129–5.130 s | 5.201 s | 0.882–0.892 | +3.3% | 464.1–465.4 MiB |
+| Candidate, disk buffer | 1.966–1.980 s | 2.713 s | 1.065–1.077 | +24.7% | 447.5–449.0 MiB |
+
+Medians of the two run medians were 5.138 s, 5.130 s and 1.973 s respectively.
+Feature-disabled delay differed by −0.16%, with 3.3% more whole-worker CPU per
+change. Disk-buffer delay was 61.6% lower, with 24.7% more CPU per change. All
+profiles sustained the offered workload. CPU cost is not identical, and this
+rate was not a saturation test. RSS is resident worker memory, not Java heap;
+the short-run ranges do not establish memory equivalence or leak freedom.
+
+The original connector/parser remain at `2e19ad27`. Shared Debezium and driver
+JARs match byte-for-byte across profiles; only manifest metadata changed in the
+driver override when preparing the matched baseline. The candidate additionally
+packages its history/disk storage. The Kafka image, WARN conversion mode and
+inherited worker defaults were the same. No coordinated build, test suite or
+other native experiment overlapped the measurements. Independent review of the
+correction finished its test execution before timing began; its lightweight
+report and Advisor pass did not run builds or tests. The host and database
+server remain shared.
+
+Exact plugin SHA-256 identities:
+
+- Original with matched dependencies:
+  `1ecaff67dfe7067c0c493b945d2330eebeaf17d4a16fc79b4e7fdc989ec48dfd`.
+- Candidate, embedded source revision `04d40bd`:
+  `6772a7f39e6c45f9584b24e638a38599cf6862971209c7e32a30f7b936fcb614`.
+
+Use the [sustained reproduction commands](#fourth-review-correction-comparison--2026-11-13)
+with these artifacts. The summary verifies distribution hashes, runtime image,
+correctness, cleanup and resource-sampling continuity before calculation. Delay
+measures SQL submission to independent Kafka observation, not source commit;
+p95 values are summarized across runs rather than pooled records. Two short
+repetitions do not establish statistical equivalence, large-catalog or
+long-transaction behavior, maximum capacity or multi-day stability. These runs
+exercise ordinary row traffic; they do not remeasure the memory-buffer profile
+or schema-change latency. Earlier results retain their own artifact scope.

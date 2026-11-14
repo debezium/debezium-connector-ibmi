@@ -67,6 +67,11 @@ final class As400OperatorCutReader {
     private final As400BindingHistory.Recovered recovered;
     private final As400JdbcConnectionFactory intervalConnections;
 
+    private record EmptyReceiver(Receiver observation, String identity) {
+    }
+
+    private final Map<JournalReceiver, EmptyReceiver> emptyReceivers = new HashMap<>();
+
     As400OperatorCutReader(As400OperatorJournalEvidence journals, As400JdbcNativeIdentityEvidence identities,
                            As400OperatorTableEvidence tables, List<As400OperatorTableEvidence.Request> requests,
                            RetrieveJournal reader, Limits limits, List<TableIdentity> expectedTables, As400CaptureFingerprint.Policy policy) {
@@ -196,6 +201,8 @@ final class As400OperatorCutReader {
         }
         boolean reached = false;
         boolean complete = true;
+        boolean hasReplay = false;
+        Map<JournalReceiver, EmptyReceiver> newlyEmpty = new HashMap<>();
         retrieval: for (int index = 0; index < chain.size(); index++) {
             Receiver receiver = chain.get(index);
             boolean first = receiver.name().equals(from.receiver());
@@ -205,14 +212,23 @@ final class As400OperatorCutReader {
             }
             JournalPosition next = new JournalPosition(first ? from.offset() : receiver.first(), receiver.name());
             JournalPosition through = new JournalPosition(receiver.last(), receiver.name());
+            EmptyReceiver observed = new EmptyReceiver(receiver, qualified.order().incarnation(next));
+            boolean detached = !receiver.name().equals(before.attached());
+            if (!first && detached && observed.equals(emptyReceivers.get(receiver.name()))) {
+                continue;
+            }
             while (true) {
-                if (prefix && (pages >= limits.pages() - originReserve || captured.size() >= limits.entries() - originReserve)) {
+                if (prefix && (hasReplay && pages >= limits.pages() - originReserve || captured.size() >= limits.entries() - originReserve)) {
                     complete = false;
                     break retrieval;
                 }
-                require(++pages <= limits.pages() - originReserve && captured.size() < limits.entries() - originReserve,
+                ++pages;
+                require((prefix || pages <= limits.pages() - originReserve) && captured.size() < limits.entries() - originReserve,
                         "Ordinary replay history exceeds configured bounds");
                 RawJournalPage page = reader.readRawPage(next, through, limits.entries() - captured.size() - originReserve);
+                if (!first && detached && next.offset().equals(receiver.first()) && page.entries().isEmpty() && page.continuation().isEmpty()) {
+                    newlyEmpty.put(receiver.name(), observed);
+                }
                 for (RawJournalPage.Entry entry : page.entries()) {
                     if (prefix && bytes + entry.data().length > limits.bytes()) {
                         complete = false;
@@ -221,6 +237,8 @@ final class As400OperatorCutReader {
                     bytes += entry.data().length;
                     require(bytes <= limits.bytes(), "Ordinary owned history exceeds byte bound");
                     captured.add(entry);
+                    hasReplay |= qualified.order().compare(entry.position(), from) > 0
+                            || entry.position().equals(from) && scan == null && loaded.replayInclusive();
                 }
                 if (page.continuation().isEmpty()) {
                     break;
@@ -232,7 +250,7 @@ final class As400OperatorCutReader {
             // Existing online baselines can also be ordinary CDC anchors. Only
             // an absent exclusive origin may use the separately retained U/DN
             // marker; no other missing F/W or scan anchor gets this exception.
-            require(++pages <= limits.pages() && captured.size() < limits.entries(), "Empty online origin exceeds anchor bound");
+            require((prefix || ++pages <= limits.pages()) && captured.size() < limits.entries(), "Empty online origin exceeds anchor bound");
             var page = reader.readAuditHistoryPage(from, from, 1);
             require(page.entries().size() == 1 && page.entries().get(0).position().equals(from) && page.continuation().isEmpty(),
                     "Empty online origin marker is absent");
@@ -257,6 +275,12 @@ final class As400OperatorCutReader {
         require(nativeBefore.equals(identify(connection, targets)), "Journal or receiver object changed during retrieval");
         Observation after = observe(connection, prefix, floor);
         stableCut(before, after, chain);
+        // Only immutable detached ranges from a fully checked interval may be
+        // reused. Every poll still verifies identity, range, links, readability,
+        // and the actual F/W/R anchors. This cache never manufactures progress.
+        Set<JournalReceiver> retained = chain.stream().map(Receiver::name).collect(java.util.stream.Collectors.toSet());
+        emptyReceivers.keySet().retainAll(retained);
+        emptyReceivers.putAll(newlyEmpty);
         List<RawJournalPage.Entry> replay = captured.stream().filter(entry -> {
             int comparison = qualified.order().compare(entry.position(), from);
             return comparison > 0 || comparison == 0 && scan == null && loaded.replayInclusive();

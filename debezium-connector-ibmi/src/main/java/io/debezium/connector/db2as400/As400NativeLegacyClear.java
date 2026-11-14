@@ -110,8 +110,7 @@ final class As400NativeLegacyClear {
                 for (var entry : result.entries) {
                     var h = entry.header();
                     String key = h.getLibrary() + "/" + h.getFile();
-                    if (requested.containsKey(key) && order.compare(entry.position(), requested.get(key)) >= 0
-                            && h.getJournalCode() == 'D' && h.getEntryType().equals("CG")) {
+                    if (requested.containsKey(key) && h.getJournalCode() == 'D' && h.getEntryType().equals("CG")) {
                         require(decoder.decode(h, entry.data(), 0).clearsRows() && h.getCommitCycle().signum() > 0,
                                 "Schema change overlaps an unresolved legacy clear");
                         var tables = starts.getOrDefault(h.getCommitCycle(), new LinkedHashMap<>());
@@ -181,6 +180,8 @@ final class As400NativeLegacyClear {
                         var h = entry.header();
                         if (group.getValue().containsKey(h.getLibrary() + "/" + h.getFile())
                                 && (h.getJournalCode() == 'D' || h.getJournalCode() == 'F')
+                                && As400SchemaChange.producer(entry).equals(As400SchemaChange.producer(start))
+                                && !(h.getJournalCode() == 'F' && h.getEntryType().equals("CR"))
                                 && entry.position().offset().compareTo(group.getKey()) >= 0
                                 && order.compare(entry.position(), resolution.consumedThrough()) <= 0) {
                             covered.add(entry.position());

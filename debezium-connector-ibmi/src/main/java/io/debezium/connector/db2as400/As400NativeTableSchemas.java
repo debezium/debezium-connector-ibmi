@@ -22,6 +22,7 @@ final class As400NativeTableSchemas implements DatabaseSchema<TableId> {
     private static final java.time.format.DateTimeFormatter LEGACY_TIMESTAMP = java.time.format.DateTimeFormatter.ofPattern(
             "uuuu-MM-dd-HH.mm.ss.SSSSSS", java.util.Locale.ROOT);
     private final Map<TableId, TableSchema> schemas;
+    private final Map<String, TableId> fileNames = new HashMap<>();
     private final As400ConnectorConfig config;
     private final TopicNamingStrategy<TableId> topics;
 
@@ -75,6 +76,7 @@ final class As400NativeTableSchemas implements DatabaseSchema<TableId> {
             if (result.put(table.id(), checked) != null) {
                 throw new IllegalArgumentException("Duplicate acquired table schema");
             }
+            fileNames.put(definition.identity().fileJournalId(), definition.schema().id());
         }
         schemas = new java.util.concurrent.ConcurrentHashMap<>(result);
     }
@@ -84,9 +86,18 @@ final class As400NativeTableSchemas implements DatabaseSchema<TableId> {
     }
 
     void refresh(As400BindingDefinition definition) {
+        TableSchema rebuilt = null;
         if (selected(definition.identity().tableId(), config) || !As400DcgConfig.transactionalTruncateEnabled(config.getConfig()) && !definition.excluded()) {
             var replacement = new As400NativeTableSchemas(List.of(definition), config, topics);
-            schemas.put(definition.schema().id(), replacement.schemaFor(definition.schema().id()));
+            rebuilt = replacement.schemaFor(definition.schema().id());
+        }
+        var previous = fileNames.remove(definition.identity().fileJournalId());
+        if (previous != null && (rebuilt == null || !previous.equals(definition.schema().id()))) {
+            schemas.remove(previous);
+        }
+        if (rebuilt != null) {
+            schemas.put(definition.schema().id(), rebuilt);
+            fileNames.put(definition.identity().fileJournalId(), definition.schema().id());
         }
     }
 

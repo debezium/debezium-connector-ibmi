@@ -21,6 +21,22 @@ import io.debezium.ibmi.db2.journal.retrieve.JournalReceiver;
 
 /** Current local-journal directory/settings observations for ordinary CDC, not protected startup proof. */
 final class As400OperatorJournalEvidence {
+    static final int MAX_INCOMPLETE_OBSERVATIONS = 30;
+
+    static int retryIncomplete(int previous, IncompleteObservationException incomplete) {
+        int attempts = previous + 1;
+        if (attempts > MAX_INCOMPLETE_OBSERVATIONS) {
+            throw new IllegalStateException("Native catalog remained incomplete after " + MAX_INCOMPLETE_OBSERVATIONS
+                    + " observations; correct the reported SQL warning before restarting. Scan and durable F/W were not advanced by incomplete evidence", incomplete);
+        }
+        if (attempts == 1 || attempts % 10 == 0) {
+            org.slf4j.LoggerFactory.getLogger(As400OperatorJournalEvidence.class)
+                    .warn("Discarding incomplete catalog observation {} of {} (SQLSTATE {}, code {}): {}", attempts,
+                            MAX_INCOMPLETE_OBSERVATIONS, incomplete.getSQLState(), incomplete.getErrorCode(), incomplete.getCause().getMessage());
+        }
+        return attempts;
+    }
+
     static final String JOURNAL_SQL = """
             SELECT JOURNAL_LIBRARY, JOURNAL_NAME, JOURNAL_TYPE, JOURNAL_STATE, ASP_NUMBER, JOURNAL_ASPGRP,
                    ATTACHED_JOURNAL_RECEIVER_LIBRARY, ATTACHED_JOURNAL_RECEIVER_NAME,
@@ -176,14 +192,36 @@ final class As400OperatorJournalEvidence {
             else {
                 receivers = new ArrayList<>();
                 JournalReceiver next = floor == null ? attached : floor;
+                java.util.Map<JournalReceiver, Receiver> inventory = null;
+                if (nativeCount && maximum > 16 && !next.equals(attached)) {
+                    // A long replay interval should not issue a round trip for
+                    // every link on every poll. Bound the one directory result
+                    // by the server's count, then validate only the required
+                    // linked chain. Old FREED/reset receivers remain irrelevant.
+                    var all = query(connection, RECEIVERS_SQL, maximum, decoder);
+                    var after = attachment(connection);
+                    if (after.size() != 1 || !observed.equals(after.get(0))) {
+                        throw new As400OperatorCutReader.UnstableCutException("Receiver directory count or attachment changed during observation");
+                    }
+                    inventory = new java.util.HashMap<>();
+                    for (var receiver : all) {
+                        if (inventory.put(receiver.name(), receiver) != null) {
+                            throw new SQLException("Receiver directory is ambiguous");
+                        }
+                    }
+                    if (inventory.size() != observed.count()) {
+                        throw new SQLException("Incomplete native receiver directory");
+                    }
+                }
                 var visited = new java.util.HashSet<JournalReceiver>();
                 while (true) {
                     if (!visited.add(next) || receivers.size() >= maximum) {
                         throw new SQLException("Required receiver chain is cyclic or exceeds the retained-chain bound");
                     }
                     JournalReceiver exact = next;
-                    var found = query(connection, RECEIVERS_SQL + " AND JOURNAL_RECEIVER_LIBRARY = ? AND JOURNAL_RECEIVER_NAME = ?", 1,
-                            decoder, exact);
+                    var found = inventory == null
+                            ? query(connection, RECEIVERS_SQL + " AND JOURNAL_RECEIVER_LIBRARY = ? AND JOURNAL_RECEIVER_NAME = ?", 1, decoder, exact)
+                            : inventory.containsKey(exact) ? List.of(inventory.get(exact)) : List.<Receiver> of();
                     if (found.size() != 1 || !found.get(0).name().equals(exact)) {
                         throw new SQLException("Required exact receiver is absent or ambiguous");
                     }
@@ -366,16 +404,32 @@ final class As400OperatorJournalEvidence {
         }
     }
 
-    private static void warning(SQLWarning warning) throws SQLException {
+    static void warning(SQLWarning warning) throws SQLException {
+        incompleteWarnings(warning);
         if (warning != null) {
-            // IBM metadata views can enumerate objects outside the selected
-            // journal. SQL0462/01548 can accompany a disappearing or locked
-            // object, or insufficient authority. None of that observation is
-            // usable: a caller may only retry the entire unpublished interval.
-            if (warning.getErrorCode() == 462 && "01548".equals(warning.getSQLState()) && warning.getNextException() == null) {
-                throw new IncompleteObservationException(warning);
-            }
             throw new SQLException("Partial journal evidence rejected", warning);
+        }
+    }
+
+    /** Only a complete set of SQL0462 warning chains permits recollection. */
+    static void incompleteWarnings(SQLWarning... warnings) throws IncompleteObservationException {
+        SQLWarning first = null;
+        for (SQLWarning warning : warnings) {
+            if (warning == null) {
+                continue;
+            }
+            if (first == null) {
+                first = warning;
+            }
+            var seen = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<SQLException, Boolean>());
+            for (SQLException next = warning; next != null; next = next.getNextException()) {
+                if (!seen.add(next) || Math.abs(next.getErrorCode()) != 462 || next.getSQLState() == null || !next.getSQLState().startsWith("01")) {
+                    return; // Unknown, mixed or cyclic warnings remain the caller's ordinary fatal error.
+                }
+            }
+        }
+        if (first != null) {
+            throw new IncompleteObservationException(first);
         }
     }
 

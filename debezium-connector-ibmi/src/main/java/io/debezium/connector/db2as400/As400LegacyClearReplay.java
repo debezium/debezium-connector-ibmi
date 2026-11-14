@@ -39,6 +39,7 @@ final class As400LegacyClearReplay implements AutoCloseable {
     private JournalPosition consumedThrough;
     private CommittedBatch completed;
     private As400SourceMetadata terminal;
+    private String producer;
 
     As400LegacyClearReplay(String journal, BigInteger cycle, JournalPosition start, Map<String, JournalPosition> firstClears,
                            Map<String, TableBinding> bindings, As400JournalOrder order, As400ContinuousRuntime.Limits limits,
@@ -65,6 +66,7 @@ final class As400LegacyClearReplay implements AutoCloseable {
         if (previous == null) {
             require(h.getJournalCode() == 'C' && h.getEntryType().equals("SC")
                     && h.getCommitCycle().equals(cycle) && entry.position().offset().equals(cycle), "Missing original deferred-clear start");
+            producer = As400SchemaChange.producer(entry);
         }
         previous = entry.position();
         if (consumedThrough != null) {
@@ -75,6 +77,17 @@ final class As400LegacyClearReplay implements AutoCloseable {
         boolean control = h.getJournalCode() == 'C' && h.getCommitCycle().equals(cycle);
         if (!control && first == null) {
             return; // Its ordinary legacy dispatcher remains responsible for output.
+        }
+        if (!producer.equals(As400SchemaChange.producer(entry))) {
+            // Each foreign clear is qualified separately by the native collector.
+            // Its companions must not borrow this transaction's SC or produce
+            // output in this transaction's batch.
+            return;
+        }
+        if (first != null && h.getJournalCode() == 'F' && h.getEntryType().equals("CR")) {
+            // The native collector validates its identity; the held legacy
+            // prefix publishes it in source order, outside this transaction.
+            return;
         }
         if (first != null && h.getJournalCode() == 'R' && order.compare(entry.position(), first) < 0) {
             // An old published prefix on this same table would need explicit

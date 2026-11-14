@@ -37,7 +37,7 @@ final class As400JournalLifecycle implements AutoCloseable {
     private static final Set<String> OBJECT_METADATA = Set.of("D/GT", "D/RV", "D/AC", "D/DC", "D/TC", "D/TD");
     private static final Set<String> ADMINISTRATIVE_ENTRIES = Set.of("F/OP", "F/CL", "F/MS", "D/DH", "F/SS", "D/DW", "D/GT", "D/RV", "D/AC", "D/DC", "D/TC", "D/TD",
             "D/LF", "R/IL",
-            "F/RG", "F/RM",
+            "F/RG", "F/RM", "D/DJ", "F/JC",
             "F/JP", "F/EP");
 
     record Limits(int entries, long bytes, int cycles, int markers, int clears, int dependencies) {
@@ -62,6 +62,32 @@ final class As400JournalLifecycle implements AutoCloseable {
     private record Dependency(JournalPosition start, JournalPosition end) {
     }
 
+    /** Clear protocol identity is available before a created file has a committed row schema. */
+    record FileIdentity(String file, String library, String fileJournalId, String member, String memberJournalId) {
+        FileIdentity {
+            require(List.of(file, library, member).stream().allMatch(name -> name.matches("[A-Z0-9_#$@]{1,10}"))
+                    && As400TransactionBuffer.TableIdentity.validJournalId(fileJournalId)
+                    && As400TransactionBuffer.TableIdentity.validJournalId(memberJournalId) && !fileJournalId.equals(memberJournalId),
+                    "Incomplete clear file/member identity");
+        }
+
+        static FileIdentity of(TableBinding binding) {
+            var id = binding.identity();
+            return new FileIdentity(id.physicalFile(), id.tableId().schema(), id.fileJournalId(), id.member(), id.memberJournalId());
+        }
+
+        static FileIdentity of(As400SchemaChange.ObjectIdentity object) {
+            return new FileIdentity(object.file(), object.library(), object.fileJid(), object.member(), object.members().get(object.member()));
+        }
+
+        void validate(EntryHeader header) {
+            boolean fileRecord = header.getJournalCode() == 'D';
+            require(header.getFile().equals(file) && header.getLibrary().equals(library) && header.getMember().equals(fileRecord ? "" : member)
+                    && header.getRecordInfo().objectNameIndicator() == '1' && header.getRecordInfo().objectType().equals(fileRecord ? "*FILE" : "*QDDS")
+                    && header.getRecordInfo().objectJournalId().equals(fileRecord ? fileJournalId : memberJournalId), "Lifecycle identity mismatch");
+        }
+    }
+
     private static final As400SpillStore.Codec<Producer> PRODUCER = As400SpillCodec.codec((out, producer) -> {
         As400SpillCodec.string(out, producer.system());
         As400SpillCodec.string(out, producer.job());
@@ -79,11 +105,11 @@ final class As400JournalLifecycle implements AutoCloseable {
         final Producer producer;
         final JournalPosition start;
         final Map<BigInteger, Marker> markers;
-        final List<TableBinding> clears;
+        final List<FileIdentity> clears;
 
         private final long timestamp;
 
-        Cycle(Producer producer, JournalPosition start, long timestamp, As400SpillStore spill, As400SpillStore.Codec<TableBinding> bindings) {
+        Cycle(Producer producer, JournalPosition start, long timestamp, As400SpillStore spill, As400SpillStore.Codec<FileIdentity> bindings) {
             this.timestamp = timestamp;
             this.producer = producer;
             this.start = start;
@@ -93,7 +119,7 @@ final class As400JournalLifecycle implements AutoCloseable {
         }
     }
 
-    private record Step(String type, TableBinding table) {
+    private record Step(String type, FileIdentity table) {
     }
 
     private final class Window {
@@ -103,7 +129,7 @@ final class As400JournalLifecycle implements AutoCloseable {
         final List<Step> expected;
         int step;
 
-        Window(TableBinding table, String subtype, Cycle cycle, Marker marker, List<String> expected) {
+        Window(FileIdentity table, String subtype, Cycle cycle, Marker marker, List<String> expected) {
             this.subtype = subtype;
             this.cycle = cycle;
             this.marker = marker;
@@ -111,7 +137,7 @@ final class As400JournalLifecycle implements AutoCloseable {
             expected.forEach(type -> this.expected.add(new Step(type, table)));
         }
 
-        Window(Cycle cycle, Marker marker, List<TableBinding> undone) {
+        Window(Cycle cycle, Marker marker, List<FileIdentity> undone) {
             this.subtype = null;
             this.cycle = cycle;
             this.marker = marker;
@@ -165,7 +191,7 @@ final class As400JournalLifecycle implements AutoCloseable {
     private final Map<JournalPosition, Dependency> dependencies;
     private final Map<JournalPosition, Entry> held;
     private final As400SpillStore spill;
-    private final As400SpillStore.Codec<TableBinding> bindingCodec;
+    private final As400SpillStore.Codec<FileIdentity> bindingCodec;
     private final As400SpillStore.Codec<Step> stepCodec;
     private long heldBytes;
     private int markerCount;
@@ -198,12 +224,17 @@ final class As400JournalLifecycle implements AutoCloseable {
         this.from = from;
         this.spill = spill;
         require(ordinary || loaded.replayFrom().receiver().equals(loaded.completedThrough().receiver()), "Lifecycle profile supports one receiver only");
-        bindingCodec = As400SpillCodec.codec((out, binding) -> As400SpillCodec.table(out, binding.identity()), in -> {
-            var identity = As400SpillCodec.table(in);
+        bindingCodec = As400SpillCodec.codec((out, identity) -> {
+            for (String value : List.of(identity.file(), identity.library(), identity.fileJournalId(), identity.member(), identity.memberJournalId())) {
+                As400SpillCodec.string(out, value);
+            }
+        }, in -> {
+            var identity = new FileIdentity(As400SpillCodec.string(in), As400SpillCodec.string(in), As400SpillCodec.string(in),
+                    As400SpillCodec.string(in), As400SpillCodec.string(in));
             try {
-                var binding = tables.resolve(identity.physicalFile(), identity.tableId().schema(), identity.member());
-                require(binding.identity().equals(identity), "Spilled lifecycle binding no longer matches validated history");
-                return binding;
+                var observed = tables.lifecycleIdentity(identity.file(), identity.library(), identity.member());
+                require(observed.equals(identity), "Spilled lifecycle binding no longer matches validated history");
+                return observed;
             }
             catch (Exception e) {
                 throw new java.io.IOException("Cannot resolve spilled lifecycle binding", e);
@@ -283,6 +314,18 @@ final class As400JournalLifecycle implements AutoCloseable {
         return windows.isEmpty() && !held.isEmpty();
     }
 
+    /** Pure lookup from already observed SC/savepoints; never borrow a future cycle for an F/CH. */
+    BigInteger schemaCycle(RawJournalPage.Entry opening) {
+        if (opening.header().getCommitCycle().signum() > 0) {
+            var cycle = cycles.get(opening.header().getCommitCycle());
+            require(cycle != null && cycle.producer.equals(producer(opening.header())), "Object opening lacks its observed transaction and producer");
+            return cycle.start.offset();
+        }
+        var matches = cycles.values().stream().filter(c -> c.producer.equals(producer(opening.header()))).limit(2).toList();
+        require(matches.size() == 1 && !matches.get(0).markers.isEmpty(), "Schema opening lacks a unique active transaction and savepoint");
+        return matches.get(0).start.offset();
+    }
+
     void verifyTail() {
         require(drained(), "Journal tail interrupts a lifecycle sequence or queued output");
     }
@@ -311,12 +354,13 @@ final class As400JournalLifecycle implements AutoCloseable {
                 }
             }
         } while (changed);
-        JournalPosition retained = floor;
-        boolean includeRetained = inclusive;
-        dependencies.values().removeIf(d -> order.compare(d.end(), retained) < 0
-                || (order.compare(d.end(), retained) == 0 && !includeRetained));
         return new As400Checkpoint(checkpoint.journalIdentity(), checkpoint.captureFingerprint(), floor, inclusive, checkpoint.completedThrough(),
                 order.incarnation(floor), checkpoint.completedReceiverIdentity(), checkpoint.snapshotState(), checkpoint.schemaState());
+    }
+
+    void releaseContextBefore(As400Checkpoint checkpoint) {
+        dependencies.values().removeIf(d -> order.compare(d.end(), checkpoint.replayFrom()) < 0
+                || (order.compare(d.end(), checkpoint.replayFrom()) == 0 && !checkpoint.replayInclusive()));
     }
 
     private boolean classify(Entry entry) throws Exception {
@@ -324,10 +368,40 @@ final class As400JournalLifecycle implements AutoCloseable {
         if (ordinary && As400LogicalFileRecords.accept(entry)) {
             return false;
         }
+        var objectCycle = ordinary ? tables.deferredObjectCycle(h, entry.position()) : null;
+        if (objectCycle != null) {
+            var cycle = cycles.get(objectCycle);
+            require(cycle != null && cycle.producer.equals(producer(h)), "Deferred object has no matching transaction start");
+            if (h.getCommitCycle().signum() > 0) {
+                require(h.getCommitCycle().equals(objectCycle), "Deferred object changed its transaction");
+                validateMetadataScope(entry, cycle);
+            }
+            dependencies.put(cycle.start, new Dependency(cycle.start, entry.position()));
+            return true;
+        }
         if (ordinary && tables.creationLifecycle(new RawJournalPage.Entry(entry.position(), h, entry.bytes()))) {
+            if (h.getCommitCycle().signum() > 0) {
+                var cycle = cycles.get(h.getCommitCycle());
+                require(cycle != null && cycle.producer.equals(producer(h)), "Schema lifecycle has no matching transaction start");
+                validateMetadataScope(entry, cycle);
+                // A qualified schema may outlive its commit/rollback marker.
+                // Pin that cycle's SC while schema history still needs the
+                // opening, without retaining every unrelated row transaction.
+                dependencies.put(cycle.start, new Dependency(cycle.start, entry.position()));
+            }
             return false;
         }
         if (ordinary && administrative(entry, tables)) {
+            if (h.getCommitCycle().signum() > 0) {
+                var cycle = cycles.get(h.getCommitCycle());
+                boolean completedOrphan = cycle == null && loaded != null && loaded.replayInclusive()
+                        && order.compare(entry.position(), loaded.completedThrough()) <= 0;
+                require(completedOrphan || cycle != null && cycle.producer.equals(producer(h)),
+                        "Administrative record has no matching transaction producer");
+                if (!completedOrphan) {
+                    validateMetadataScope(entry, cycle);
+                }
+            }
             return false;
         }
         Producer producer = producer(h);
@@ -348,7 +422,21 @@ final class As400JournalLifecycle implements AutoCloseable {
             complete(producer, window, entry.position());
             window = null;
         }
-        if (window != null) {
+        // ALTER and native clear can nest a completed internal operation
+        // between D/EF and D/JF. It does not complete the outer statement marker or
+        // advance the file lifecycle. The common control path below still
+        // validates the exact cycle, producer, level and SB target.
+        boolean internalSchemaControl = window != null && window.subtype != null && window.step == 2
+                && (entry.type().equals("C/SB") || entry.type().equals("C/SQ"));
+        if (internalSchemaControl) {
+            require(h.getCommitCycle().equals(window.cycle.start.offset())
+                    && h.getControlInfo().nestedCommitLevel() > window.marker.level(), "Wrong internal schema savepoint scope");
+        }
+        else if (window != null) {
+            long outerLevel = window.marker == null ? 0 : window.marker.level();
+            require(window.subtype == null
+                    || window.cycle.markers.values().stream().noneMatch(marker -> marker.level() > outerLevel),
+                    "Schema lifecycle resumes before its internal savepoint is released");
             Step expected = window.expected.get(window.step);
             // A native clear-only savepoint rollback can restore the member via
             // F/EJ instead of F/MD. This is only the opening step of an already
@@ -358,7 +446,8 @@ final class As400JournalLifecycle implements AutoCloseable {
                     && expected.type().equals("F/MD") && entry.type().equals("F/EJ");
             require(entry.type().equals(expected.type()) || savepointJournalRestart, "Incomplete or mismatched lifecycle sequence");
             if (h.getJournalCode() != 'C' && !entry.type().equals("D/CG")) {
-                auxiliary(entry, expected.table(), entry.type().equals("F/MD") ? 0 : 0x10);
+                expected.table().validate(h);
+                auxiliary(entry, entry.type().equals("F/MD") ? 0 : 0x10);
             }
             else if (entry.type().equals("D/CG")) {
                 require(h.getCommitCycle().equals(window.cycle.start.offset())
@@ -366,9 +455,9 @@ final class As400JournalLifecycle implements AutoCloseable {
                 var clear = new FileChangeEntryDecoder(RawJournalPage.METADATA_CCSID).decode(h, entry.bytes(), 0);
                 require((clear.clearsRows() || window.subtype.equals("0") && clear.changeType() == '0')
                         && String.valueOf(clear.changeType()).equals(window.subtype), "Clear subtype mismatch");
-                identity(h, expected.table());
+                expected.table().validate(h);
                 require(clear.file().equals(h.getFile()) && clear.library().equals(h.getLibrary())
-                        && (clear.member().isEmpty() || clear.member().equals(expected.table().identity().member())), "Clear payload identity mismatch");
+                        && (clear.member().isEmpty() || clear.member().equals(expected.table().member())), "Clear payload identity mismatch");
                 if (clear.clearsRows()) {
                     require(clearCount < limits.clears(), "Lifecycle clear limit exceeded");
                     window.cycle.clears.add(expected.table());
@@ -403,8 +492,9 @@ final class As400JournalLifecycle implements AutoCloseable {
             for (Marker candidate : cycle.markers.values()) {
                 marker = candidate;
             }
-            TableBinding table = tables.resolve(h.getFile(), h.getLibrary(), h.getMember());
-            auxiliary(entry, table, 0);
+            FileIdentity table = tables.lifecycleIdentity(h.getFile(), h.getLibrary(), h.getMember());
+            table.validate(h);
+            auxiliary(entry, 0);
             String subtype = new AS400Text(1, RawJournalPage.METADATA_CCSID).toObject(payload(entry)).toString();
             require(subtype.equals("3") || subtype.equals("8") || subtype.equals("0") && tables.allowsSchemaChange(entry.position()),
                     "Unsupported legacy change");
@@ -440,7 +530,7 @@ final class As400JournalLifecycle implements AutoCloseable {
                     Marker marker = cycle.markers.get(control.savepointSequence());
                     require(marker != null && marker.level() == h.getControlInfo().nestedCommitLevel(), "Unknown or mismatched savepoint target");
                     if (type.equals("SU")) {
-                        List<TableBinding> undone = cycle.clears.subList(marker.clears(), cycle.clears.size());
+                        List<FileIdentity> undone = cycle.clears.subList(marker.clears(), cycle.clears.size());
                         if (!undone.isEmpty()) {
                             windows.put(producer, new Window(cycle, marker, undone));
                         }
@@ -474,11 +564,36 @@ final class As400JournalLifecycle implements AutoCloseable {
         else {
             require((ordinary && h.getCommitCycle().signum() == 0) || orphan || (cycle != null && cycle.producer.equals(producer)),
                     "Row/clear lacks matching producer and cycle");
+            for (var deferredCycle : tables.deferredSchemaCycles()) {
+                var other = cycles.get(deferredCycle);
+                if (other != null && !deferredCycle.equals(h.getCommitCycle())) {
+                    // The normalizer has not seen this cycle's staged clear yet.
+                    // Native savepoint/full rollback already updates this exact list.
+                    require(other.clears.stream().noneMatch(binding -> binding.file().equals(h.getFile())
+                            && binding.library().equals(h.getLibrary())),
+                            "Change from another commit cycle overlaps a deferred uncommitted clear");
+                }
+            }
         }
         return true;
     }
 
     /** IBM object-level subtype C is a statistics request, not a row or schema change. */
+    private static void validateMetadataScope(Entry entry, Cycle cycle) throws java.io.IOException {
+        char change = entry.type().equals("D/CG")
+                ? new FileChangeEntryDecoder(RawJournalPage.METADATA_CCSID).decode(entry.header(), entry.bytes(), 0).changeType()
+                : 0;
+        boolean miscellaneous = change == '1' || change == '2';
+        if (!miscellaneous && !administrativeType(entry.type())) {
+            return;
+        }
+        long level = entry.header().getControlInfo().nestedCommitLevel();
+        require(level == 0 ? !miscellaneous && cycle.markers.isEmpty()
+                : cycle.markers.values().stream().anyMatch(marker -> marker.level() == level)
+                        && cycle.markers.values().stream().noneMatch(marker -> marker.level() > level),
+                miscellaneous ? "Miscellaneous metadata change has no matching savepoint scope" : "Administrative record has no matching savepoint scope");
+    }
+
     private void statistics(Entry entry) throws Exception {
         var h = entry.header();
         As400SourceNormalizer.validateSource(h, entry.bytes(), 0, entry.position());
@@ -509,13 +624,29 @@ final class As400JournalLifecycle implements AutoCloseable {
      * https://www.ibm.com/docs/en/i/7.5.0?topic=information-all-journal-entries-by-code-type
      */
     static boolean administrative(Entry entry, TableResolver tables) throws Exception {
+        return administrative(entry, tables, null, false);
+    }
+
+    /** Creation can prove an association before a current row/key definition exists. */
+    static boolean creationAdministrative(Entry entry, As400SchemaChange.ObjectIdentity created, boolean keysMayChange) throws Exception {
+        return administrative(entry, null, created, keysMayChange);
+    }
+
+    private static boolean administrative(Entry entry, TableResolver tables, As400SchemaChange.ObjectIdentity created, boolean keysMayChange) throws Exception {
         if (!ADMINISTRATIVE_ENTRIES.contains(entry.type())) {
             return false;
         }
         var h = entry.header();
-        As400SourceNormalizer.validateSource(h, entry.bytes(), 0, entry.position());
+        boolean memberAttribute = entry.type().equals("F/JC");
+        if (memberAttribute) {
+            As400SourceNormalizer.validateMemberJournalAttribute(h, entry.bytes(), entry.position());
+        }
+        else {
+            As400SourceNormalizer.validateSource(h, entry.bytes(), 0, entry.position());
+        }
         var control = h.getControlInfo();
-        require(h.getCommitCycle().signum() == 0 && control.nestedCommitLevel() == 0 && control.flags() == 0
+        require((h.getCommitCycle().signum() == 0 && control.nestedCommitLevel() == 0
+                || h.getCommitCycle().signum() > 0 && OBJECT_METADATA.contains(entry.type())) && (control.flags() & ~(memberAttribute ? 0x10 : 0)) == 0
                 && control.indicatorFlag() == '0' && h.getRecordInfo().recordNumber().signum() == 0,
                 "Unsupported administrative record metadata");
         if (entry.type().equals("F/JP") || entry.type().equals("F/EP")) {
@@ -529,10 +660,19 @@ final class As400JournalLifecycle implements AutoCloseable {
                     "Unqualified access-path journaling metadata");
             return true;
         }
-        TableBinding binding = tables.resolve(h.getFile(), h.getLibrary(), h.getMember());
-        identity(h, binding);
+        TableBinding binding = tables == null ? null : tables.resolve(h.getFile(), h.getLibrary(), h.getMember());
+        if (created != null) {
+            created.identity(h);
+        }
+        else {
+            identity(h, binding);
+        }
+        boolean excluded = binding != null && binding.excluded();
+        String fileJid = created == null ? binding.identity().fileJournalId() : created.fileJid();
+        var members = created == null ? binding.members() : created.members();
         byte[] data = payload(entry);
         int minimum = switch (entry.type()) {
+            case "D/DJ", "F/JC" -> 11;
             case "F/RG" -> 0;
             case "F/RM" -> 109;
             case "F/OP" -> 41;
@@ -544,6 +684,21 @@ final class As400JournalLifecycle implements AutoCloseable {
             default -> 160; // Native save history layout, not save-with-storage-freed.
         };
         require(data.length >= minimum, "Incomplete administrative record");
+        if (entry.type().equals("D/DJ") || entry.type().equals("F/JC")) {
+            String attribute = new AS400Text(1, RawJournalPage.METADATA_CCSID).toObject(data, 0).toString();
+            String value = new AS400Text(10, RawJournalPage.METADATA_CCSID).toObject(data, 1).toString().trim();
+            require(data.length == 11 || data.length == 13 && data[11] == 0 && data[12] == 0, "Unqualified journal attribute layout");
+            boolean supported = switch (attribute) {
+                case "1" -> value.equals("*BOTH") || excluded && value.equals("*AFTER");
+                case "2" -> Set.of("*NONE", "*OPNCLO", "*OPNCLOSYN").contains(value);
+                case "3" -> value.equals("*NO");
+                // The qualified reader uses a local journal. Eligibility for
+                // remote filtering does not remove entries from this journal.
+                case "5" -> value.equals("*NO") || value.equals("*YES");
+                default -> false;
+            };
+            require(supported, "Changed journal attribute cannot preserve the captured history profile");
+        }
         require(!entry.type().equals("R/IL") || data.length == 8, "Unqualified record-limit layout");
         if (entry.type().equals("D/LF")) {
             var name = new AS400Text(10, RawJournalPage.METADATA_CCSID);
@@ -551,13 +706,13 @@ final class As400JournalLifecycle implements AutoCloseable {
             require(data.length == 30 && name.toObject(data, 0).toString().trim().matches("[A-Z0-9_#$@]{1,10}")
                     && name.toObject(data, 10).toString().trim().matches("[A-Z0-9_#$@]{1,10}")
                     && As400TransactionBuffer.TableIdentity.validJournalId(jid)
-                    && !jid.equals(binding.identity().fileJournalId()) && !binding.members().containsValue(jid),
+                    && !jid.equals(fileJid) && !members.containsValue(jid),
                     "Invalid logical-file association");
         }
         if (entry.type().equals("F/RG") || entry.type().equals("F/RM")) {
             // Classic reorganization moves physical record numbers, not logical
             // rows. It cannot be ignored when the emitted key is an RRN.
-            require(!binding.rrnKey(), "Reorganization cannot preserve relative-record-number keys");
+            require(binding != null && !binding.rrnKey(), "Reorganization cannot preserve relative-record-number keys");
             if (entry.type().equals("F/RG")) {
                 require(data.length == 0, "Unqualified reorganization-start payload");
             }
@@ -578,7 +733,12 @@ final class As400JournalLifecycle implements AutoCloseable {
             require(name.toObject(data, 0).toString().trim().equals(h.getFile())
                     && name.toObject(data, 10).toString().trim().equals(h.getLibrary())
                     && new AS400Text(40, 37).toObject(data, 20).toString().isBlank(), "Authority record object identity mismatch");
-            require(!List.of("D/AC", "D/DC").contains(entry.type()) || binding.excluded(),
+            // Constraint-only changes do not change a retained decoder or the
+            // event key, matching legacy streaming. They must not reacquire a
+            // current catalog key and apply it to older buffered rows. Creation
+            // is different: its first key has not been acquired yet, so earlier
+            // rows can still require an unavailable intermediate key definition.
+            require(!List.of("D/AC", "D/DC").contains(entry.type()) || binding != null || keysMayChange,
                     "Captured constraint changes require validation of the output key schema");
         }
         // F/OP and F/CL payload names may identify a logical file. The header's
@@ -604,32 +764,41 @@ final class As400JournalLifecycle implements AutoCloseable {
     }
 
     static void auxiliary(Entry entry, TableBinding table, int flags) {
+        identity(entry.header(), table);
+        auxiliary(entry, flags);
+    }
+
+    /** Checks the native protocol independently of a queryable row definition. */
+    static void auxiliary(Entry entry, int flags) {
         var h = entry.header();
         var control = h.getControlInfo();
         require(h.getCommitCycle().signum() == 0 && control.nestedCommitLevel() == 0 && control.flags() == flags
                 && !control.hasLogicalUnitOfWork() && !control.hasTransactionIdentifier() && h.getPointerHandle() == 0,
                 "Lifecycle record carries unsupported flags or transaction metadata");
-        identity(h, table);
         byte[] payload = payload(entry);
         switch (entry.type()) {
             case "F/CH" -> require(payload.length == 1 && control.indicatorFlag() == '0', "Unsupported legacy change payload");
             case "D/JF", "F/JM" -> {
                 // IBM's start-journal layout: omit open/close, inherit, remote filter.
                 // Both OMTJRNE(*NONE) and *OPNCLO retain complete row history. The
-                // image flag must still select *BOTH; inheritance/filtering are not
-                // admitted. Open/close records use the identity-checked classifier.
+                // image flag must still select *BOTH and inheritance is not
+                // admitted. Remote-filter eligibility does not filter the local
+                // journal required by native admission.
                 require(control.indicatorFlag() == '1' && payload.length == 3
-                        && new AS400Text(3, RawJournalPage.METADATA_CCSID).toObject(payload).toString().matches("[01]00"),
+                        && new AS400Text(3, RawJournalPage.METADATA_CCSID).toObject(payload).toString().matches("[01]0[01]"),
                         "Unsupported start-journal recording profile");
             }
             default -> require(payload.length == 0 && control.indicatorFlag() == '0', "Unexpected lifecycle payload");
         }
     }
 
-    private static void identity(EntryHeader h, TableBinding binding) {
+    static void identity(EntryHeader h, TableBinding binding) {
+        identity(h, binding, h.getJournalCode() == 'D');
+    }
+
+    static void identity(EntryHeader h, TableBinding binding, boolean file) {
         require(binding != null, "Missing paired identity");
         var id = binding.identity();
-        boolean file = h.getJournalCode() == 'D';
         require(h.getFile().equals(id.physicalFile()) && h.getLibrary().equals(id.tableId().schema())
                 && h.getMember().equals(file ? "" : id.member()) && h.getRecordInfo().objectNameIndicator() == '1'
                 && h.getRecordInfo().objectType().equals(file ? "*FILE" : "*QDDS")

@@ -6,6 +6,7 @@
 package io.debezium.connector.db2as400;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.math.BigInteger;
@@ -224,5 +225,38 @@ class As400FileCreationTest {
         raw[206] ^= 1;
         var wrongIdentity = f.entry(raw, 94);
         assertThatThrownBy(() -> f.change.verifyRecord(wrongIdentity, f.order)).hasMessageContaining("identity changed");
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = { "fresh-observation", "moving-catalog", "identity-mismatch", "stopped" })
+    void shouldRetryOnlyAQualifiedCatalogRaceWithinTheObservationBudget(String scenario) throws Exception {
+        var f = new Fixture();
+        var attempts = new java.util.concurrent.atomic.AtomicInteger();
+        var observations = new ArrayList<As400SchemaChange>();
+        var entries = new ArrayList<>(f.entries);
+        if (scenario.equals("identity-mismatch")) {
+            byte[] raw = entries.get(1).data();
+            raw[206] ^= 1;
+            entries.set(1, f.entry(raw, entries.get(1).position().offset().longValueExact()));
+        }
+        org.assertj.core.api.ThrowableAssert.ThrowingCallable collect = () -> observations.add(As400NativeSchemaRefresh.observe(
+                entries.get(0).position(), () -> {
+                    if (scenario.equals("stopped") && attempts.get() > 0) {
+                        throw new IllegalStateException("Stopped before retry");
+                    }
+                }, () -> As400SchemaChange.qualify(null, f.created, entries, f.order,
+                        f.position(attempts.incrementAndGet() == 1 || scenario.equals("moving-catalog") ? 100 : 106))));
+        if (scenario.equals("fresh-observation")) {
+            assertThatCode(collect).doesNotThrowAnyException();
+            assertThat(observations).containsExactly(f.change);
+        }
+        else {
+            assertThatThrownBy(collect).isInstanceOf(scenario.equals("moving-catalog") ? As400SchemaTimeline.PendingChangeException.class
+                    : scenario.equals("stopped") ? IllegalStateException.class : IllegalArgumentException.class);
+            assertThat(observations).isEmpty();
+        }
+        assertThat(attempts).hasValue(scenario.equals("fresh-observation") || scenario.equals("moving-catalog") ? 2 : 1);
+        assertThat(f.recover(f.initial).definitions()).doesNotContain(f.created);
+        assertThat(Files.readString(directory.resolve("history.jsonl"))).doesNotContain(As400SchemaHistory.VERSION);
     }
 }

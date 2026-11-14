@@ -480,6 +480,7 @@ final class As400BindingHistory {
         private As400SchemaHistory schemaHistory;
         private boolean recordedSchemas;
         private boolean schemaFloorVerified;
+        private As400SchemaState replaySchemaState = As400SchemaState.EMPTY;
 
         private Recovered(Manifest manifest, Optional<As400LegacyHandoff> handoff) {
             this.manifest = manifest;
@@ -524,6 +525,7 @@ final class As400BindingHistory {
         }
 
         private void recoverSchemas(As400Checkpoint checkpoint, As400CaptureFingerprint.Policy policy) throws Exception {
+            replaySchemaState = checkpoint.schemaState();
             if (!Set.of("7", "8").contains(manifest.position.get("version"))) {
                 require(checkpoint.schemaState().equals(As400SchemaState.EMPTY), "Older binding history cannot select schema transitions");
                 return;
@@ -564,6 +566,10 @@ final class As400BindingHistory {
             return schemaHistory;
         }
 
+        As400SchemaState replaySchemaState() {
+            return replaySchemaState;
+        }
+
         Optional<Initialization> initialization() {
             return initializationFrom(manifest.position);
         }
@@ -584,7 +590,13 @@ final class As400BindingHistory {
                     && order.incarnation(checkpoint.completedThrough()).equals(checkpoint.completedReceiverIdentity()), "Receiver identity changed");
             if (recordedSchemas && !schemaFloorVerified) {
                 try {
-                    schemaHistory.verifyFloor(checkpoint, order);
+                    replaySchemaState = schemaHistory.reconcileFloor(checkpoint, order);
+                    if (!replaySchemaState.equals(checkpoint.schemaState())) {
+                        recoveredDefinitions = schemaHistory.recover(replaySchemaState);
+                        org.slf4j.LoggerFactory.getLogger(As400BindingHistory.class).warn(
+                                "Reconstructing schema floor {} instead of saved floor {} from retained history; journal F/W remain unchanged",
+                                replaySchemaState.floor().ordinal(), checkpoint.schemaState().floor().ordinal());
+                    }
                     schemaFloorVerified = true;
                 }
                 catch (Exception failure) {

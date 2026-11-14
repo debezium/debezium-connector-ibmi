@@ -84,10 +84,12 @@ class As400JdbcNativeIdentityEvidenceTest {
             }
         }
         for (var call : db.calls) {
-            verify(call.statement).setMaxRows(2);
+            int targetsInCall = call.parameters.size() / 2;
+            assertThat(targetsInCall).isBetween(1, 16);
+            verify(call.statement).setMaxRows(targetsInCall + 1);
             assertThat(call.parameters.get(1)).startsWith("/QSYS.LIB/LIB.LIB/R").endsWith(".JRNRCV");
         }
-        assertThat(db.calls).hasSize(targets.size());
+        assertThat(db.calls).hasSize((targets.size() + 15) / 16);
         db.assertClosed();
     }
 
@@ -115,17 +117,18 @@ class As400JdbcNativeIdentityEvidenceTest {
         db.row(JOURNAL).put("FILE_IDENTIFIER_NUMBER", "1");
         assertThat(candidates.objects().get(JOURNAL).file()).isEqualTo(new BigInteger("9007199254740993"));
         assertThrows(UnsupportedOperationException.class, () -> candidates.objects().clear());
-        assertThat(db.calls).hasSize(TARGETS.size());
+        assertThat(db.calls).hasSize(1);
+        Call call = db.calls.get(0);
         for (int i = 0; i < TARGETS.size(); i++) {
-            Call call = db.calls.get(i);
-            assertThat(call.parameters).containsExactlyInAnyOrderEntriesOf(Map.of(1, TARGETS.get(i).path(), 2, TARGETS.get(i).kind().objectType()));
+            assertThat(call.parameters).containsEntry(i * 2 + 1, TARGETS.get(i).path()).containsEntry(i * 2 + 2, TARGETS.get(i).kind().objectType());
             assertThat(call.sql).startsWith("SELECT ").contains("START_PATH_NAME => ?", "SUBTREE_DIRECTORIES => 'NO'", "OBJECT_TYPE_LIST => ?",
                     "IGNORE_ERRORS => 'NO'", "LENGTH(PATH_NAME)", "VARCHAR(55)")
                     .doesNotContain(TARGETS.get(i).path(), "*ALL", "*LIBL", "*CURLIB");
-            verify(call.statement).setQueryTimeout(5);
-            verify(call.statement).setMaxRows(2);
-            verify(call.statement, never()).executeUpdate();
         }
+        assertThat(call.parameters).hasSize(TARGETS.size() * 2);
+        verify(call.statement).setQueryTimeout(5);
+        verify(call.statement).setMaxRows(TARGETS.size() + 1);
+        verify(call.statement, never()).executeUpdate();
         verify(db.connection).setReadOnly(true);
         verify(db.connection, never()).prepareCall(anyString());
         verify(db.connection, never()).createStatement();
@@ -145,7 +148,7 @@ class As400JdbcNativeIdentityEvidenceTest {
             assertThat(second).isNotEqualTo(first);
             assertThat(first.objects().get(JOURNAL).generation()).isEqualTo(BigInteger.ZERO);
             assertThat(second.objects().get(JOURNAL).generation()).isEqualTo(BigInteger.ONE);
-            assertThat(db.calls).hasSize(2 * TARGETS.size());
+            assertThat(db.calls).hasSize(2);
             verify(connection, never()).close();
         }
         assertThat(db.opens).isEqualTo(1);
@@ -177,7 +180,8 @@ class As400JdbcNativeIdentityEvidenceTest {
         specialRow.put("PATH_LENGTH", special.path().length());
         db.rows.put(special.path(), new ArrayList<>(List.of(specialRow)));
         assertThat(collector(db).collect(List.of(target, special)).objects()).containsKeys(target, special);
-        assertThat(db.calls.get(1).parameters).containsEntry(1, special.path());
+        assertThat(db.calls).hasSize(1);
+        assertThat(db.calls.get(0).parameters).containsEntry(3, special.path());
         db.assertClosed();
     }
 
@@ -311,7 +315,7 @@ class As400JdbcNativeIdentityEvidenceTest {
         byte[] borrowed = { 1, 2, 3 };
         List<Target> requested = new ArrayList<>(TARGETS);
         db.beforeExecute = query -> {
-            if (query == TARGETS.size() + 1) {
+            if (query == 2) {
                 borrowed[0] = 99; // Simulate reuse of the RPC buffer during subsequent I/O.
             }
         };
@@ -324,7 +328,7 @@ class As400JdbcNativeIdentityEvidenceTest {
         assertThat(result.bytes()).containsExactly(1, 2, 3);
         result.bytes()[1] = 99;
         assertThat(result.bytes()).containsExactly(1, 2, 3);
-        assertThat(db.calls).hasSize(2 * TARGETS.size());
+        assertThat(db.calls).hasSize(2);
         assertThat(db.opens).isEqualTo(1);
         db.assertClosed();
     }
@@ -432,7 +436,7 @@ class As400JdbcNativeIdentityEvidenceTest {
                     throw new SQLException("Prepare failed");
                 }
                 Call call = new Call(invocation.getArgument(0));
-                assertThat(call.sql).isEqualTo(As400JdbcNativeIdentityEvidence.SQL);
+                assertThat(call.sql.split(" UNION ALL ", -1)).allMatch(sql -> sql.equals(As400JdbcNativeIdentityEvidence.SQL));
                 calls.add(call);
                 doAnswer(i -> {
                     call.parameters.put(i.getArgument(0), i.getArgument(1));
@@ -459,8 +463,15 @@ class As400JdbcNativeIdentityEvidenceTest {
                     if (failure.equals("timeout")) {
                         throw new SQLTimeoutException("Timeout");
                     }
-                    List<Map<String, Object>> source = rows.get(call.parameters.get(1));
-                    assertThat(source).as("Exact path only; no parent query").isNotNull();
+                    List<Map<String, Object>> source = new ArrayList<>();
+                    for (int parameter = 1; parameter < call.parameters.size(); parameter += 2) {
+                        var exactRows = rows.get(call.parameters.get(parameter));
+                        assertThat(exactRows).as("Exact path only; no parent query").isNotNull();
+                        source.addAll(exactRows);
+                    }
+                    if (call.parameters.size() > 2) {
+                        java.util.Collections.reverse(source);
+                    }
                     List<Map<String, Object>> bounded = source.subList(0, Math.min(source.size(), call.maximumRows));
                     call.results = mock(ResultSet.class);
                     when(call.results.next()).thenAnswer(i -> {

@@ -8,6 +8,8 @@ package io.debezium.connector.db2as400;
 import java.sql.Connection;
 import java.sql.SQLException;
 
+import io.debezium.ibmi.db2.journal.retrieve.JournalReceiver;
+
 /** Exact current resource inventory and held file locks for the operator-managed first start. */
 final class As400DcgScope {
     static final String COUNTS = "SELECT JOURNALED_FILES, JOURNALED_MEMBERS, JOURNALED_DATA_AREAS, JOURNALED_DATA_QUEUES,"
@@ -21,6 +23,42 @@ final class As400DcgScope {
 
     As400DcgScope(As400DcgConfig config) {
         this.config = config;
+    }
+
+    /** Selected row streams require both update images before the irreversible handoff. */
+    static void requireImages(Connection connection, JournalReceiver journal, java.util.List<As400BindingDefinition> captured) throws SQLException {
+        connection.setReadOnly(true);
+        requireImage(connection.isReadOnly(), "Image validation requires a read-only connection");
+        for (var definition : captured) {
+            requireImage(!Thread.currentThread().isInterrupted(), "Image validation interrupted");
+            As400OperatorJournalEvidence.warning(connection.getWarnings());
+            try (var statement = connection.prepareStatement(OBJECT)) {
+                statement.setQueryTimeout(5);
+                statement.setMaxRows(2);
+                statement.setString(1, definition.identity().tableId().schema());
+                statement.setString(2, "*FILE");
+                statement.setString(3, definition.identity().physicalFile());
+                try (var rows = statement.executeQuery()) {
+                    requireImage(rows.next(), "Captured native file is unavailable");
+                    requireImage(definition.identity().physicalFile().equals(rows.getString(1).trim()) && "*FILE".equals(rows.getString(2))
+                            && "YES".equals(rows.getString(3)) && journal.library().equals(rows.getString(4)) && journal.name().equals(rows.getString(5)),
+                            "Captured native file journaling differs");
+                    if (!"*BOTH".equals(rows.getString(6))) {
+                        throw new As400NativeEvidenceException("Captured file " + definition.schema().id() + " requires IMAGES(*BOTH) before truncate enablement");
+                    }
+                    requireImage(!rows.next(), "Ambiguous captured native file");
+                    As400DcgNativeIo.noWarnings(rows, statement);
+                }
+            }
+            As400OperatorJournalEvidence.warning(connection.getWarnings());
+            requireImage(connection.isReadOnly(), "Image validation connection changed");
+        }
+    }
+
+    private static void requireImage(boolean condition, String reason) throws As400NativeEvidenceException {
+        if (!condition) {
+            throw new As400NativeEvidenceException(reason);
+        }
     }
 
     void validate(Connection c) throws SQLException {
