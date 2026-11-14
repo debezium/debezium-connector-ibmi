@@ -639,3 +639,27 @@ independent Kafka observation, not source commit time; p95 is the median of the
 run-level p95 values. These short repetitions do not establish statistical
 equivalence, saturation capacity, large-catalog behavior or multi-day stability.
 The matrix does not remeasure the memory-buffer profile or schema-change latency.
+
+## Reader delay is separate from buffer storage
+
+The original/disabled profiles use the legacy journal reader. Its
+`journal.additional.delay` defaults to 5,000 ms and is added even when journal
+caching is disabled. If caching is enabled, the configured IBM i cache-wait time
+is added as well. This conservative delay originates in
+[the missing-events correction, PR #72](https://github.com/debezium/debezium-connector-ibmi/pull/72).
+IBM documents that receiver attributes can count cached records before journal
+retrieval APIs return them ([journal-cache visibility](https://www.ibm.com/support/pages/basics-journal-cache)).
+
+The transactional reader does not apply this fixed delay. Its live scan and
+recovery progress are based on retrieved entries and durable output, not a jump
+to the receiver's reported end. The two paths also use different Kafka transaction
+boundaries. The original-versus-disk timings therefore do **not** show that disk
+is faster than memory, nor isolate how much improvement comes from each reader
+or acknowledgement difference. Five seconds is not an inherent requirement of
+disk or memory storage; changing the legacy default needs separate correctness
+validation of delayed visibility. It is unchanged in these comparisons.
+
+A storage comparison must use the same transactional reader, workload, worker,
+converter and acknowledgement settings, changing only `truncate.buffer.storage`.
+Any such measurements must be reported separately from the original-versus-new
+comparison and from the serial-burst endurance workload.

@@ -203,7 +203,7 @@ is preserved and the corrected harness passed on a fresh fixture. One initial
 move run needed a controller resume before its workload; subsequent runs used
 the corrected harness. All owned native fixtures and local runtimes were removed
 and independently checked. These are not maximum-capacity, multi-day or universal
-replacement-readiness claims. Upstream CI still requires maintainer approval.
+replacement-readiness claims. Upstream CI results are tracked separately on the PR.
 
 - [Reproduce offline, local Kafka and optional isolated native tests](docs/dcg-contributor-testing.md)
 - [Validation scope, artifact identity and historical evidence](docs/dcg-validation.md)

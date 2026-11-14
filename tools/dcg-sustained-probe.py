@@ -54,6 +54,9 @@ def latency_summary(batches, events):
 class Experiment(performance.Experiment):
     timed_rounds = 2
 
+    def observer_arguments(self):
+        return ["soak"] if self.args.operations_per_second > 200 else []
+
     def stage(self):
         super().stage()
         self.report['scope'] = 'Continuous independent paced native writes after warm-up; ordinary packaged connector and read_committed observer'
@@ -70,7 +73,10 @@ class Experiment(performance.Experiment):
             try:
                 deadline = time.monotonic() + self.args.seconds
                 next_write = time.monotonic()
-                for cycle in range(80):  # <= 24,000 row operations, irrespective of timing.
+                # Preserve the original 24,000-operation ceiling; higher-rate profiles
+                # explicitly allow at most 120,000 operations within the bounded observer.
+                cycles = 80 if self.args.operations_per_second == 200 else 400
+                for cycle in range(cycles):
                     if stop.is_set() or time.monotonic() >= deadline:
                         break
                     first = 2_000_000 + cycle * 100
@@ -81,7 +87,7 @@ class Experiment(performance.Experiment):
                         self.write_rows(session, table, first, 100, operation)
                         batches.append({'table': table, 'operation': operation, 'first': first, 'rows': 100,
                                         'started_ms': begin, 'returned_ms': time.time_ns() / 1e6})
-                        next_write = max(next_write + .5, time.monotonic())
+                        next_write = max(next_write + 100 / self.args.operations_per_second, time.monotonic())
             except BaseException as error:
                 errors.append(self.fixture.redact(str(error)))
 
@@ -110,7 +116,8 @@ class Experiment(performance.Experiment):
                             finished_ms=max(r['observed_ms'] for r in rows),
                             offered_rows_per_second=measured['rows'] * 1000 / (batches[-1]['returned_ms'] - started),
                             drain_after_writer_ms=max(0, max(r['observed_ms'] for r in rows) - batches[-1]['returned_ms']),
-                            pacing='100 row operations per SQL, at most two SQL submissions per second',
+                            pacing=f'100 operations per SQL, paced at {self.args.operations_per_second} operations/second',
+                            requested_operations_per_second=self.args.operations_per_second,
                             timing='Per-record host batch-submit to read_committed observation; not source-commit latency',
                             nominal_seconds=self.args.seconds, batches=batches, progress=progress)
             self.report['sustained'] = measured
@@ -126,6 +133,7 @@ class Experiment(performance.Experiment):
 
 
 def configure_parser(parser):
+    parser.add_argument('--operations-per-second', type=int, choices=[200, 500, 1000], default=200)
     parser.add_argument('--seconds', type=int, choices=[60, 120], default=60,
                         help='Bounded continuous offered load after warm-up, independently of delivery')
 

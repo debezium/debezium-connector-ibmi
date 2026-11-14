@@ -5,6 +5,7 @@
 Uses the ordinary packaged connector and local Kafka. Requires IBMI_TEST_CONFIG
 and a new owned DCNCdddd library; never selects or changes an existing fixture.
 """
+import argparse
 import importlib.util
 import json
 from pathlib import Path
@@ -19,6 +20,7 @@ spec.loader.exec_module(public)
 
 
 class Fixture(public.packaged.continuous.MixedFixture):
+    file_count = 56
     def setup(self):
         super().setup()
         self.sql(f"ALTER TABLE {self.library}.M DROP PRIMARY KEY", "remove-primary-key.log", True)
@@ -26,14 +28,14 @@ class Fixture(public.packaged.continuous.MixedFixture):
         self.sql(f"ALTER TABLE {self.library}.U ADD COLUMN TEXT_VALUE GRAPHIC(10)", "excluded-layout.log", True)
         self.owned_objects = self.inventory("objects-excluded.json")
         self.TABLES = list(self.TABLES)
-        for index in range(52):
+        for index in range(self.file_count - 4):
             table = f"F{index:04d}"
             self.sql(f"CREATE TABLE {self.library}.{table} (ID INTEGER NOT NULL)", f"create-{table}.log", True)
             self.TABLES.append(table)
             self.owned_objects = self.inventory(f"objects-{table}.json")
         counts = self.sql(f"SELECT JOURNALED_FILES,JOURNALED_MEMBERS FROM QSYS2.JOURNAL_INFO "
                           f"WHERE JOURNAL_LIBRARY='{self.library}' AND JOURNAL_NAME='QSQJRN'", "scope-counts.json")
-        assert counts == [{"JOURNALED_FILES": 56, "JOURNALED_MEMBERS": 56}], counts
+        assert counts == [{"JOURNALED_FILES": self.file_count, "JOURNALED_MEMBERS": self.file_count}], counts
 
 
 class Experiment(public.Experiment):
@@ -119,7 +121,7 @@ class Experiment(public.Experiment):
                                                               .get("offset.event_sequence", 0)) >= int(legacy["value"]["source"]["sequence"]), 90)
         self.request(worker, "automatic", "PUT", "/stop")
         public.base.wait_for("legacy stopped", lambda: self.rest(worker, "/connectors/automatic/status")["connector"]["state"] == "STOPPED", 60)
-        # U sorts into the second allocation group. A refusal must release the
+        # U sorts into the last allocation group. A refusal must release the
         # already-acquired first group while ordinary CDC remains available.
         busy = exp.connection(transaction=True)
         exp.execute(busy, "busy-excluded", f"INSERT INTO {self.library}.U (ID,TEXT_VALUE) VALUES (90,GRAPHIC('held'))")
@@ -152,7 +154,7 @@ class Experiment(public.Experiment):
             self.check("Native boundary audit crosses the old 2000-entry ceiling while writers continue",
                        bool(counts) and max(counts) > 2000, self.logs[worker].name)
             self.report["validated_audit_entries"] = counts
-        self.check("56-file scope activates with an excluded GRAPHIC layout and keyless captured table", True, self.logs[worker].name)
+        self.check(f"{self.fixture.file_count}-file scope activates with an excluded GRAPHIC layout and keyless captured table", True, self.logs[worker].name)
         exp.execute(writer, "excluded-autocommit", f"INSERT INTO {self.library}.U (ID,TEXT_VALUE) VALUES (91,GRAPHIC('ignored'))")
         transaction = exp.connection(transaction=True)
         before = self.table_records("M", "before-clear")
@@ -192,23 +194,28 @@ class Experiment(public.Experiment):
         self.close_session(transaction); self.close_session(writer)
         self.request(replacement, "automatic", "PUT", "/stop"); self.lifecycle(replacement, "drained")
         self.fixture.verify_rows({"A": [1, 2, 3, 10, 310, 311, 1000] + self.writer_rows, "B": [1, 2, 3], "M": [220], "U": [92]})
-        self.report.update(status="passed", journaled_files=56, keyless_table="M", excluded_unsupported_layout="GRAPHIC")
+        self.report.update(status="passed", journaled_files=self.fixture.file_count, keyless_table="M", excluded_unsupported_layout="GRAPHIC")
         self.save()
 
 
 def main():
-    if len(sys.argv) not in (3, 4) or len(sys.argv) == 4 and sys.argv[3] != "--audit-load":
-        raise SystemExit("Usage: dcg-online-scope-probe.py NEW_EVIDENCE_DIRECTORY DCNCdddd [--audit-load]")
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("directory", type=Path)
+    parser.add_argument("library")
+    parser.add_argument("--audit-load", action="store_true")
+    parser.add_argument("--files", type=int, choices=[56, 128], default=56)
+    args = parser.parse_args()
     import pyodbc
     pyodbc.pooling = False
-    root = Path(sys.argv[1]).resolve(); root.mkdir(exist_ok=False)
-    capture = public.live.prospective.census.Experiment(root / "native", sys.argv[2], 1)
+    root = args.directory.resolve(); root.mkdir(exist_ok=False)
+    capture = public.live.prospective.census.Experiment(root / "native", args.library, 1)
     capture.fixture.__class__ = Fixture
+    capture.fixture.file_count = args.files
     experiment = None
     try:
         capture.fixture.setup()
         experiment = Experiment(root / "connect", capture)
-        if len(sys.argv) == 4:
+        if args.audit_load:
             experiment.audit_rows_per_write = 100
             experiment.audit_interval_seconds = 1
         experiment.stage(); experiment.start_broker(); experiment.observer(); experiment.exercise()

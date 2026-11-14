@@ -21,7 +21,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 public final class As400PerformanceProbeAudit {
     public static void main(String[] args) throws Exception {
         if ((args.length != 2 && args.length != 3) || !args[0].matches("[A-Z][A-Z0-9_]{0,9}") || !args[1].matches("DCNC[0-9]{4}")
-                || (args.length == 3 && !args[2].equals("soak"))) {
+                || (args.length == 3 && !List.of("soak", "soak-long").contains(args[2]))) {
             throw new IllegalArgumentException("Expected server and isolated fixture library");
         }
         Path root = Path.of("/control");
@@ -42,7 +42,7 @@ public final class As400PerformanceProbeAudit {
         long bytes = 0;
         long quietSince = System.nanoTime();
         boolean soak = args.length == 3;
-        long deadline = System.nanoTime() + Duration.ofMinutes(soak ? 40 : 20).toNanos();
+        long deadline = System.nanoTime() + Duration.ofMinutes(soak && args[2].equals("soak-long") ? 90 : soak ? 40 : 20).toNanos();
         try (var consumer = new KafkaConsumer<String, String>(properties);
                 var writer = Files.newBufferedWriter(output)) {
             var partitions = List.of("A", "B", "M").stream()
