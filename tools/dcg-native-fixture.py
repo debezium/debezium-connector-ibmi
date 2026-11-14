@@ -9,6 +9,7 @@ import re
 import shutil
 import time
 import stat
+import sys
 from types import SimpleNamespace
 
 def java_executable():
@@ -26,6 +27,8 @@ def java_executable():
 
 
 def load_config():
+    if sys.flags.optimize:
+        raise ValueError("Native test runners require Python assertions enabled; remove -O/-OO and unset PYTHONOPTIMIZE")
     path = os.environ.get("IBMI_TEST_CONFIG")
     if not path:
         raise ValueError("Set IBMI_TEST_CONFIG to an owner-only JSON file; native tests never select a default host")

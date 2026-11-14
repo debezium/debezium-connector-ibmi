@@ -3,6 +3,8 @@
 import json
 import os
 from pathlib import Path
+import subprocess
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch, Mock
@@ -56,6 +58,31 @@ class NativeFixtureTest(unittest.TestCase):
         self.path.write_text(json.dumps(self.config))
         with self.assertRaises(ValueError):
             fixture.load_config()
+
+    def test_optimized_python_rejects_native_admission_before_reading_credentials(self):
+        script = """
+import importlib.util
+from pathlib import Path
+import sys
+from unittest.mock import patch
+
+spec = importlib.util.spec_from_file_location('native_fixture', sys.argv[1])
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+with patch.object(Path, 'read_text', side_effect=RuntimeError('credentials read before admission')):
+    module.load_config()
+"""
+        for flag, optimization in [("-O", None), ("-OO", None), (None, "1"), (None, "2")]:
+            with self.subTest(flag=flag, optimization=optimization):
+                environment = dict(os.environ)
+                environment.pop("PYTHONOPTIMIZE", None)
+                if optimization is not None:
+                    environment["PYTHONOPTIMIZE"] = optimization
+                command = [sys.executable, "-B", *([flag] if flag else []), "-c", script, fixture.__file__]
+                result = subprocess.run(command, env=environment, capture_output=True, text=True, timeout=10)
+                self.assertNotEqual(0, result.returncode)
+                self.assertIn("Native test runners require Python assertions enabled", result.stderr)
+                self.assertNotIn("RuntimeError: credentials read before admission", result.stderr)
 
     def test_reject_shared_or_symlink_credentials(self):
         self.path.chmod(0o644)

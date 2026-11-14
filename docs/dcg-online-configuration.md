@@ -587,14 +587,31 @@ with these online-specific differences:
   their history and offsets; do not reset or edit them to bypass rejection.
   They require an explicit data migration or a new isolated generation, not a
   silent restart. Ordinary legacy offsets do not use those native fingerprints.
-- For Kafka-backed history, precreate distinct data topics, the configured schema-history topic and
-  `__debezium-truncate.<topic.prefix>`, plus a heartbeat topic when heartbeats are
-  enabled. History and control topics require one partition. Existing data topics
-  may keep multiple partitions, but Kafka cannot order a null-key truncate against
-  row events in other partitions. Use one partition when that ordering is required.
-  Internal clients
-  cannot create them on observation. Retain all binding history without compaction
-  or expiry. The control topic carries checkpoint barriers, not table data.
+
+## Kafka-backed history
+
+Kafka is the default binding-history store. Configure its cluster and dedicated
+history topic in addition to the activation settings:
+
+```properties
+schema.history.internal.kafka.bootstrap.servers=broker:9092
+schema.history.internal.kafka.topic=ibmi-history
+```
+
+Pre-create the history topic with one partition and retain all of its records
+without compaction or expiry. With default naming or predictable `RegexRouter`
+transforms, also pre-create the single-partition control destination
+`__debezium-truncate.<topic.prefix>` after applying that routing. The control
+destination carries checkpoint barriers, not table data; history is not routed.
+For transforms whose destinations depend on record contents, preflight checks
+only history, and the runtime must preserve successful delivery of recovery
+records to their actual destinations.
+
+Data, transaction and heartbeat topics may be created through the usual
+Connect/broker configuration. Their destinations must remain distinct from
+history and control. Existing data topics may keep multiple partitions, but
+clear/reload ordering requires one partition per table or equivalent downstream
+coordination.
 
 ## File-backed history with ordinary source offsets
 

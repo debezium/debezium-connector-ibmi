@@ -1,216 +1,98 @@
-# Native D/CG transaction characterization
+# Offline native journal fixtures
 
-Historical `docs/dcg-*.md` references below identify reports in the
-[validation scope](../../../../../docs/dcg-validation.md).
-Current behavior and test commands are in the [contributor guide](../../../../../docs/dcg-contributor-testing.md).
+These files are regression inputs replayed from the checkout. They require no
+IBM i connection, original host, library or account. Live runners create their
+own fixtures on an explicitly supplied disposable system; see
+[contributor testing](../../../../../docs/dcg-contributor-testing.md#optional-native-tests).
 
-Captured on an isolated IBM i 7.5 test system on 2026-11-07; database group SF99950
-level 11 was installed. These are bounded native observations, not startup proof
-or approval to enable transactional streaming.
+Recorded native qualification used IBM i 7.5. The original November 7, 2026
+transaction captures used database group SF99950 level 11; later files came from
+separate isolated runs. These samples do not qualify every release, PTF level,
+CCSID or schema. [Validation coverage](../../../../../docs/dcg-validation.md)
+records the runtime artifacts, scenario scope and limits. The repository retains
+sanitized samples and aggregate results, not the original unsanitized capture
+bundles or their local provenance files.
 
-`noncommit-after-clear.json` preserves two later isolated native sequences:
-TRUNCATE followed in the same job by `INSERT ... WITH NC`, then COMMIT or
-ROLLBACK. IBM i accepted both inserts with commit cycle zero. COMMIT retained
-the inserted row; ROLLBACK restored the original rows and removed the new row.
-Replaying these bytes must reject the mixed-mode change before any output or
-durable checkpoint advancement. The regression repeats from a fresh coordinator.
+## Fixture inventory
 
-`administrative-entries.json` contains native F/OP, F/CL, F/MS, D/DH and D/GT
-records from SELECT, SAVOBJ and GRANT on a file using `OMTJRNE(*NONE)`. They are
-accepted only as validated administrative no-ops in the ordinary profile. In
-particular, the actual F/MS has thread ID zero; no synthetic thread is supplied.
-Identity/payload damage, transaction metadata and the stricter profile still
-reject. The acquired bindings and artificial starting checkpoints in these two
-files support decoder/replay tests, not startup proof. System, user and job
-identifiers are replaced consistently, including embedded payload fields;
-native thread IDs and record layouts are retained. Both source fixtures were
-removed and their absence verified after capture.
-
-`dcg.json` contains seven scenarios with actual subtype 8 TRUNCATE and subtype 3
-optimized DELETE, including commit, full rollback, repeated rollback to a SQL
-savepoint with an intervening nested savepoint, and interleaved transactions on
-separate tables. `initial.json` preserves eight earlier controls: same-table
-uncommitted writes blocked TRUNCATE and caused DELETE to use individual deletes;
-TRUNCATE IMMEDIATE produced cycle-zero F/CR and survived rollback.
-
-The known layout is one `INTEGER NOT NULL PRIMARY KEY` column. Tables began with
-IDs 1, 2, 3. The operation scripts, independent source checks, complete unmodified
-native response buffers, and SQL journal metadata remain in the local evidence
-directory documented in `docs/dcg-native-transaction-validation.md`.
-
-All 287 entries returned in the scenario intervals are included, including
-object/journaling transitions. The local component test deliberately selects all
-C controls plus R/D-CG input; it does **not** authorize dropping the other entries
-from a future production stream. The complete offline replay also attempts all
-scoped records and rejects them before output. The independent SQL inventory
-additionally records internal F/DE entries omitted by the native retrieval profile.
-
-Sanitization changes fixed-header job, user, program, system and address fields.
-Job numbers and nonempty JIDs are mapped consistently to synthetic values:
-different jobs remain different, and file and member JIDs remain distinct.
-Identifiers embedded in entry-specific payloads are mapped as well as those in
-fixed headers. Record numbers, thread IDs, journal/system sequences, timestamps,
-commit cycles, flags, object types, object/member names, savepoint targets,
-null-map offsets/counts and application row values are retained. All other payload
-bytes are retained; public checksums refer to the sanitized bytes. Entry boundaries
-are made standalone by setting the next-entry displacement to zero. Unused buffer
-tail on a final entry is removed after retaining every declared payload, null map
-and receiver field. Local `fixture-provenance.json` records source page, offset,
-length and derived hash for each entry. These transformations do not make the
-fixtures native identity evidence.
-
-The original run exposed rows identifying `*QDDS` and D/CG identifying `*FILE`,
-with distinct JIDs. The paired-identity follow-up records the corresponding saved
-D/CT and F/JM observations in `bindings.json`, using the same sanitization mapping.
-These are controlled fixture observations only, not native startup/history proof.
-
-Original rows still fail the existing missing-thread guard (their thread IDs are
-zero). Tests preserve that rejection and swapped-JID rejection. Separately named
-component tests clone row headers and supply synthetic thread ID 1 to exercise
-paired-ID normalization, owned values and commit/rollback ordering; the original
-JSON captures remain untouched. Unresolved savepoints and complete streams with
-unvalidated journaling transitions still reject. See
-`docs/dcg-file-member-identity.md` for the evidence contract and limits.
-
-The subsequent offline thread audit confirmed that bytes 40–47 are already zero
-in every original scenario entry; sanitization and decoding do not lose them.
-Regressions preserve those values at nonzero buffer offsets and keep the
-normalizer stopped even if later terminal controls are supplied. The per-receiver
-thread recording requirement and missing evidence for a fresh positive capture
-are documented in `docs/dcg-native-thread-identity.md`.
-
-`thread-enabled.json` contains a later, separately owned fixture with eight
-scenarios and 180 native entries. The receiver was configured to retain its
-existing job/user/program fields and add thread recording before the tables and
-transactions were created. All 33 R records have actual nonzero thread IDs; those
-bytes are unchanged by sanitization. `thread-enabled-bindings.json` uses the same
-candidate D/CT/F/JM association approach, with an independent JID mapping for this
-fixture. It is not protected startup/history proof.
-
-`As400NativeThreadReplayTest` exercises commit, full rollback, interleaving and an
-actual UB/UP pair without synthetic thread substitution. It keeps unresolved
-savepoints and cycle-zero F/CH fatal. The original zero-thread files and tests
-remain negative coverage. Source settings, raw replay, cleanup and limitations
-are recorded in `docs/dcg-native-thread-validation.md`.
-
-`As400NativeLifecycleRecoveryTest` reuses the same bytes for fresh-instance F/W
-recovery rejection, post-C/RB tails, unflagged F/MD observations and a comparison
-of both explicit component-only savepoint policies. Identical final changes under
-the two policies do not select a production disposition. No fixture, production
-guard or default policy is changed; see `docs/dcg-native-lifecycle-validation.md`.
-
-`statistics-request.json` is a separate 2026-11-08 capture from isolated library
-DCNC7707. It preserves the owned RJNE0200 layout of F/CB subtype C at
-sequence 183, including actual thread ID, member JID, payload and null-map prefix.
-The ordinary-reader regression accepts it without output or durable F/W movement;
-the strict profile continues to reject it. Its fixed test binding supplies only
-the observed member identity needed for this decoder test. The unused file JID,
-physical decoder and starting checkpoint are synthetic, not startup or association
-proof. The complete packaged native run independently validates acquired bindings,
-recovery and later output; see `docs/dcg-rrn-validation.md`.
-
-`lifecycle-discrimination.json` adds 61 native entries from a fresh isolated
-fixture: two committed clears, a deliberate end/write/start journaling gap,
-repeated SQL savepoint rollback, a duplicate-key INSERT with a surviving prefix,
-and an explicit atomic compound failure. `lifecycle-discrimination-bindings.json`
-contains candidate paired identities from the separately captured creation
-history. The real gap contains no journal row for 999 although the source contains
-it. Actual thread bytes and payloads remain unchanged. Raw captures, independent
-source checks and verified cleanup are described in
-`docs/dcg-native-lifecycle-discrimination.md`.
-
-`As400IncrementalLifecycleTest` sends these complete captures through the shipped
-incremental lifecycle validator, replay coordinator and dispatcher. It checks
-commit/rollback, every-entry restart, missing/mismatched companions, member
-restoration and references to consumed savepoints. The earlier two-pass hypothesis
-checker was removed; these regressions now exercise the actual implementation.
-Default unresolved-policy rejection remains in `As400SourceNormalizerTest` and
-`As400NativeThreadReplayTest`.
-
-`temporal-rows.json` contains eight actual R/PT, R/UB, R/UP and R/DL images
-captured on 2026-11-08 in fresh isolated library DCNC9385. The schema has integer
-ID, nullable DATE, TIME and TIMESTAMP(0/3/6/9). It covers null indicators, leap
-dates, pre-epoch fractions, year 0001/9999 and TIME 24:00:00. Native row payload,
-null-map fields, timestamps, thread IDs, record numbers and sequence/cycle bytes
-are retained. Header names/addresses and JIDs are mapped to generic LIB/M and
-distinct file/member identities; these are not startup proof. The included extreme
-TIMESTAMP(9) rows intentionally fail the epoch-nanos range check.
-
-`temporal-columns.json` preserves the captured type/length/buffer/CCSID/precision
-and date/time format attributes. Table/system names, ordinals and simple-table
-flags are fixture definitions for this known CREATE TABLE, not independently
-collected identity evidence. The packaged native run independently acquires all
-catalog fields. Source capture hashes and sanitization details are retained in
-the local report described in `docs/dcg-temporal-validation.md`.
-
-`automatic-fence-native-scope.json` preserves the successful current-metadata
-candidate from isolated DCNC0946 on 2026-11-09. Its journal inventory comes from
-WRKJRNA's native outfile and independent JOURNAL_INFO counts; exact member queries
-find EXTRA/DATA in addition to A/B/M/U. These are unmodified metadata responses,
-not application data or certified historical bindings. The native identity values
-belong to that removed disposable fixture. The test requires candidate-only status
-and reuses the original native binding validators. See
-`docs/dcg-lock-scope-validation.md` for reproduction, negative coverage and limits.
-
-
-`late-membership.json` is the native DCNC0959 negative fixture. Its row-only
-projections deliberately omit earlier maintenance so the last unknown-binding
-check can be exercised independently. The complete all-code capture is separately
-rejected for pointer-backed maintenance; the fixture never authorizes that omission
-in a connector. `prospective-native.json` is the DCNC0961 prospective-schema
-fixture: native origin 59, actual completed row cut 66, then clear/reload with an
-unrelated row before commit. It includes older C/J history and observed journal,
-receiver, file/member and schema evidence. Both remain `startup_proof=false`.
-See [validation scope](../../../../../docs/dcg-validation.md)
-for capture, cleanup, failed attempts and qualification limits.
-
-`equal-width-alter.json` preserves native DCNC0965 INTEGER -> REAL -> INTEGER
-metadata and the complete all-code journal capture. File/member journal IDs remain
-constant; native object identities change, and the format definition returns to
-its original value. The actual F/CH subtype 0 rejects before the REAL row is
-misdecoded or F/W advances. Cleanup was verified.
-
-`prospective-boundary.json` is the separate DCNC0966 active-writer bundle. It
-contains the actual requested scope and SQL program, drained holder evidence,
-before/after metadata, full raw A/N/Z audit, older controls and prospective rows.
-Rows occurred both before and after N while the metadata collector ran. It remains
-`startup_proof=false`; original fixtures are not overwritten or promoted. See
-[validation scope](../../../../../docs/dcg-validation.md)
-for limits, rejected attempts and native/local testing distinctions.
-
-`pending-receiver-boundary.json` preserves the actual pending-receiver samples,
-complete native directory/identity observations and raw all-code audit bytes from
-DCNC0976 on 2026-11-09. The busy attempt discovers receiver floor 4; the later
-candidate discovers floor 46, including the original cycle referenced by a
-terminal after the pending flag cleared. Neither floor was supplied from the
-fixture's known transaction start. Bytes and original SHA-256 values are retained;
-these are disposable fixture records and remain candidate evidence, not startup
-proof. Regression mutations exercise observations outside the audit interval,
-receiver replacement, incomplete pages, missing records and unknown pending flags.
-Fixture cleanup was verified. See `docs/dcg-native-startup-collection.md` for the
-exact live-versus-local verification boundary.
-
-
-The review corrections add five focused capture files. Their JSON records include
-sanitized bytes and recomputed SHA-256 values. Like all fixtures here, their table
-bindings are explicit test inputs, not proof that a runtime object has that identity.
-
-| Fixture | Native observations and regression boundary |
+| Files | Regression purpose |
 | --- | --- |
-| `noncommit-after-clear.json` | The clearing job inserted with commitment control disabled before COMMIT or ROLLBACK. The buffer rejects a cycle-zero/different-cycle row on a table with an open clear; unrelated-table output remains allowed. |
-| `administrative-entries.json` | File open/close, save and authority-grant entries. Identity, cycle, flags and complete payload are checked before accepting a metadata-only entry. |
-| `record-limit.json` | R/IL from growing a file beyond its initial record limit. The exact eight-byte internal layout is not decoded as a row. |
-| `save-while-active.json` | D/DW and F/SS from an actual save-while-active operation, along with save completion records. Restore and storage-freed saves are outside this acceptance. |
-| `reorganization.json` | Classic RGZPFM after creating a physical hole: F/RG and F/RM subtype E. Declared primary-key capture can continue; RRN keys and concurrent subtype F remain rejected. |
-| `file-deletion.json` | Grant/revoke, excluded CHECK constraint add/drop, physical-file deletion and recreation under the same name. Separate metadata records cover trigger creation/removal. Header names and JIDs are replaced consistently; opaque object apply data is removed while preserving layout and creation-image length. Tests require exact identities and complete deletion before retirement. |
-| `transactional-file-deletion.json` | A rolled-back DROP retains B, while a committed DROP of U emits physical member/file deletion after C/CM. Tests retain transaction controls, recover the rolled-back binding, and preserve the decoder through commit. The same object-data sanitization applies. |
+| `dcg.json`, `initial.json`, `bindings.json` | Subtype-8 TRUNCATE and subtype-3 optimized DELETE, full rollback, nested/repeated savepoints, interleaved transactions and paired file/member journal IDs. The original simple tables contain integer IDs 1, 2 and 3. |
+| `thread-enabled.json`, `thread-enabled-bindings.json` | Separately captured commit, rollback, interleaving and update before/after images with actual nonzero thread IDs. |
+| `multiple-clears.json`, `multiple-clears-bindings.json`, `clear-only-savepoint.json`, `clear-only-savepoint-bindings.json` | Repeated clears, multiple affected tables and clear-only savepoint outcomes. |
+| `ordinary-cdc.json`, `open-clear-progress.json` | Ordinary row output and unrelated-table progress while a clear remains open, including restart and interrupted output. |
+| `noncommit-after-clear.json` | A clearing job inserts with commitment control disabled before COMMIT or ROLLBACK. Reject the mixed-mode change on that table while preserving unrelated-table progress. |
+| `lifecycle-discrimination.json`, `lifecycle-discrimination-bindings.json` | Clear outcomes, an actual end/write/start journaling gap, SQL savepoint rollback, a duplicate-key surviving prefix and an atomic compound failure. The unjournaled source row has no journal image and must not be invented. |
+| `administrative-entries.json`, `statistics-request.json`, `record-limit.json` | File open/close, save, authority grant, F/CB subtype-C statistics request and R/IL record-limit metadata. Validate identities and complete layouts without treating them as rows or transaction outcomes. |
+| `save-while-active.json`, `reorganization.json` | Native save-while-active records and classic RGZPFM/F/RM subtype-E records. Declared-key acceptance remains separate from RRN-key and concurrent-reorganization rejection. |
+| `file-deletion.json`, `transactional-file-deletion.json`, `transactional-ddl-rollback.json` | Physical deletion/recreation, commit and rollback, grant/revoke, constraints, triggers and retained historical names/layouts. |
+| `new-file.json`, `new-member.json` | New physical-file and member associations with independently checked identities. |
+| `logical-file.json`, `access-path.json` | Logical-file/index and access-path records alongside captured physical files. These records cannot establish row bindings. |
+| `excluded-lob.json` | Pointer-row metadata for excluded LOB data. No external LOB value is read or qualified by this fixture. |
+| `temporal-columns.json`, `temporal-rows.json` | Nullable DATE/TIME and TIMESTAMP(0/3/6/9), leap dates, pre-epoch fractions, extreme years and TIME 24:00:00. Extreme TIMESTAMP(9) values deliberately exceed the epoch-nanosecond converter range. |
+| `native-binding-columns-M.json`, `native-binding-keys-M.json` | Captured native layout/key metadata for the mixed-column binding. |
+| `automatic-fence-metadata.json`, `automatic-fence-native-scope.json` | Candidate metadata and complete journal/member scope, including a member whose name differs from its file. Current metadata alone is not historical binding proof. |
+| `late-membership.json`, `equal-width-alter.json` | Unknown membership and INTEGER → REAL → INTEGER layouts. Unchanged endpoint definitions cannot replace the intervening journal history or authorize decoding with a stale schema. |
+| `prospective-native.json`, `prospective-boundary.json`, `short-boundary-markers.json` | Older transaction controls, prospective row replay, active writers and raw A/N/Z marker validation. Fixture-origin assumptions remain explicit. |
+| `pending-receiver-boundary.json`, `receiver-control-history.json` | Discovery floors from retained transaction controls, pending flags, complete receiver directories and raw audit intervals. Missing/changed observations cannot authorize progress. |
+| `incremental-anchor.json`, `incremental-anchor-padding.json`, `census-comparison.json` | Exact anchors, entry bounds/padding and agreement between raw content and metadata summaries. |
 
-The object-level prefixes used for deletion, authority, constraint and trigger
-validation follow IBM's [journal entry layouts](https://www.ibm.com/docs/en/ssw_ibm_i_74/rzaki/rzakivarlength.htm).
-These sanitized captures establish regression inputs, not live identity or startup proof.
+## Preserve the evidence boundaries
 
-The ordinary runtime tests replay these through the actual lifecycle classifier,
-strict row normalizer and recovery coordinator. Accepted administrative entries do
-not publish records, resolve transactions, remove pending before-images or advance
-completed-output W. Malformed, wrong-identity and unsupported variants remain
-negative tests. The original strict-profile tests still reject these entries.
+The original `dcg.json` and `initial.json` rows have zero thread IDs. Tests retain
+that rejection, including at nonzero buffer offsets. Explicit component tests
+clone headers and supply synthetic thread ID 1 to exercise paired-ID
+normalization and owned values; that substitution is not native thread evidence.
+`thread-enabled.json` supplies the separate positive native rows. Swapped file
+`*FILE` and member `*QDDS` journal IDs must still reject.
+
+Some component tests select transaction controls and row/clear records to isolate
+the transaction buffer. Complete lifecycle tests separately process the scoped
+stream. A component projection never authorizes dropping maintenance records
+from a production stream. The original SQL inventory also observed internal F/DE
+entries omitted by the native retrieval profile.
+
+The row-only projections in `late-membership.json` deliberately omit earlier
+maintenance to isolate the final unknown-binding guard. The complete all-code
+capture remains separate and rejects unsupported pointer-backed maintenance.
+Prospective and boundary bundles remain `startup_proof=false`; a fixture's known
+origin, native identity observations or successful offline replay cannot establish
+runtime startup authority.
+
+Temporal column metadata and several starting bindings/checkpoints include
+explicit test definitions. The statistics-request fixture's unused file ID,
+physical decoder and checkpoint are synthetic. Native scope metadata records
+observations from a removed disposable fixture; its object tokens are not
+identities to reuse on another system. Tests may mutate these inputs to exercise
+failure paths, without promoting them into live observations.
+
+The maintained lifecycle, normalizer, coordinator and dispatcher tests check
+commit/rollback, every-entry restart, missing or mismatched companions, consumed
+savepoints, historical schema acquisition and member restoration. Accepted
+administrative metadata cannot publish a row, resolve a transaction, remove a
+pending before-image or advance completed output W. Strict-profile rejection
+and ordinary-profile acceptance are distinct contracts; preserve both where
+exercised. Current schema-change support is described by the
+[compatibility matrix](../../../../../docs/dcg-compatibility-comparison.md).
+
+## Sanitization and byte integrity
+
+Sanitization replaces fixed-header job, user, program, system and address fields,
+and consistently maps job numbers and file/member journal IDs, including embedded
+payload identifiers. Distinct producers and file/member identities remain
+distinct. Thread IDs, record numbers, sequence/cycle values, timestamps, flags,
+object types, layout offsets, null maps and synthetic application values retain
+their recorded relationships.
+
+Standalone entries set the next-entry displacement to zero. Unused trailing
+buffer space is removed only after retaining every declared payload, null map
+and receiver field. Public checksums describe the sanitized bytes. The deletion,
+authority, constraint and trigger captures remove opaque object apply data while
+preserving layout and creation-image length. External LOB descriptors/values are
+not qualified by pointer-metadata checks.
+
+Keep raw bytes, projected metadata, complete companion records and positive and
+negative variants together. Inspect new captures before sharing them; original
+journal buffers, job logs and JVM profiles can contain private source data.
+IBM's [journal entry layouts](https://www.ibm.com/docs/en/ssw_ibm_i_74/rzaki/rzakivarlength.htm)
+describe the object-level prefixes used by these tests.
