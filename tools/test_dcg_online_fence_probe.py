@@ -1,13 +1,11 @@
 # Copyright Debezium Authors. Licensed under the Apache License, Version 2.0.
 """Ownership and bound checks for native metadata batching; no source connection."""
-import importlib.util
-from pathlib import Path
 import unittest
 from unittest.mock import patch
 
-SPEC = importlib.util.spec_from_file_location('fence', Path(__file__).with_name('dcg-online-fence-probe.py'))
-fence = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(fence)
+from probe_test_support import load_probe
+
+fence = load_probe('dcg-online-fence-probe.py', 'fence')
 
 
 class BatchingTest(unittest.TestCase):

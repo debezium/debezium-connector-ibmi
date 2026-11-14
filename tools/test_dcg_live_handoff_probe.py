@@ -1,7 +1,6 @@
 # Copyright Debezium Authors. Licensed under the Apache License, Version 2.0.
 """Independent live-fixture ledger checks; no network or native credentials."""
 import base64
-import importlib.util
 import json
 from pathlib import Path
 import struct
@@ -10,9 +9,9 @@ import tempfile
 import unittest
 from unittest.mock import Mock, patch
 
-SPEC = importlib.util.spec_from_file_location('live_handoff', Path(__file__).with_name('dcg-live-handoff-probe.py'))
-live = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(live)
+from probe_test_support import load_probe
+
+live = load_probe('dcg-live-handoff-probe.py', 'live_handoff')
 
 
 class LiveLedgerTest(unittest.TestCase):

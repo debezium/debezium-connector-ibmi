@@ -1,13 +1,11 @@
 # Copyright Debezium Authors. Licensed under the Apache License, Version 2.0.
 """Native race classification and safe scope boundaries; never connects to IBM i."""
 import datetime
-import importlib.util
-from pathlib import Path
 import unittest
 
-SPEC = importlib.util.spec_from_file_location('scope', Path(__file__).with_name('dcg-lock-scope-probe.py'))
-scope = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(scope)
+from probe_test_support import load_probe
+
+scope = load_probe('dcg-lock-scope-probe.py', 'scope')
 
 
 class ScopeProbeTest(unittest.TestCase):

@@ -3,7 +3,6 @@
 import copy
 import datetime
 import hashlib
-import importlib.util
 import json
 from pathlib import Path
 import tempfile
@@ -12,9 +11,9 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
-SPEC = importlib.util.spec_from_file_location('short_probe', Path(__file__).with_name('dcg-short-boundary-probe.py'))
-probe = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(probe)
+from probe_test_support import load_probe
+
+probe = load_probe('dcg-short-boundary-probe.py', 'short_probe')
 
 
 def program():

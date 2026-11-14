@@ -1,242 +1,204 @@
-# Reproducing D/CG tests
+# Building and testing
 
-The default tests use sanitized raw journal fixtures and controlled transports;
-they need JDK 21 and the matching Debezium core, but no IBM i account, AWS,
-private tooling, or external Kafka. Run the same core modules listed in
-`.github/workflows/cross-maven.yml`, then:
+Choose the test layer relevant to the change. Optional integration tools are not
+requirements for building or running the connector.
+
+## Prerequisites
+
+| Work | Requirements |
+| --- | --- |
+| Connector build and Java unit tests | JDK 21, the checked-in Maven wrapper and access to the required Maven artifacts |
+| Python harness tests | Python 3.9 or newer on a POSIX host; standard library only |
+| Local Kafka integration | JDK 21, Git, Bash, Python, and a local Docker Engine reachable through a Unix socket |
+| Native IBM i integration | An explicitly supplied disposable IBM i system, IBM i Access ODBC driver and `pyodbc`; Kafka profiles also need the local Docker setup |
+| Performance resource sampling | Linux host with a local Docker daemon whose worker process is visible in host `/proc`; JDK recording tools |
+| Optional `native-identity-probe` | Bash, JDK 21 and GNU `timeout` for the outer process deadline |
+
+No editor, version manager, cloud account or worktree utility is required.
+The shell examples use POSIX syntax. Use `mvnw.cmd` for Java builds on Windows.
+The optional integration harnesses use POSIX ownership/permissions and Linux
+containers; they are not qualified Windows or remote-Docker runners.
+
+## Build and unit tests
+
+Select JDK 21 with `JAVA_HOME` or place its `bin` directory on `PATH`. No
+particular vendor or installation directory is required. Check `./mvnw -version`
+before building.
 
 ```sh
-./mvnw clean install -Passembly -DskipITs \
+./mvnw -B -ntp verify -DskipITs
+./mvnw -B -ntp clean install -Passembly -DskipITs \
   -Dformat.formatter.goal=validate -Dformat.imports.goal=check
+```
+
+Java unit tests use captured fixtures and controlled transports. They do not
+connect to IBM i or an external Kafka broker. Avro tests use an in-memory schema
+registry. `-DskipITs` skips live integration tests, not unit tests.
+
+If the required `3.8.0-SNAPSHOT` core dependencies are unavailable, obtain the
+matching [Debezium core](https://github.com/debezium/debezium) checkout and build
+the same modules as [Cross Maven CI](../.github/workflows/cross-maven.yml).
+From this connector checkout, replace the placeholder with that checkout's path:
+
+```sh
+./mvnw -B -ntp -f /path/to/debezium/pom.xml \
+  -pl debezium-bom,debezium-connector-common,debezium-util,debezium-config,debezium-embedded,debezium-storage,debezium-assembly-descriptors \
+  -am install -DskipTests -DskipITs
+```
+
+Record the core revision for reproducible artifacts. A globally installed Maven
+is unnecessary. For a focused Java change:
+
+```sh
+./mvnw -B -ntp -pl debezium-connector-ibmi -am \
+  -Dtest=As400TruncateTest -Dsurefire.failIfNoSpecifiedTests=false test
+```
+
+For changes to the Python harnesses:
+
+```sh
 python3 -B -m unittest discover -s tools -p 'test_*.py'
 ```
 
-`As400SnapshotContractTest` exercises actual task/coordinator snapshot markers,
-durability barriers, partial restart rejection and JMX. `As400OutputContractTest`
-exercises selected snapshot/CDC output and normal Converter serialization.
-`As400BatchDispatcherTest` includes keyless truncate and tombstone conversion.
-Avro tests use an in-memory schema registry; no external registry is contacted.
-
-Historical custom-owner/receipt and protected-startup prototypes are not part of
-this checkout, build or distribution. Their archived experiments are separate
-from the supported runtime and do not establish source exactly-once guarantees.
+These tests exercise credential, fixture, allocation/release, observation and
+cleanup safety without importing the native ODBC driver.
 
 ## Local Kafka
 
-Docker and Python 3 are sufficient after Maven dependencies are installed:
+The runners create dedicated containers, networks and evidence directories.
+Git records the source revision; Docker must support local bind mounts and a
+Unix-socket endpoint. Remote daemons are deliberately refused. The Kafka images
+are digest-pinned in `tools/dcg-connect-probe.py`; their internal paths do not
+refer to host installations.
 
 ```sh
-DCG_KAFKA_VERSION=4.2.0 DCG_PROBE_BOUNDARY=connector tools/dcg-ownership-probe /tmp/dcg-ack-420 ack
-DCG_KAFKA_VERSION=4.3.1 DCG_PROBE_BOUNDARY=connector tools/dcg-ownership-probe /tmp/dcg-offsets-431 offsets
+DCG_KAFKA_VERSION=4.2.0 DCG_PROBE_BOUNDARY=connector \
+  tools/dcg-ownership-probe /path/to/new-ack-evidence ack
+DCG_KAFKA_VERSION=4.3.1 DCG_PROBE_BOUNDARY=connector \
+  tools/dcg-ownership-probe /path/to/new-offset-evidence offsets
 ```
 
-Directories must not already exist. Versions select digest-pinned images in
-`dcg-connect-probe.py`. Public CI runs acknowledgement/restart and missing-offset
-cases on both versions with `DCG_PROBE_BOUNDARY=connector`, exercising the actual
-task's commit request and production runtime-version/capability admission. The
-source is synthetic in these local cases; they do not establish native startup
-proof. The default `poll` keeps the original experiment
-and failure reproduction unchanged. Additional `interrupted`, `mixed` and `fencing` cases
-exercise whole-batch replay, metadata, tombstones and legitimate reassignment.
-Every runner retains independent broker output/offset evidence and verifies its
-own container/network cleanup. Failures also collect broker evidence.
+These wrappers build the required test classes and classpath. Set `PYTHON` to
+an alternative Python executable, or activate a virtual environment first.
+Each output directory must be new. CI runs `ack` and `offsets` on both Kafka
+versions. Additional `interrupted`, `mixed` and `fencing` scenarios test replay
+and reassignment.
 
-The original `partition` reproduction intentionally preserves the problematic
-timeout profile. It is not a passing CI smoke test. The corrected-profile matrix
-uses `dcg-timeout-profile-probe.py`. Retain its timing profile and every original
-safety assertion when rerunning it. Do not replace the original reproduction.
+The `partition` scenario retains the original failing timeout reproduction.
+`dcg-timeout-profile-probe.py` tests the corrected profile separately; do not
+weaken the original failure or its broker safety assertions.
+
+Other maintained local profiles include:
+
+| Runner | Purpose |
+| --- | --- |
+| `dcg-normal-task-probe` | Actual task/coordinator, ordinary offsets, standalone, routing and restart |
+| `dcg-task-stop-probe.py` | Replacement while an old RPC or JDBC operation remains held |
+| `dcg-first-start-probe` | Snapshot acknowledgement and crash/reassignment boundaries |
+
+Each runner verifies cleanup of its own resources and retains broker evidence on
+failure. These tests use controlled source records and do not qualify native
+IBM i startup semantics.
 
 ## Optional native tests
 
-There is no IBM i equivalent of a local Db2 LUW container. Native tests require
-an explicitly supplied disposable IBM i host and IBM i Access ODBC driver,
-Python `pyodbc`, Java/JT400 from the build and local Docker. No source access
-occurs in the offline or Kafka-only tests.
-
-Create an owner-only (0600) JSON file outside the repository, preferably in
-tmpfs, with `host`, `user`, `password`, exact `server` (CURRENT_SERVER), and
-`allow_isolated_fixture_writes: true`. Optional `odbc_driver` names the installed
-driver; the default is `IBM i Access ODBC Driver`. Set `IBMI_TEST_CONFIG` to its
-path. The runner refuses missing credentials, permissive file modes, symlinks,
-implicit server selection and unacknowledged fixture writes. This bounded test
-profile uses the driver's normal non-TLS connection; use only an isolated test
-network. It does not qualify production transport security.
+IBM i has no equivalent local Db2 LUW container. Use a disposable system and
+fresh test libraries. Install the IBM i Access ODBC driver for the host, then
+install `pyodbc` in your chosen Python environment:
 
 ```sh
-IBMI_TEST_CONFIG=/dev/shm/ibmi-test.json PYTHON=/path/to/venv/bin/python \
-  tools/dcg-packaged-probe /tmp/dcg-native-evidence DCNC9991 smoke
+python3 -m venv /path/to/test-venv
+/path/to/test-venv/bin/python -m pip install pyodbc
 ```
 
-Choose a fresh `DCNCdddd` library. The runner checks server identity and library
-absence, creates only its fixture, retains the exact owned object inventory,
-preserves receiver recording options and tests the packaged connector. Credentials
-enter worker tmpfs over stdin, never connector config topics or command arguments.
-Reports redact host, user and password. External credential resolution belongs
-outside this repository; the runner requires no private credential tool or cloud SDK.
-
-Cleanup refuses unexpected objects, pending transactions, active locks or
-unattributed inquiries. Only the exact owned library and receivers are removed.
-Read `report.json` and `native/cleanup.json`; a failed test is not evidence that
-cleanup succeeded. Retain a failed fixture for inspection if ownership or lock
-checks cannot be proven. Remove the credential file after the run.
-
-The portable transport replacement has offline admission/redaction/cleanup
-coverage and a fresh packaged native smoke run with 32 passing assertions and
-verified cleanup (2026-11-08). This run used externally supplied credentials;
-neither an AWS session nor a private credential package is required by the runner.
-
-`tools/dcg-temporal-probe NEW_EVIDENCE_DIRECTORY DCNCdddd` uses the same explicit
-configuration and cleanup contract. It adds DATE, TIME and TIMESTAMP(0/3/6/9),
-nulls, pre-epoch values, end-of-day TIME, temporal clear/reload commit and rollback,
-and replacement while that clear is open. It preserves the packaged smoke
-assertions. See [validation scope](dcg-validation.md).
-
-`tools/dcg-member-compatibility-probe.py NEW_EVIDENCE_DIRECTORY DCNCdddd eos`
-uses the ordinary packaged connector to exercise legacy rows from two members,
-online activation, a newly added member, index creation/deletion, unrelated-table
-progress during a clear, replacement and safe rejection of a member-only clear.
-The journal also contains a data area, data queue and journaled access paths.
-Use `source-offsets` instead of `eos` to exercise ordinary offsets with disk
-working storage; the EOS case uses memory. Both retain existing table keys and
-topics. Use a distinct absent library and evidence directory for each invocation,
-with the same explicit credentials, local Kafka prerequisites and cleanup checks
-as the native runner above.
-
-For excluded large-object coexistence, use
-`python tools/dcg-excluded-lob-probe.py NEW_DIRECTORY DCNCdddd source-offsets`
-(or `eos`). The fixture owns an excluded CLOB table and captured ordinary tables.
-It checks legacy-to-native activation, 60 KB/NULL/empty values, mixed commit and
-rollback, replacement while a transaction is open, unrelated progress, and
-captured truncate/reload. It also places an excluded LOB row in a captured
-table's observed ALTER interval and restarts from the resulting schema history.
-The DDL acknowledgement override belongs only to the fixture's dedicated job
-and is restored before that session closes. It uses the ordinary packaged plugin;
-external LOB values are never decoded by the candidate. This does not qualify LOB value
-capture. Local `As400ExcludedLobTest` replays sanitized native pointer descriptors
-and controls, including interrupted delivery and invalid binding/row metadata;
-`RawJournalPageTest` checks handle release on the retrieving job and cancellation
-before progress when release fails.
-
-For transactional clears encountered before online activation, use
-`python tools/dcg-deferred-clear-probe.py NEW_DIRECTORY DCNCdddd source-offsets metadata`
-(or replace `source-offsets` with `eos`). An open excluded-table transaction keeps
-admission pending while captured tables commit, roll back and use savepoints.
-The runner checks unrelated-table progress, pinned durable legacy offsets across
-600 rows, both D/CG subtypes, receiver rotation, worker replacement, consecutive
-clears, a following F/CR across restart and eventual handoff without another snapshot. It uses the same explicit
-fixture authorization and cleanup as the public probe. Raw native evidence is
-private until inspected and sanitized; missing-history and already-published
-same-table prefix rejection are also covered by local Java tests.
-
-For unrelated-table progress during unfinished CREATE and DROP, use
-`python tools/dcg-schema-refresh-probe.py --open-objects NEW_DIRECTORY DCNCdddd source-offsets`
-(or replace `source-offsets` with `eos`). The runner uses the packaged connector
-and the same isolated-fixture authorization and cleanup. It holds each DDL
-transaction open across unrelated output and worker replacement, then commits
-or rolls it back. It checks durable F/W, invisible uncommitted rows, creation
-metadata, and rows written before a DROP. Native journal intervals and output
-evidence stay in the chosen directory; inspect and sanitize them before sharing.
-
-For mixed schema and transaction outcomes, use
-`python tools/dcg-schema-refresh-probe.py --mixed-outcomes NEW_DIRECTORY DCNCdddd source-offsets`
-(or `eos metadata`). It pauses the reader to reproduce ALTER followed by a
-rolled-back clear and CREATE followed by ALTER before metadata acquisition. It
-also commits an ALTER with a later row-only savepoint rollback, exercises
-CREATE→DROP, CREATE→clear/reload, adding a new table's key before its first row,
-`CHGPF SIZE(*NOMAX)`, and captured/excluded renames with distinct SQL/system names.
-It adds/removes a captured CHECK constraint and preserves the already published
-key through primary-key constraint removal, replacement and re-addition.
-It replaces the worker and checks exact output against the committed writer ledger. The same
-fresh-library authorization, retained raw evidence and verified cleanup apply.
-
-For a serial comparison of schema-refresh latency, run
-`python tools/dcg-schema-refresh-probe.py --schema-timing NEW_DIRECTORY DCNCdddd source-offsets`
-once per packaged build in different fresh libraries. Run without other local
-or native workloads where possible. The report separates DDL execution time,
-probe insertion-to-observation time and insertion-to-durable-offset time. Two
-rounds alternate baseline probes with captured/excluded ALTER and LABEL changes;
-every probe must appear exactly once. This includes broker-observer overhead and
-does not measure connector-only pause time or saturation throughput.
-
-For captured files moving between libraries on the same journal, run
-`python tools/dcg-library-move-probe.py NEW_DIRECTORY DCNCdddd DCNCeeee --distribution PLUGIN.zip`.
-Both libraries must be fresh and absent; the second library is a separately
-inventoried destination. The runner validates exact object ownership before and
-after each `MOVOBJ` and cleans up each fixture using its own inventory. It uses standard
-exclusion filters throughout legacy startup and online activation, so tables
-created later are not named in a legacy server-side file filter.
-
-The default `--selection both --delivery source-offsets` checks exact topics,
-keys, values and ordering for ALTER/row/move and CREATE/row/move catch-up. It
-replaces the worker while the moved table has an open truncate, checks unrelated
-progress, commit and rollback, moves both files back and restarts again. Use
-`--selection source` or `--selection destination` to check capture selection on
-each side, and `--delivery eos` for the supported Kafka source-transaction mode.
-Each run retains its plugin hash, independent broker ledgers, native journal
-interval and cleanup evidence. These bounded scenarios do not qualify
-cross-pool moves, save/restore, or clearing one member of a multi-member file.
-
-For a bounded disk-buffer endurance run, use
-`python tools/dcg-soak-probe.py NEW_DIRECTORY DCNCdddd --distribution PLUGIN.zip --label candidate --mode transactional --buffer-storage disk --duration 1200 --rows 100 --backlog-rows 5000`.
-This retains exact mixed-value and before-image checks, commits and rolls back
-5,000-row transactions, and keeps a clear open while unrelated output advances.
-By default it rotates three owned receivers during that open clear and performs
-three task stop/resume cycles during the timed workload. Each restart checks
-durable F/W and unchanged binding history. `--held-clear-rotations 0` and
-`--restart-count 1` retain the earlier simpler schedule. The observer has explicit
-row, byte and time bounds; a 20-minute pass is not a multi-day soak or a maximum
-capacity measurement.
-
-During the soak, offset-topic inspection retains the latest value or tombstone
-per key through a fixed broker endpoint. It bounds scanned records, retained
-keys/data and elapsed time, so obsolete offset updates do not exhaust the
-ordinary event inspector's 1,000-record limit. Data-topic observations still
-retain every record and check exact counts; duplicate output is not collapsed.
-
-## Larger bounded profiles
-
-The extended profiles retain the ordinary packaged connector and the same exact
-output, rollback, checkpoint and ownership/cleanup assertions. They do not change
-production resource limits or the original harness defaults. Use different fresh
-libraries and evidence directories for every invocation, with the explicit native
-configuration above.
+Provide an owner-only (0600) JSON file outside the checkout with `host`, `user`,
+`password`, exact `server` (`CURRENT_SERVER`) and
+`allow_isolated_fixture_writes: true`. Optional `odbc_driver` selects the
+installed driver; the default is `IBM i Access ODBC Driver`. Set
+`IBMI_TEST_CONFIG` to the file. The runner refuses symlinks, permissive modes,
+implicit server selection and missing write opt-in.
 
 ```sh
-# 128 journaled files; busy final allocation group, unrelated progress,
-# excluded layout, keyless clear, worker replacement and rollback.
-python tools/dcg-online-scope-probe.py NEW_SCOPE_DIRECTORY DCNCdddd --files 128
-
-# Independent paced writer; repeat for the original, disabled and enabled ZIPs.
-python tools/dcg-sustained-probe.py NEW_RATE_DIRECTORY DCNCeeee \
-  --distribution PLUGIN.zip --label candidate --mode transactional \
-  --buffer-storage disk --rows 250 --seconds 120 --operations-per-second 1000 \
-  --failure-handling warn --worker-defaults
-
-# One hour with no scheduled task restarts in the timed interval.
-python tools/dcg-soak-probe.py NEW_HOUR_DIRECTORY DCNCffff \
-  --distribution PLUGIN.zip --label candidate --mode transactional \
-  --buffer-storage disk --duration 3600 --rows 50 --restart-count 0 \
-  --backlog-rows 5000
+IBMI_TEST_CONFIG=/path/to/private/ibmi-test.json \
+  PYTHON=/path/to/test-venv/bin/python \
+  tools/dcg-packaged-probe /path/to/new-native-evidence DCNC9991 smoke
 ```
 
-The scope runner defaults to 56 files; `--files 128` expands only the owned test
-journal. The 128-file profile allows 15 minutes to observe handoff after releasing
-the deliberate blocker; the 56-file profile retains its six-minute deadline.
-These are controller observation bounds, not connector or write-lock timeouts.
-The sustained runner defaults to 200 operations/second; 500 and 1,000
-are higher *requested* rates. Report the achieved submission rate as well as
-observed delivery. Higher-rate profiles cap source operations at 120,000 and use
-the existing 150,000-record/256 MiB observer; original-rate behavior is unchanged.
+Use a new absent `DCNCdddd` library for each run. The runner checks server
+identity and absence, records object ownership, and verifies cleanup. Never
+substitute an application library. The current container harness resolves one
+IPv4 address for the test host and uses non-TLS ODBC/JT400 fixture connections;
+use an isolated test network. This is a test profile, not a connector transport
+requirement or production security qualification.
 
-The hour profile requires 50 rows per burst and zero scheduled timed restarts,
-with at least five seconds per three-burst round. This bounds timed changes to
-108,000 while retaining the 145,000 workload and 150,000 observer record limits.
-Its observer deadline is 90 minutes and owned worker/observer containers live at
-most two hours. The preceding two backlog/restart trials, 5,000-row commit and
-rollback, open-clear checks and receiver rotations happen **before** the timed
-hour. Verify task continuity during the hour from the worker lifecycle evidence;
-zero requested restarts alone does not prove that the task never restarted.
+The local Docker daemon must support the network options used by the native
+runner, including `docker network connect --gw-priority`. Credentials enter
+worker tmpfs through stdin and are redacted from reports. The Engine runner uses
+owner-only temporary files and honors `TMPDIR`; choose a private temporary
+directory or tmpfs if required. Cleanup removes only files it created.
 
-This endurance workload is serial bursts, not an hour at the higher sustained
-rate. Keep those results separate. Short rate runs do not establish saturation;
-a one-hour pass does not establish multi-day leak freedom or every fault schedule.
+Before invoking a `.py` runner directly, build the distribution/test classes and
+generate its classpath:
+
+```sh
+./mvnw -B -ntp install -Passembly -DskipITs
+./mvnw -B -ntp -pl debezium-connector-ibmi dependency:build-classpath \
+  -DincludeScope=test -Dmdep.outputFile=target/connect-probe-classpath.txt
+```
+
+Use the Python executable with `pyodbc` installed. Native profiles share this
+configuration and cleanup contract:
+
+| Runner | Scenario |
+| --- | --- |
+| `dcg-public-online-probe.py NEW_DIRECTORY DCNCdddd source-offsets` | Public connector, existing-stream handoff, both clear subtypes, commit/rollback and replacement; `eos` selects source transactions |
+| `dcg-deferred-clear-probe.py NEW_DIRECTORY DCNCdddd source-offsets metadata` | Clear outcomes before handoff, savepoints, pinned offsets and unrelated progress |
+| `dcg-schema-refresh-probe.py --mixed-outcomes NEW_DIRECTORY DCNCdddd source-offsets` | DDL, clear, constraint and rename compositions; `--open-objects` tests unfinished CREATE/DROP |
+| `dcg-member-compatibility-probe.py NEW_DIRECTORY DCNCdddd source-offsets` | Multiple members, mixed journal resources, restart and safe partial-clear rejection |
+| `dcg-excluded-lob-probe.py NEW_DIRECTORY DCNCdddd source-offsets` | Excluded CLOB values alongside captured ordinary tables |
+| `dcg-file-history-probe.py NEW_DIRECTORY DCNCdddd` | Actual Engine with file offsets/history and no Kafka broker |
+| `dcg-interrupted-publication-probe NEW_DIRECTORY DCNCdddd` | Native 5,000-row clear/reload interrupted during publication; independent broker evidence and replacement recovery |
+| `dcg-library-move-probe.py NEW_DIRECTORY DCNCdddd DCNCeeee --distribution PLUGIN.zip` | Two owned libraries; `--selection both\|source\|destination` and `--delivery source-offsets\|eos` select routing/delivery cases |
+| `dcg-online-scope-probe.py NEW_DIRECTORY DCNCdddd --files 128` | Larger journal scope, busy-lock release, keyless clear and replacement |
+
+The interrupted-publication probe performs native transactions and fixture writes.
+It requires the `IBMI_TEST_CONFIG` credentials and explicit fixture-write opt-in,
+IBM i Access ODBC driver, `pyodbc` and local Docker described above. For a
+controlled-source test without IBM i, use the local ownership runner's
+`interrupted` scenario instead.
+
+For file moves, both libraries must be fresh and independently inventoried.
+For first-start window tests, use the profile in
+[configured initialization](dcg-configured-native.md#reproducible-qualification).
+See [F/CR testing](fcr-testing.md) for the separate nontransactional clear tests.
+
+## Performance and endurance
+
+Build before measuring; do not run builds or competing test workloads during
+timed comparisons. Use a fresh library and evidence directory for every run:
+
+```sh
+python3 tools/dcg-sustained-probe.py NEW_RATE_DIRECTORY DCNCdddd \
+  --distribution PLUGIN.zip --label candidate --mode transactional \
+  --seconds 120 --operations-per-second 500 --rows 250 \
+  --failure-handling warn --worker-defaults --buffer-storage disk
+
+python3 tools/dcg-soak-probe.py NEW_HOUR_DIRECTORY DCNCeeee \
+  --distribution PLUGIN.zip --label candidate --mode transactional \
+  --duration 3600 --rows 50 --restart-count 0 --buffer-storage disk
+```
+
+Use the same transactional settings with `--buffer-storage memory` for a
+storage comparison. Use `--mode legacy` with the original distribution for
+a baseline. The isolated `--journal-additional-delay 0` control is a diagnostic,
+not a recommendation to change the legacy default.
+
+The one-hour profile has no scheduled task restart during its timed interval.
+Shorter profiles can include three restarts and three receiver rotations.
+Observer record, byte and time bounds remain enforced; controller observation
+deadlines are not application-lock durations or connector capacity limits.
+
+See [performance methods and recorded results](dcg-performance-comparison.md)
+and [validation coverage](dcg-validation.md). Report achieved load, exact output,
+artifact identity, resource scope, failures and cleanup. Inspect raw captures
+before publication; they can contain source data and system identities.

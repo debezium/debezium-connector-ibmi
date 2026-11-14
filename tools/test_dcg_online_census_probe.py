@@ -1,5 +1,4 @@
 # Copyright Debezium Authors. Licensed under the Apache License, Version 2.0.
-import importlib.util
 import copy
 import itertools
 from pathlib import Path
@@ -9,9 +8,9 @@ import time
 import unittest
 from unittest.mock import MagicMock, Mock, patch
 
-spec = importlib.util.spec_from_file_location("probe", Path(__file__).with_name("dcg-online-census-probe.py"))
-probe = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(probe)
+from probe_test_support import load_probe
+
+probe = load_probe("dcg-online-census-probe.py", "probe")
 
 
 def entry(sequence, cycle, kind):

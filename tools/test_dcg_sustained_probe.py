@@ -1,11 +1,9 @@
 # Copyright Debezium Authors. Licensed under the Apache License, Version 2.0.
-import importlib.util
-from pathlib import Path
 import unittest
 
-spec = importlib.util.spec_from_file_location('sustained', Path(__file__).with_name('dcg-sustained-probe.py'))
-sustained = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(sustained)
+from probe_test_support import load_probe
+
+sustained = load_probe('dcg-sustained-probe.py', 'sustained')
 
 
 class ObservationTest(unittest.TestCase):
