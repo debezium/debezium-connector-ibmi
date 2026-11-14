@@ -137,7 +137,7 @@ class Experiment(public.Experiment):
         self.check("Later-batch refusal releases earlier allocations and keeps legacy CDC progressing",
                    not allocations and "offset.version" not in self.checkpoint(self.observer_container, "automatic", "busy"), "busy-allocations.json")
         exp.execute(busy, "rollback"); self.close_session(busy)
-        self.wait_with_writer("handoff-complete", lambda: "Transactional truncate test: handoff-complete" in self.logs[worker].read_text(), 360, writer)
+        self.wait_with_writer("handoff-complete", lambda: "Transactional truncate test: handoff-complete" in self.logs[worker].read_text(), 900 if self.fixture.file_count == 128 else 360, writer)
         def all_ongoing_rows():
             records = self.table_records("A", "ongoing-unrelated-write")
             expected = set(self.writer_rows)

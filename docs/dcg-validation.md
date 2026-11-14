@@ -2579,3 +2579,93 @@ inquiry messages for all 18 owned fixture libraries across successful and failed
 attempts. All 13 owned Docker run prefixes were absent. Final verification again
 matched all 203 production sources and 15 plugin JARs to the publication manifest.
 No production connector change was needed for this validation.
+
+### Reader/storage controls and larger journal scope — 2026-11-14
+
+Ten additional serial native runs used the same frozen `96a395a` runtime and
+matched original `2e19ad27` plugin. They compared the original's default reader,
+the candidate with the feature disabled, transactional disk and memory buffers,
+and an original-reader diagnostic with only `journal.additional.delay=0` changed.
+Each profile ran for 120 seconds after warm-up at requested rates of 500 and
+1,000 changes/second. Exact output and per-run cleanup passed for all 768,300
+measured changes. An independent ledger audit recomputed latency percentiles,
+checked unique broker offsets and logical output, and checked four submission
+cohorts for a growing backlog.
+
+At approximately 500 changes/second, median SQL-submission-to-Kafka-observation
+delay was 5.214 s for the original default, 5.212 s with the feature disabled,
+2.310 s with disk and 2.256 s with memory. Disk reduced median delay 55.7% versus
+the original default while consuming 40.1% more worker CPU per change. The
+zero-delay diagnostic measured 0.172 s. It demonstrates the legacy wait's cost
+in this workload, not the safety of removing that margin when journal entries
+are temporarily unavailable. No production default was changed.
+
+At the higher target, the writers achieved only 769–783 changes/second; these
+are not 1,000-change/second capacity results. These ten cells are single
+observations, separate from the earlier repeated 201-change/second matrix.
+The [performance comparison](dcg-performance-comparison.md#matched-reader-and-storage-controls--2026-11-14)
+records exact settings, every result, CPU/RSS tradeoffs and the distinction
+between storage, reader delay and Kafka transaction visibility.
+
+A fresh scope run passed 12 assertions with 128 journaled files, three captured
+tables and 125 excluded files. A deliberate lock refusal in a later allocation
+group released earlier allocations while legacy CDC continued. After the test
+released the blocker, handoff took 437.4 seconds. This is total qualification
+time, not time spent holding application locks. Keyless RRN clear/reload,
+rollback, unrelated progress, worker replacement and unchanged binding history
+passed. A mixed transaction's excluded-table clear produced no excluded topic.
+This qualifies the tested journal scope and recovery schedule, not throughput
+from 128 captured tables or a one-second end-to-end restart.
+
+The first 128-file attempt exceeded the controller's six-minute handoff
+observation deadline and is preserved as a failed attempt. Its native fixture
+and worker cleanup passed. Only the 128-file test profile's observation deadline
+was extended to 15 minutes; production timeouts and all safety assertions were
+unchanged. The complete fresh run then passed within that deadline.
+
+### One hour without task restarts — 2026-11-14
+
+A fresh isolated fixture and local Kafka source-transaction runtime used the
+same frozen `96a395a` disk-buffer plugin. The timed workload completed 3,605.4
+seconds, 660 rounds and 99,000 mixed inserts/updates. Each round submitted and
+observed three 50-change bursts; it was paced to take at least five seconds.
+This serial workload tests continued operation, not the maximum throughput or
+latency of an independent writer. No scheduled or observed task restart occurred
+during the hour. The worker log and 120 process/storage observations independently
+confirmed the continuous task and JVM interval.
+
+All 28 runner assertions passed. The independent broker ledger contained exactly
+116,851 events across setup and timed work: 83,500 creates, 33,350 updates and one
+truncate. It contained no duplicate logical output or broker offset, no rows from
+the rolled-back 5,000-row transaction, and the clear preceded all 1,000 reload
+rows. The setup also passed two 5,000-row backlog/resume trials and a separate
+5,000-row commit. Those task stop/resume operations occurred before the timed
+hour. A clear stayed open for 61.4 seconds while seven unrelated bursts
+progressed and three journal receivers rotated. F remained behind W until the
+clear completed, then the protected replay floor advanced.
+
+Whole-worker resident memory peaked at 497.6 MiB over the full run and 495.0 MiB
+during the timed hour. Quarter-by-quarter median RSS was 454.4, 451.8, 452.6 and
+453.7 MiB. The flight recording covers the entire timed interval: 329 recorded
+collections used 1,062.5 ms of total GC pause time and left 44.5–57.5 MiB of used
+heap, ending at 45.5 MiB. Every 30-second storage observation reported the same
+3.125 MiB H2 working file and worker process. These snapshots can miss short
+storage peaks, and file size is not the amount of live transaction payload.
+
+Final independent read-only queries found no schemas, libraries, journals or
+inquiry messages for all 13 libraries from this larger validation batch, including
+the initial failed scope attempt. All 13 owned local Docker run prefixes were
+absent. Runner and native session cleanup also passed. The earlier 20-minute run
+and its separate cleanup remain recorded above. No production source or legacy
+delay default changed. This one-hour result does not qualify multi-day leak
+freedom, very large pending transactions, saturation capacity or every failure
+schedule.
+
+The harness changes passed 155 Python tests. An upstream CI run on `90a587c`
+exposed a test-only spill quota: the configured large key-change dispatch test
+used a 128 MiB physical-file budget with a much smaller cache/write profile than
+the connector's disk defaults. Commit `767f35a` uses the actual configured disk
+profile for that contract; its small-budget exhaustion controls are unchanged.
+All 875 distinct focused Java cases passed in each configured execution. This
+correction changes test setup, not connector resource limits. Upstream CI results
+and any maintainer-approval requirement are tracked separately on the PR.

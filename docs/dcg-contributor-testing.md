@@ -220,7 +220,10 @@ python tools/dcg-soak-probe.py NEW_HOUR_DIRECTORY DCNCffff \
 ```
 
 The scope runner defaults to 56 files; `--files 128` expands only the owned test
-journal. The sustained runner defaults to 200 operations/second; 500 and 1,000
+journal. The 128-file profile allows 15 minutes to observe handoff after releasing
+the deliberate blocker; the 56-file profile retains its six-minute deadline.
+These are controller observation bounds, not connector or write-lock timeouts.
+The sustained runner defaults to 200 operations/second; 500 and 1,000
 are higher *requested* rates. Report the achieved submission rate as well as
 observed delivery. Higher-rate profiles cap source operations at 120,000 and use
 the existing 150,000-record/256 MiB observer; original-rate behavior is unchanged.

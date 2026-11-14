@@ -105,6 +105,31 @@ The separate [operator-controlled first-start profile](docs/dcg-configured-nativ
 supports an explicitly planned initialization window. Do not mix its settings
 with the online activation path.
 
+### Choose transaction buffering
+
+`truncate.buffer.storage=disk` is the default for large or unpredictable pending
+transactions. Users with predictable transaction sizes and sufficient JVM heap
+can select in-memory transaction buffering:
+
+```properties
+truncate.buffer.storage=memory
+```
+
+Memory mode defaults to 64 open transactions, 10,000 retained entries and 16 MiB
+of owned source payloads. Entries include before-images and bookkeeping, not just
+rows; transaction context includes excluded files. Java objects and prepared
+output need additional heap. Exceeding a budget stops capture with its durable
+checkpoint preserved. See the
+[configurable budgets](docs/dcg-configured-native.md#transaction-working-storage).
+
+Both modes use the same transactional reader and recovery rules. Memory mode can
+reduce storage overhead, but is not a zero-disk mode: startup/handoff may still
+use temporary files, so a writable scratch directory and durable offsets/history
+remain required. Compare the
+[matched latency and CPU measurements](docs/dcg-performance-comparison.md#matched-reader-and-storage-controls--2026-11-14)
+when choosing; the large improvement over legacy default latency is not caused
+by using disk.
+
 ### F/CR without transactional capture
 
 With `truncate.transactional.enabled=false` and `dcg.mode=disabled`, enabling
@@ -193,16 +218,20 @@ The published runtime at `96a395a` has the following bounded evidence:
 
 | Check | Result and scope |
 | --- | --- |
-| Offline verification | 5,285 Java executions on matching production sources; formatter/import and assembly checks. Subsequent test-inspector correction: four distinct Java cases and 153 Python tests |
+| Offline verification | 5,285 Java executions on matching production sources; formatter/import and assembly checks. Later observer/spill-test corrections: 875 distinct focused Java cases and 155 Python tests |
 | Captured file moves | Four native configurations, 148 assertions: both/source/destination selection with ordinary offsets, plus both-library capture with Kafka source transactions; restart, clear outcomes and exact broker output checked |
-| Original vs. candidate | Six serial 120-second native runs, 144,000 verified changes total at about 201 changes/second. Feature-off CPU/change +3.6%; disk path +23.6%, with lower observed delivery delay at that load |
+| Reader/storage performance | Six repeated runs at about 201 changes/second plus ten reader/storage/delay controls: 912,300 verified changes. At about 500 changes/second, disk median delay fell 55.7% versus the legacy default, with 40.1% more CPU/change; memory was slightly quicker than disk |
+| Larger journal scope | 128 journaled files, three captured tables; busy-lock release, online handoff, keyless clear/rollback and worker replacement passed. Handoff after the deliberate blocker was released took 437 seconds |
 | Restart endurance | Fresh 20-minute mixed-workload run: 92,401 observed events, three task restarts, three receiver rotations, 5,000-row commit/rollback and unrelated progress during an open clear |
+| Uninterrupted endurance | Fresh one-hour serial-burst run: 116,851 total events, including 99,000 timed changes, with no task restart during the hour. Timed-quarter median worker RSS stayed between 451.8 and 454.4 MiB; sampled spill-file size stayed at 3.125 MiB |
 
 The first endurance attempt exposed a test-inspector record limit; its failure
 is preserved and the corrected harness passed on a fresh fixture. One initial
 move run needed a controller resume before its workload; subsequent runs used
-the corrected harness. All owned native fixtures and local runtimes were removed
-and independently checked. These are not maximum-capacity, multi-day or universal
+the corrected harness. The first 128-file attempt exceeded its six-minute test
+observation deadline; a fresh run passed with a bounded 15-minute deadline and
+unchanged connector behavior. All owned native fixtures and local runtimes were
+removed and independently checked. These are not maximum-capacity, multi-day or universal
 replacement-readiness claims. Upstream CI results are tracked separately on the PR.
 
 - [Reproduce offline, local Kafka and optional isolated native tests](docs/dcg-contributor-testing.md)
