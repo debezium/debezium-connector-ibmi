@@ -1,6 +1,5 @@
 # Copyright Debezium Authors. Licensed under the Apache License, Version 2.0.
 """A failed Engine cleanup must never authorize deletion of its IBM i fixture."""
-import importlib.util
 from pathlib import Path
 import subprocess
 import tempfile
@@ -8,9 +7,9 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
-SPEC = importlib.util.spec_from_file_location('file_history_probe', Path(__file__).with_name('dcg-file-history-probe.py'))
-probe = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(probe)
+from probe_test_support import load_probe
+
+probe = load_probe('dcg-file-history-probe.py', 'file_history_probe')
 
 
 class CleanupTest(unittest.TestCase):

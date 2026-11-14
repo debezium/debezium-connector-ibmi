@@ -7,7 +7,6 @@ not a second handwritten allocate/release loop. It is not a Db2 SQL emulator or
 evidence that IBM i accepts this program or implements the modeled conditions.
 """
 import copy
-import importlib.util
 import json
 from pathlib import Path
 import re
@@ -16,9 +15,9 @@ import sys
 import tempfile
 import unittest
 
-SPEC = importlib.util.spec_from_file_location('short_boundary', Path(__file__).with_name('dcg-short-boundary.py'))
-boundary = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(boundary)
+from probe_test_support import load_probe
+
+boundary = load_probe('dcg-short-boundary.py', 'short_boundary')
 
 
 def pulse(**changes):

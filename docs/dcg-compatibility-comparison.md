@@ -1,20 +1,14 @@
-# Connector compatibility and performance comparison
+# Feature compatibility
 
-This comparison describes the verified transactional-truncate candidate on
-November 13, 2026. Transactional capture remains **opt-in and under review**.
-An available option is not a claim that every deployment or workload has been
-qualified. Qualified scope and remaining release gates are listed explicitly.
-
-The original benchmark plugin was built from `2e19ad27`. Upstream `main` at
-`ea277c0099876fc2b6f1d5e88e3dde1a60409b4c` differs from that commit only in CI
-workflows: its connector code and Maven configuration are unchanged. The
-matched benchmark distributions contain byte-identical shared Debezium core and
-driver jars; the candidate additionally packages history and disk-buffer storage.
-Current-upstream CI remains a separate merge gate.
+Transactional truncate capture extends ordinary row capture and is opt-in.
+The table distinguishes existing behavior from the added transactional path.
+The reference connector implementation is `2e19ad27`; deployment conditions are
+in [runtime compatibility](dcg-compatibility-baseline.md), and measured results
+are in [validation coverage](dcg-validation.md).
 
 ## Compatibility
 
-| Capability | Original connector | Verified candidate with transactional capture enabled |
+| Capability | Original connector | With transactional capture enabled |
 | --- | --- | --- |
 | Ordinary insert/update/delete | Supported | Preserved; native comparisons check keys, values and update before-images |
 | Committed SQL truncate / optimized bulk delete | Clear can be missed when IBM i omits individual row deletes | Emits keyless `op=t` before committed reload rows; discards rolled-back work |
@@ -89,106 +83,17 @@ A rejected clear cannot be repaired simply by disabling truncate capture; doing
 so loses the clear. The configuration contract describes evidence recovery and
 snapshot-based reconciliation when the original evidence cannot be recovered.
 
-See the [baseline audit](dcg-compatibility-baseline.md) and
+See [runtime compatibility](dcg-compatibility-baseline.md) and
 [configuration contract](dcg-online-configuration.md) for exact qualifications.
 
-## Performance
+## Performance and verification
 
-The published runtime at `96a395a` has two matched native comparisons against
-original connector/parser `2e19ad27`, with byte-matched shared dependencies and
-local Kafka 4.3.1. Six earlier 120-second runs covered approximately 201 submitted
-changes/second (144,000 verified changes, two repetitions per profile). Ten later
-120-second runs compared reader, buffer storage and the legacy delay at two
-requested rates (768,300 verified changes, one run per profile/rate). Every
-measured key, mixed value, update before-image and final count passed.
+[Performance methods and results](dcg-performance-comparison.md) compare the
+original reader, the feature-disabled path, and transactional disk/memory
+storage. They distinguish the legacy delay from storage cost and report CPU
+tradeoffs as well as latency. They are not capacity or equivalence guarantees.
 
-The 500-change/second comparison reached approximately its requested rate in
-all five profiles:
-
-| Profile | Median delay | p95 delay | Worker CPU ms/change | Peak worker RSS |
-| --- | ---: | ---: | ---: | ---: |
-| Original, default 5 s margin | 5.214 s | 5.301 s | 0.323 | 411.7 MiB |
-| Candidate, feature disabled | 5.212 s | 5.298 s | 0.323 | 414.7 MiB |
-| Transactional, disk | 2.310 s | 3.155 s | 0.453 | 453.2 MiB |
-| Transactional, memory | 2.256 s | 3.129 s | 0.377 | 450.0 MiB |
-| Original, zero-delay diagnostic | 0.172 s | 0.252 s | 0.320 | 457.6 MiB |
-
-The disk path's median delay was 55.7% lower than the original default, with
-40.1% more whole-worker CPU per change. Disk was not faster than memory. The
-zero-delay control shows that the original's fixed margin accounts for most of
-the latency difference; it does not validate removing that safety margin under
-delayed journal visibility. The legacy default remains unchanged.
-
-At a requested 1,000 changes/second, the writer achieved 769–783, so those runs do
-not establish 1,000-change/second capacity. Median delays were 5.226 s original,
-5.231 s disabled, 2.491 s disk, 2.372 s memory and 0.181 s zero-delay diagnostic.
-CPU/change was 8.9% above the original with the feature disabled and 67.3%
-above it with disk buffering at these slightly different achieved loads. The
-earlier two-repeat 201-change/second comparison found a 62.3% median delay
-reduction and 23.6% CPU increase for disk; these observations must not be combined
-into a single load-independent performance guarantee.
-
-Delay is SQL submission to independent `read_committed` Kafka observation,
-including database/network and Kafka transaction visibility, not sink latency.
-Kafka source transactions used poll boundaries for legacy and connector
-boundaries after enablement. RSS is whole-worker resident memory, not retained
-heap. These are bounded workloads, not maximum throughput, statistical
-equivalence, large-catalog latency or multi-day stability results. The storage
-comparison changes only `truncate.buffer.storage` within the transactional path;
-its memory limits and remaining scratch/history requirements still apply.
-
-The candidate ZIP is
-`c8a28302ff5b8bebf54d7922c40dba9e937842d9dacfaa01d7b3d1727a96cd80`.
-The matched baseline ZIP is
-`46f4010f4c0683a43ad6c3602e881b13d125c8d04de940d250b370bc07c1ef6c`.
-See the [per-run results and exact test settings](dcg-performance-comparison.md#matched-reader-and-storage-controls--2026-11-14)
-and the [earlier repeated comparison](dcg-performance-comparison.md#published-build-performance-comparison--2026-11-14).
-
-A separate final-build disk-buffer run completed 20 minutes with three task
-restarts, three receiver rotations during an open clear, and 5,000-row
-commit/rollback and backlog cases. All 92,401 observed events passed final
-count/duplicate checks. Timed-quarter median RSS was 445.6, 430.8, 422.1 and
-423.0 MiB, with a full-run peak of 490.6 MiB. This bounded serial-burst run is not
-a maximum-throughput or multi-day memory qualification. Its first attempt hit
-an offset-inspector limit; the test-only correction and complete fresh rerun are
-documented in the [endurance evidence](dcg-validation.md#published-build-performance-and-endurance--2026-11-14).
-Independent cleanup confirmed all fixtures and owned local runtimes absent.
-
-A subsequent fresh run completed 3,605.4 seconds without a task restart during
-the timed hour. Its 660 serial-burst rounds produced 99,000 mixed changes;
-116,851 total events passed the independent count, duplicate, rollback and
-clear/reload audit. Timed-quarter median worker RSS was 454.4, 451.8, 452.6 and
-453.7 MiB, with a timed peak of 495.0 MiB. All 120 storage observations reported
-the same 3.125 MiB working file in the same worker process. Thirty-second storage
-samples can miss transient peaks. This is continuous-runtime endurance evidence,
-separate from both the restart test and the paced throughput/latency comparisons;
-it does not establish multi-day stability. See the
-[one-hour validation](dcg-validation.md#one-hour-without-task-restarts--2026-11-14).
-
-## Verification and review
-
-Full Maven verification at `7587127` passed 5,285 Java test executions (5,029
-connector and 256 parser). The Python
-harness suite passed 153 with the published-build validation harness changes.
-Later observer/spill-test corrections passed 875 distinct focused Java cases in
-each configured execution, and the larger-profile harness passed 155 Python
-tests. Assembly, formatter and import validation also passed on the matching
-production sources. Bounded packaged native
-runs cover the review's transactional DDL, overlapping clears, catalog churn,
-program-described files, member removal, retained receivers and restart cases.
-Each run retains its own artifact identity; earlier native or performance results
-are not automatically attributed to later builds. Advisor inspected the actual
-files and identified a deferred-creation clear issue, which was corrected and
-reverified with targeted negative controls. See the
-[latest correction evidence](dcg-validation.md#fifth-independent-review-corrections--2026-11-13)
-and [schema-change latency measurements](dcg-performance-comparison.md#fifth-review-schema-change-latency--2026-11-13)
-for exact qualifications and remaining limits. Later bounded reviews and native
-runs cover [historical names and excluded lifetimes](dcg-validation.md#historical-names-and-excluded-lifetimes--2026-11-13),
-including committed shared ALTER/DROP transactions and the subsequent
-[full rollback validation](dcg-validation.md#shared-alterdrop-full-rollback--2026-11-13),
-[known-table name boundaries](dcg-validation.md#known-table-name-boundaries--2026-11-13),
-[empty final-member recovery](dcg-validation.md#empty-final-member-recovery--2026-11-13),
-[same-file member renames](dcg-validation.md#same-file-member-rename--2026-11-13)
-and [file moves between libraries](dcg-validation.md#file-moves-between-libraries--2026-11-13).
-Those results do not qualify every DDL composition. Broader review and upstream CI remain
-release gates; this is not a replacement-readiness claim.
+[Validation coverage](dcg-validation.md) records the tested artifact, native
+scenario scope, failed attempts and endurance results. Use the
+[testing guide](dcg-contributor-testing.md) to reproduce affected cases on a new
+build instead of attributing an earlier run to changed code.

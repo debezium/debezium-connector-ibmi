@@ -1,19 +1,12 @@
 # Copyright Debezium Authors. Licensed under the Apache License, Version 2.0.
 """Extended workloads must retain explicit bounds before any native side effect."""
-import importlib.util
-from pathlib import Path
 import unittest
 from unittest.mock import patch
 
-
-def load(name):
-    spec = importlib.util.spec_from_file_location(name, Path(__file__).with_name(name + '.py'))
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+from probe_test_support import load_probe
 
 
-soak = load('dcg-soak-probe')
+soak = load_probe('dcg-soak-probe.py')
 
 
 class ExtendedProfilesTest(unittest.TestCase):

@@ -1,6 +1,5 @@
 # Copyright Debezium Authors. Licensed under the Apache License, Version 2.0.
 """Evidence safety and failure classification for the public plugin experiment."""
-import importlib.util
 import json
 import os
 from pathlib import Path
@@ -10,9 +9,9 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
-SPEC = importlib.util.spec_from_file_location('public_online', Path(__file__).with_name('dcg-public-online-probe.py'))
-probe = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(probe)
+from probe_test_support import load_probe
+
+probe = load_probe('dcg-public-online-probe.py', 'public_online')
 
 
 class PublicEvidenceTest(unittest.TestCase):

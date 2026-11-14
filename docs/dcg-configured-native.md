@@ -1,17 +1,17 @@
-# Configured native D/CG candidate
+# Operator-controlled initialization
 
-This is the first configured native path on the local D/CG follow-up branch. It
-uses `As400RpcConnector` / `As400ConnectorTask` from the distribution archive in
-an ordinary Kafka Connect worker. No fixture provider, custom ownership registry,
-custom durable receipt store or injected task is installed in that worker.
-`dcg.mode=disabled` remains the default. The legacy reader still rejects
-transactional clears. F/CR PR #114 is separate and unchanged.
+This optional profile initializes a new transactional-truncate generation during
+an operator-controlled first-start window. It uses the packaged
+`As400RpcConnector` / `As400ConnectorTask` in Kafka Connect, with no fixture
+provider or separate ownership/receipt service. `dcg.mode=disabled` is the default.
 
-The implementation is a **configured release candidate**, not a deployment or
-qualification of an existing installation. Its support boundaries below are deliberate. It is not
-a drop-in migration of an existing legacy connector or its offsets.
+This profile has a narrower source and runtime contract than
+[online activation](dcg-online-configuration.md). Use online activation to enable
+transactional capture from existing streaming offsets without a planned writer
+pause. The settings below are for a new generation, not a migration of legacy
+offsets.
 
-## First supported configuration
+## Supported configuration
 
 `snapshot.mode=initial` is the only admitted snapshot policy: create the
 baseline on an explicitly admitted first start, then use durable F/W on restart.
@@ -409,11 +409,10 @@ helpers run in separate JVMs and are excluded from the worker plugin path.
 
 The retained report must include source/distribution/plugin hashes, raw broker
 records, exact connector/worker settings, native inventory and cleanup evidence.
-See [validation scope](dcg-validation.md) for the recorded results
-and the [validation scope](dcg-validation.md) for current
-qualification status and extended workload commands. The previous
-[validation scope](dcg-validation.md) and stricter
-ownership/recovery tests remain applicable to their stated test-entry scopes.
+See [validation coverage](dcg-validation.md) for recorded results and their limits,
+and [contributor testing](dcg-contributor-testing.md) for prerequisites and extended
+workload commands. Local ownership/recovery tests use controlled native I/O;
+they do not replace qualification against IBM i.
 
 
 ## Framework and native API references

@@ -21,4 +21,9 @@ fi
 probe_cp="$probe_module/target/test-classes:$probe_module/target/classes:journal-parsing/target/classes:jt400-override-ccsid/target/classes:$(cat -- "$probe_cp_file")"
 # Separate process deadline covers DNS/driver/server behavior beyond JDBC timeout hints.
 # A timeout/incomplete report never counts as a successful observation.
-exec timeout --signal=TERM --kill-after=5s 300s java -cp "$probe_cp" io.debezium.connector.db2as400.As400NativeIdentityProbe "$@"
+if ! command -v timeout >/dev/null; then
+    echo 'This optional probe requires GNU timeout on PATH for its process deadline.' >&2
+    exit 2
+fi
+probe_java=${JAVA_HOME:+$JAVA_HOME/bin/}java
+exec timeout --signal=TERM --kill-after=5s 300s "$probe_java" -cp "$probe_cp" io.debezium.connector.db2as400.As400NativeIdentityProbe "$@"

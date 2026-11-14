@@ -88,8 +88,8 @@ Ordinary source offsets do not provide broker fencing or atomic output/offset
 commits. Embedded applications must preserve acknowledgement order and prevent
 independently overlapping connector instances. Neither path uses a custom owner
 registry or receipt database. Runtime requirements are checked before native
-startup side effects. See the [compatibility evidence](dcg-compatibility-baseline.md)
-for standalone/Engine qualification and the remaining Server/history gates.
+startup side effects. See [runtime compatibility](dcg-compatibility-baseline.md) for deployment-specific
+acknowledgement and history requirements, including standalone, Engine and Server.
 
 Delivery is whole-batch **at least once**, not source exactly once. If delivery
 stops after a committed prefix, recovery can repeat the complete batch. Missing,

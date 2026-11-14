@@ -1,6 +1,5 @@
 # Copyright Debezium Authors. Licensed under the Apache License, Version 2.0.
 """Offline admission/redaction/cleanup tests. Never import a native driver."""
-import importlib.util
 import json
 import os
 from pathlib import Path
@@ -8,9 +7,9 @@ import tempfile
 import unittest
 from unittest.mock import patch, Mock
 
-spec = importlib.util.spec_from_file_location("native_fixture", Path(__file__).with_name("dcg-native-fixture.py"))
-fixture = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(fixture)
+from probe_test_support import load_probe
+
+fixture = load_probe("dcg-native-fixture.py", "native_fixture")
 
 
 class NativeFixtureTest(unittest.TestCase):
@@ -26,6 +25,28 @@ class NativeFixtureTest(unittest.TestCase):
         environment = patch.dict(os.environ, {"IBMI_TEST_CONFIG": str(self.path)})
         environment.start()
         self.addCleanup(environment.stop)
+
+    def test_java_home_takes_precedence_without_silent_fallback_to_another_jdk(self):
+        java = self.root / "jdk with spaces" / "bin" / "java"
+        java.parent.mkdir(parents=True)
+        java.write_text("#!/bin/sh\nexit 0\n")
+        java.chmod(0o700)
+        with patch.dict(os.environ, {"JAVA_HOME": str(java.parent.parent)}), patch.object(fixture.shutil, "which") as search:
+            self.assertEqual(str(java), fixture.java_executable())
+            java.chmod(0o600)
+            with self.assertRaisesRegex(ValueError, "JAVA_HOME"):
+                fixture.java_executable()
+            java.unlink()
+            with self.assertRaisesRegex(ValueError, "JAVA_HOME"):
+                fixture.java_executable()
+            search.assert_not_called()
+
+    def test_java_can_use_path_without_a_version_manager_and_reports_a_missing_jdk(self):
+        with patch.dict(os.environ, {}, clear=True), patch.object(fixture.shutil, "which", return_value="/example/jdk/bin/java"):
+            self.assertEqual("/example/jdk/bin/java", fixture.java_executable())
+        with patch.dict(os.environ, {}, clear=True), patch.object(fixture.shutil, "which", return_value=None):
+            with self.assertRaisesRegex(ValueError, "JDK 21"):
+                fixture.java_executable()
 
     def test_no_default_host_or_implicit_mutation_admission(self):
         with patch.dict(os.environ, {}, clear=True):

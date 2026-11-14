@@ -1,6 +1,5 @@
 # Copyright Debezium Authors. Licensed under the Apache License, Version 2.0.
 """Prevent incomplete or incorrect output from being reported as fast delivery."""
-import importlib.util
 import json
 from pathlib import Path
 import tempfile
@@ -8,9 +7,9 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock
 
-SPEC = importlib.util.spec_from_file_location('performance', Path(__file__).with_name('dcg-performance-probe.py'))
-probe = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(probe)
+from probe_test_support import load_probe
+
+probe = load_probe('dcg-performance-probe.py', 'performance')
 
 
 class PerformanceEvidenceTest(unittest.TestCase):

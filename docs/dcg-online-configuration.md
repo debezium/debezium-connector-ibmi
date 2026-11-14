@@ -612,7 +612,7 @@ record.processing.order=ORDERED
 The `offset.storage` properties belong to Engine/standalone configuration, not
 the distributed worker's connector configuration. Debezium Server prefixes
 source properties with `debezium.source.`. Its tested JVM/HTTP profile is
-[qualified separately](dcg-validation.md#server-jvmhttp-profile--2026-11-11).
+[described separately](dcg-compatibility-baseline.md#deployment-evidence).
 The file-history profile uses ordinary offset
 acknowledgement, so it does not accept a Kafka source transaction context.
 The older operator-window initialization profile remains Kafka-only.
@@ -698,73 +698,18 @@ Once a handoff barrier or F/W is durable, disabling the flag cannot fall back to
 legacy streaming. Restore the matching configuration and retained history to
 resume; do not reset the source to a fabricated offset.
 
-## Local and isolated native verification
+## Verification and recovery compatibility
 
-The local `tools/dcg-normal-task-probe NEW_DIRECTORY compatibility` variant
-exercises actual task/dispatcher publication, source offsets, worker replacement
-and missing-offset rejection with three data partitions and disabled heartbeats,
-tombstones and transaction metadata. It uses captured journal fixtures and
-controlled native I/O; it is not an IBM i qualification run. The original strict
-restart, pause and duplicate-record scenarios remain available unchanged.
+[Contributor testing](dcg-contributor-testing.md) lists prerequisites and commands
+for local Kafka, standalone, Engine and isolated native profiles. The
+[validation coverage](dcg-validation.md) distinguishes fixture checks from
+recorded native observations and their limits. Local tests use controlled native
+I/O; a passing local test does not qualify an IBM i release, CCSID or schema.
 
-`tools/dcg-normal-task-probe NEW_DIRECTORY standalone` runs actual standalone
-Connect with file-backed offsets, controlled native I/O and Kafka binding
-history. It verifies progress before offset flush, crash replay, independent
-file-offset readback and rejection of missing offsets with retained history.
-The actual Engine tests exercise the same acknowledgement contract with file
-offsets. Neither test claims broker fencing or qualification of the packaged
-Debezium Server application.
-
-`python3 tools/dcg-public-online-probe.py NEW_DIRECTORY DCNCdddd source-offsets`
-validates the ordinary packaged plugin against an explicitly authorized fresh
-IBM i fixture with Kafka source transactions disabled. It starts from real
-legacy snapshot/streaming offsets, uses public configuration without a test
-provider, and exercises online handoff, both clear subtypes, restart and cleanup.
-This run passed; see [the evidence and remaining deployment gaps](dcg-validation.md#ordinary-source-offset-handoff--2026-11-11).
-
-`python3 tools/dcg-file-history-probe.py NEW_DIRECTORY DCNCdddd` runs the shipping
-connector in the actual Engine with file offsets/history and no Kafka broker.
-It passed both clear subtypes, recovery, ordering and missing-history rejection.
-A separate packaged Server JVM/HTTP run also passed against an isolated fixture;
-see [its configuration and evidence](dcg-validation.md#server-jvmhttp-profile--2026-11-11).
-
-`python3 tools/dcg-legacy-compatibility-probe.py NEW_DIRECTORY DCNCdddd` prepares
-the ordinary packaged connector with `no_data`, disabled heartbeats/tombstones,
-three-partition data topics, a long SQL table name, Unicode/binary columns and
-standard output mappings, plus a keyed DDS file without an SQL primary key. It
-checks stored Unicode/binary bytes independently, compares actual legacy/native
-output, exercises commit/rollback and restart, and verifies cleanup. Its
-all-partition audit does not assert cross-partition ordering. The bounded native
-run passed; see [the recorded evidence and limits](dcg-validation.md#legacy-configuration-compatibility--2026-11-11).
-
-`python3 tools/dcg-online-scope-probe.py NEW_DIRECTORY DCNCdddd` exercises the
-packaged connector against 56 journaled files, a keyless captured table and an
-excluded GRAPHIC layout. It checks a conflict in the second lock batch, continued
-legacy/unrelated-table CDC, null keys and `source.rrn`, commit/rollback, durable
-restart, no resnapshot and cleanup. It uses the same explicit native credentials
-and isolated-library contract as the runner below.
-
-`tools/dcg-public-online-probe.py NEW_DIRECTORY DCNCdddd` uses the portable
-owner-only `IBMI_TEST_CONFIG` contract described in
-[contributor testing](dcg-contributor-testing.md). It creates and removes only a
-fresh isolated fixture and labeled local Kafka resources. The worker loads the
-assembled distribution from its plugin directory; test helpers run only on an
-independent audit classpath. Credentials use the standard FileConfigProvider in
-container tmpfs and are excluded from retained configs and logs.
-
-The probe starts ordinary snapshot/streaming, obtains its actual durable offset,
-then changes the public setting. It checks busy-boundary CDC progress, no second
-snapshot, durable handoff, open clear and receiver rotation, task crash/reassignment,
-rollback suppression, committed truncate-before-reload, optimized DELETE subtypes,
-mixed values and completed drain. Raw journal and independent read-committed Kafka
-evidence are retained. The stricter deterministic crash-boundary tests remain in
-[validation scope](dcg-contributor-testing.md).
-
-This is a bounded qualification profile, not validation of every IBM i release,
-CCSID, schema, Kafka topology or operational failure. See the
-[validation scope and recorded native results](dcg-validation.md) for what actually ran
-and what remains untested. The ordinary-plugin native qualification passed in
-the documented profile; the public option remains off by default.
+Native tests use fresh owned libraries, explicit fixture-write opt-in and
+independent cleanup checks. The public-plugin profiles exercise ordinary startup,
+existing-stream handoff, commit/rollback, unrelated output and recovery using the
+assembled distribution. The option remains off by default.
 
 Native journal metadata also requires an API job with CCSID 37. Its request and
 response codecs are explicit, so a German, Danish or Japanese worker locale does

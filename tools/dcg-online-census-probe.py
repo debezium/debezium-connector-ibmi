@@ -6,9 +6,9 @@ from collections import deque
 from contextlib import closing
 import importlib.util
 import json
+import os
 from pathlib import Path
 import re
-import shutil
 import subprocess
 import sys
 import threading
@@ -621,12 +621,9 @@ class Experiment:
 
     def java_command(self, entrypoint, *arguments):
         cp = (ROOT / "debezium-connector-ibmi/target/connect-probe-classpath.txt").read_text().strip()
-        cp = ":".join([str(ROOT / "debezium-connector-ibmi/target/test-classes"), str(ROOT / "debezium-connector-ibmi/target/classes"),
+        cp = os.pathsep.join([str(ROOT / "debezium-connector-ibmi/target/test-classes"), str(ROOT / "debezium-connector-ibmi/target/classes"),
                        str(ROOT / "journal-parsing/target/classes"), str(ROOT / "jt400-override-ccsid/target/classes"), cp])
-        java = shutil.which("java")
-        if not java:
-            raise ValueError("Run through mise exec java@temurin-21")
-        return [java, "-cp", cp, "io.debezium.connector.db2as400." + entrypoint, *map(str, arguments)]
+        return [native.java_executable(), "-cp", cp, "io.debezium.connector.db2as400." + entrypoint, *map(str, arguments)]
 
     def independent_writer(self):
         session = None

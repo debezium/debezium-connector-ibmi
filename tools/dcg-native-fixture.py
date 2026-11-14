@@ -6,9 +6,24 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import time
 import stat
 from types import SimpleNamespace
+
+def java_executable():
+    """Use the build JDK without depending on a particular version manager."""
+    home = os.environ.get("JAVA_HOME")
+    if home:
+        java = Path(home) / "bin" / ("java.exe" if os.name == "nt" else "java")
+        if not java.is_file() or not os.access(java, os.X_OK):
+            raise ValueError("JAVA_HOME must point to a JDK with an executable bin/java")
+        return str(java)
+    java = shutil.which("java")
+    if not java:
+        raise ValueError("Set JAVA_HOME to JDK 21 or put its bin directory on PATH")
+    return java
+
 
 def load_config():
     path = os.environ.get("IBMI_TEST_CONFIG")

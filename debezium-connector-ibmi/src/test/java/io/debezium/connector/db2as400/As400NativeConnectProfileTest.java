@@ -30,7 +30,7 @@ class As400NativeConnectProfileTest {
 
     @Test
     void controllerCannotSelectSharedLibraryOrUnboundedOperation() {
-        assertThrows(IllegalArgumentException.class, () -> As400NativeConnectTransactions.main(new String[]{ "CONLIBV", directory.toString(), "truncate-commit" }));
+        assertThrows(IllegalArgumentException.class, () -> As400NativeConnectTransactions.main(new String[]{ "APPDATA", directory.toString(), "truncate-commit" }));
         assertThrows(IllegalArgumentException.class, () -> As400NativeConnectTransactions.main(new String[]{ "DCNC0001", directory.toString(), "arbitrary" }));
     }
 }

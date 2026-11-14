@@ -82,9 +82,7 @@ class Experiment:
             for file in classes.rglob('As400FileHistoryProbe*.class'):
                 jar.write(file, str(file.relative_to(classes)))
         self.classpath = os.pathsep.join(map(str, [self.directory / 'consumer.jar', plugin / '*', runtime / '*']))
-        self.java = shutil.which('java')
-        if not self.java:
-            raise RuntimeError('Build JDK must be on PATH')
+        self.java = census.native.java_executable()
         logging = self.directory / 'logback.xml'
         logging.write_text('<configuration><appender name="console" class="ch.qos.logback.core.ConsoleAppender">'
                            '<encoder><pattern>%date %-5level %logger - %msg%n</pattern></encoder></appender>'
@@ -119,7 +117,8 @@ class Experiment:
             raise RuntimeError('Previous Engine must stop before starting a replacement')
         config = self.configuration(enabled)
         (self.directory / (name + '-configuration.json')).write_text(json.dumps(config, indent=2) + '\n')
-        fd, filename = tempfile.mkstemp(prefix='ibmi-file-probe-', suffix='.properties', dir='/dev/shm')
+        # mkstemp creates an owner-only file and honors the caller's TMPDIR.
+        fd, filename = tempfile.mkstemp(prefix='ibmi-file-probe-', suffix='.properties')
         path = Path(filename)
         self.configs.append(path)
         with os.fdopen(fd, 'w') as stream:

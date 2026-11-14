@@ -9,4 +9,4 @@ if [[ $# != 4 ]]; then
 fi
 ./mvnw -B -ntp test-compile -DskipTests -DskipITs
 ./mvnw -B -ntp -pl debezium-connector-ibmi dependency:build-classpath -DincludeScope=test -Dmdep.outputFile=target/connect-probe-classpath.txt
-exec python3 -B tools/dcg-online-handoff-probe.py "$@"
+exec "${PYTHON:-python3}" -B tools/dcg-online-handoff-probe.py "$@"

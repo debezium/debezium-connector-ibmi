@@ -5,10 +5,7 @@ The connector takes an initial snapshot and then reads the IBM i journal for
 inserts, updates and deletes. Optional transactional truncate capture also emits
 table clears, so consumers can apply a clear followed by a reload correctly.
 
-This branch proposes transactional truncate support in
-[PR #117](https://github.com/debezium/debezium-connector-ibmi/pull/117), tracking
-[debezium/dbz#3027](https://github.com/debezium/dbz/issues/3027).
-The feature is **off by default**. See the
+Transactional truncate capture is **off by default**. See the
 [compatibility matrix](docs/dcg-compatibility-comparison.md) for supported behavior
 and the [validation report](docs/dcg-validation.md) for tested profiles and limits.
 
@@ -40,7 +37,8 @@ Use **JDK 21** and the Maven wrapper:
   -Dformat.formatter.goal=validate -Dformat.imports.goal=check
 ```
 
-The build runs offline Java tests and creates the complete plugin distribution:
+The build runs Java tests that need no IBM i or Kafka connection and creates the
+complete plugin distribution:
 
 ```text
 debezium-connector-ibmi/target/debezium-connector-ibmi-3.8.0-SNAPSHOT-plugin.zip
@@ -52,8 +50,8 @@ Extract either archive into a dedicated directory under each worker's
 including its dependencies.
 
 The project uses Debezium `3.8.0-SNAPSHOT`. If matching core dependencies are
-unavailable, build the modules listed in
-[the Maven workflow](.github/workflows/cross-maven.yml) first. `-DskipITs` skips
+unavailable, follow the [core dependency setup](docs/dcg-contributor-testing.md#build-and-unit-tests).
+On Windows, use `mvnw.cmd` in place of `./mvnw`. `-DskipITs` skips
 live integration tests; it does not skip the offline Java tests.
 
 ### 2. Configure row capture
@@ -191,7 +189,7 @@ unqualified; native storage-pool validation used pool 1. The
 [compatibility matrix](docs/dcg-compatibility-comparison.md) distinguishes inherited
 behavior, added capabilities and remaining support boundaries.
 
-## Upgrading from the original connector
+## Upgrade notes
 
 Review these changes even when transactional capture is disabled:
 
@@ -203,7 +201,7 @@ Review these changes even when transactional capture is disabled:
 - Row source metadata gains optional string `source.rrn`. This does not change
   event keys; a relative record number is not a permanent business identifier.
 
-See [upgrade details](docs/connector-usage.md#upgrading-this-branch) before replacing
+See [upgrade details](docs/connector-usage.md#upgrade-notes) before replacing
 a running connector.
 
 ## Documentation
@@ -218,25 +216,19 @@ a running connector.
 | Assess completed tests and their limits | [Validation report](docs/dcg-validation.md) |
 | Reproduce tests or validate a source system | [Contributor testing](docs/dcg-contributor-testing.md) · [F/CR testing](docs/fcr-testing.md) |
 
-Validation includes offline recovery/failure tests, local Kafka checks, isolated
-native commit/rollback and lifecycle cases, performance comparisons, a 128-file
-journal scope, and restart/continuous endurance runs. The linked reports retain
-artifact identities, original failed attempts, cleanup results and measurement
-limits. These are bounded results, not maximum-capacity or universal workload
-qualification. Upstream CI and review status are tracked on the PR.
-
 ## Development and contributions
 
-Run the offline checks without an IBM i account:
+Build and run Java tests with JDK 21 and the Maven wrapper; no IBM i account or
+Kafka installation is required:
 
 ```sh
 ./mvnw -B -ntp verify -DskipITs
-python3 -B -m unittest discover -s tools -p 'test_*.py'
 ```
 
-Local Kafka tests require the runtime described in the testing guide. Native
-tests require a real IBM i system and a fresh, explicitly owned disposable
-library; Db2 LUW in a container is not an equivalent source.
+Python harness checks, local Kafka tests and native tests are optional test
+layers with separate [prerequisites and commands](docs/dcg-contributor-testing.md).
+Native tests require a real IBM i system and a fresh owned disposable library;
+Db2 LUW in a container is not an equivalent source.
 
 | Directory | Purpose |
 | --- | --- |
@@ -247,7 +239,7 @@ library; Db2 LUW in a container is not an equivalent source.
 | `docs/` | Configuration, design and evidence |
 
 Follow the [Debezium contribution guide](https://github.com/debezium/debezium/blob/main/CONTRIBUTING.md)
-and [repository guidance](AGENTS.md). Contributions use DCO sign-offs; upstream
+and [local testing instructions](docs/dcg-contributor-testing.md). Contributions use DCO sign-offs; upstream
 author registration in `COPYRIGHT.txt` and
 `jenkins-jobs/scripts/config/Aliases.txt` is a separate contribution step.
 

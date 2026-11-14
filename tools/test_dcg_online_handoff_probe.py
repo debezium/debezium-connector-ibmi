@@ -2,16 +2,15 @@
 """Exporter provenance tests; synthetic manifests, no native or Kafka connection."""
 import hashlib
 import base64
-import importlib.util
 import json
 from pathlib import Path
 import struct
 import tempfile
 import unittest
 
-SPEC = importlib.util.spec_from_file_location("handoff", Path(__file__).with_name("dcg-online-handoff-probe.py"))
-handoff = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(handoff)
+from probe_test_support import load_probe
+
+handoff = load_probe("dcg-online-handoff-probe.py", "handoff")
 
 
 class LegacyProgressBoundaryTest(unittest.TestCase):

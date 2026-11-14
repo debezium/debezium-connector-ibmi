@@ -101,7 +101,7 @@ inspection and follow the recovery contract. Heap and disk budgets depend on
 catalog size, transaction history and worker load. The historical 1 GiB heap
 recommendation is a starting point, not a capacity guarantee.
 
-## Upgrading this branch
+## Upgrade notes
 
 Check these changes even with transactional capture disabled:
 

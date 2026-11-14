@@ -1,14 +1,13 @@
 # Copyright Debezium Authors. Licensed under the Apache License, Version 2.0.
 """Local lifecycle checks for the isolated native task harness; no connection."""
-import importlib.util
 from pathlib import Path
 import tempfile
 import unittest
 from unittest.mock import Mock, patch
 
-SPEC = importlib.util.spec_from_file_location('automatic_task', Path(__file__).with_name('dcg-automatic-task-probe.py'))
-automatic = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(automatic)
+from probe_test_support import load_probe
+
+automatic = load_probe('dcg-automatic-task-probe.py', 'automatic_task')
 
 
 class TaskLifecycleTest(unittest.TestCase):
