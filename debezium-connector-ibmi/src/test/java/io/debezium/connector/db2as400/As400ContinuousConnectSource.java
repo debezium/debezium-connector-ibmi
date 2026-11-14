@@ -55,12 +55,12 @@ final class As400ContinuousConnectSource extends As400NativeInitializationProbe 
             throw new SQLException("Native JDBC source stopped", error);
         }
         try {
-            Connection connection = super.connection(transaction);
+            Connection connection = (Connection) guard(super.connection(transaction), lifecycle, lease);
             if (lifecycle.isStopped()) {
                 connection.close();
                 throw new SQLException("Native JDBC source stopped during connection");
             }
-            return (Connection) guard(connection, lifecycle, lease);
+            return connection;
         }
         catch (Exception error) {
             lease.close();
@@ -87,8 +87,12 @@ final class As400ContinuousConnectSource extends As400NativeInitializationProbe 
     @Override
     public void close() {
         lifecycle.requestStop();
-        guardedReader.cancelJob();
-        lifecycle.awaitDrained();
-        super.close();
+        try {
+            guardedReader.cancelJob();
+            lifecycle.awaitDrained();
+        }
+        finally {
+            super.close();
+        }
     }
 }
