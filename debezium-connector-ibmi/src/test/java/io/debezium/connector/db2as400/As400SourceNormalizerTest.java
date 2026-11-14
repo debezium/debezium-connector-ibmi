@@ -151,6 +151,55 @@ class As400SourceNormalizerTest {
     }
 
     @ParameterizedTest
+    @ValueSource(strings = { "valid", "outside-window", "wrong-member", "minimized", "overrun", "zero-length", "defaulted", "negative-map",
+            "unobserved-valid", "unobserved-wrong-member", "unobserved-minimized", "unobserved-overrun", "unobserved-zero-length", "unobserved-defaulted",
+            "unobserved-negative-map" })
+    void shouldKeepPhysicalAndTransactionChecksWhenAnExcludedHistoricalLayoutIsUnavailable(String scenario) throws Exception {
+        boolean unobserved = scenario.startsWith("unobserved-");
+        String fault = unobserved ? scenario.substring("unobserved-".length()) : scenario;
+        var identity = new TableIdentity(table.tableId(), table.physicalFile(), table.member(), table.fileJournalId(), table.memberJournalId(),
+                unobserved ? As400BindingDefinition.UNOBSERVED_LAYOUT : "TEST:123456789ABCE:10:3:false");
+        normalizer = new As400SourceNormalizer(buffer, new As400SourceNormalizer.TableResolver() {
+            @Override
+            public TableBinding resolve(String file, String library) {
+                return As400BindingDefinition.excluded(identity).binding(1024);
+            }
+
+            @Override
+            public boolean allowsExcludedHistoricalLayout(EntryHeader header, JournalPosition position) {
+                // Qualification is tested through the continuous runtime. This
+                // controlled boundary tests only the normalizer's remaining checks.
+                return !unobserved && !fault.equals("outside-window");
+            }
+        }, 1024);
+        accept(entry('C', "SC", 10, new byte[0]));
+        var row = row("PT", 10, 7); // Six-byte historical layout, versus ten today.
+        switch (fault) {
+            case "wrong-member" -> text(row.bytes(), 177, 10, "OTHER");
+            case "minimized" -> row.bytes()[OFFSET + 218] = 8;
+            case "overrun" -> text(row.bytes(), 240, 5, "00020");
+            case "zero-length" -> text(row.bytes(), 240, 5, "00000");
+            case "defaulted", "negative-map" -> {
+                int map = row.bytes().length - OFFSET;
+                byte[] bytes = Arrays.copyOf(row.bytes(), row.bytes().length + 5);
+                ByteBuffer.wrap(bytes).putInt(OFFSET, map + 5).putInt(OFFSET + 4, map)
+                        .putInt(OFFSET + map, fault.equals("negative-map") ? -1 : 1);
+                bytes[bytes.length - 1] = (byte) 0xf2;
+                row = new Entry(row.sequence(), bytes);
+            }
+        }
+        if (!fault.equals("valid")) {
+            fails(row);
+            return;
+        }
+        assertThat(accept(row)).isEmpty();
+        var batch = accept(entry('C', "CM", 10, new byte[0])).orElseThrow();
+        assertThat(batch.changes()).isEmpty();
+        buffer.completeBatch(batch);
+        assertThat(buffer.oldestTransactionPosition()).isEmpty();
+    }
+
+    @ParameterizedTest
     @ValueSource(longs = { 0, 20 })
     void shouldRejectAnotherCyclesRowBeforePublicationWhenTheTableHasAnUncommittedClear(long cycle) throws Exception {
         var autocommit = new As400AutocommitBuffer("LIB/JRN/incarnation", new Limits(10, 100, 20, 4096), buffer::usage);

@@ -73,20 +73,30 @@ class As400SchemaBoundaryTest {
         final As400BindingDefinition excludedLob;
         final long observedThrough;
         int refreshes;
+        Exception refreshFailure;
+        boolean deferObservations;
 
         SchemaFixture() throws Exception {
             this(false);
         }
 
         SchemaFixture(boolean withExcludedLob) throws Exception {
+            this(withExcludedLob, false);
+        }
+
+        SchemaFixture(boolean withExcludedLob, boolean compound) throws Exception {
             var json = fixture();
             before = new ArrayList<>(As400OnlineFenceEvidence.validateOffLock(json.path("before")).tables().definitions());
             oldB = before.stream().filter(d -> d.identity().physicalFile().equals("B")).findFirst().orElseThrow();
-            newB = As400OnlineFenceEvidence.validateOffLock(json.path("changed")).tables().definitions().stream()
-                    .filter(d -> d.identity().physicalFile().equals("B")).findFirst().orElseThrow();
+            newB = compound ? oldB
+                    : As400OnlineFenceEvidence.validateOffLock(json.path("changed")).tables().definitions().stream()
+                            .filter(d -> d.identity().physicalFile().equals("B")).findFirst().orElseThrow();
             captured = new ArrayList<>(entries(json).stream()
                     .map(entry -> new RawJournalPage.Entry(entry.position(), new EntryHeaderDecoder().decode(entry.bytes(), 0), entry.bytes())).toList());
-            observedThrough = withExcludedLob ? 62 : 61;
+            observedThrough = compound ? 75 : withExcludedLob ? 62 : 61;
+            if (compound) {
+                captured.removeIf(entry -> entry.position().offset().longValueExact() == 61);
+            }
             if (withExcludedLob) {
                 try (var input = getClass().getResourceAsStream("/native-transactions/excluded-lob.json")) {
                     var lob = JSON.readTree(input);
@@ -126,7 +136,7 @@ class As400SchemaBoundaryTest {
                     Map.of("offset.event_sequence", "47", "offset.receiver", baseline.receiver().name(), "offset.receiver_library", baseline.receiver().library(),
                             "offset.processed", "true", "snapshot_completed", "true"));
             initial = As400Checkpoint.afterVerifiedBoundary(journal, selected.fingerprint(), baseline, order.incarnation(baseline));
-            change = As400SchemaChange.qualify(oldB, newB, range(52, observedThrough), order, position(61), bindings());
+            change = As400SchemaChange.qualify(oldB, newB, range(52, observedThrough), order, position(observedThrough), bindings());
         }
 
         As400SourceNormalizer.TableResolver bindings() {
@@ -177,13 +187,18 @@ class As400SchemaBoundaryTest {
                 public As400SchemaChange schemaChange(As400BindingDefinition old, RawJournalPage.Entry opening, As400SourceNormalizer.TableResolver verifiedBindings)
                         throws Exception {
                     refreshes++;
+                    if (refreshFailure != null) {
+                        var failure = refreshFailure;
+                        refreshFailure = null;
+                        throw failure;
+                    }
                     assertThat(old).isEqualTo(oldB);
                     assertThat(opening.position()).isEqualTo(position(52));
-                    return As400SchemaChange.qualify(oldB, newB, range(52, observedThrough), order, position(61), verifiedBindings);
+                    return As400SchemaChange.qualify(oldB, newB, range(52, observedThrough), order, position(observedThrough), verifiedBindings);
                 }
             };
             var limits = new As400ContinuousRuntime.Limits(new As400TransactionBuffer.Limits(16, 1000, 128, 1_000_000),
-                    new As400JournalLifecycle.Limits(100, 65536, 16, 128, 100, 64), 1000, false,
+                    new As400JournalLifecycle.Limits(100, 65536, 16, 128, 100, 64), 1000, deferObservations,
                     disk ? new As400SpillStore.Settings(directory, 1, 16, 8 * 1024 * 1024) : null);
             return new As400ContinuousRuntime(checkpoint.toOffset(), restored, input, output.dispatcher, sink, policy.sourcePartition(), () -> {
             }, limits, output.schemas::refresh);
@@ -260,7 +275,28 @@ class As400SchemaBoundaryTest {
         assertThat(change).isEqualTo(f.change);
         // A second transition of the target file still makes the catalog ambiguous.
         assertThatThrownBy(() -> As400SchemaChange.qualify(f.oldB, f.newB, f.range(52, 72), f.order, f.position(72), f.bindings()))
-                .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("Another table transition");
+                .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("unavailable intermediate table definition");
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = { false, true })
+    void shouldRecoverRepeatedAltersWithoutReacquiringAnIntermediateDefinition(boolean disk) throws Exception {
+        var f = new SchemaFixture(false, true);
+        var saved = f.initial;
+        assertThat(f.change.records()).hasSize(16);
+        for (int restart = 0; restart < 2; restart++) {
+            var history = f.recover(saved);
+            var records = new ArrayList<SourceRecord>();
+            try (var output = new As400OnlineCensusRecovery.Output(history.definitions(), false);
+                    var runtime = f.runtime(saved, history, output, records::add, disk)) {
+                saved = As400Checkpoint.fromOffset(runtime.poll(saved.toOffset()).checkpoint(), f.journal, f.initial.captureFingerprint());
+            }
+            var values = records.stream().filter(record -> record.value() instanceof Struct value && value.schema().field("op") != null).toList();
+            assertThat(values).hasSize(restart == 0 ? 2 : 0);
+            assertThat(saved.completedThrough()).isEqualTo(f.position(75));
+            assertThat(saved.schemaState().completed().ordinal()).isEqualTo(1);
+        }
+        assertThat(f.refreshes).isEqualTo(1);
     }
 
     @Test
@@ -343,6 +379,38 @@ class As400SchemaBoundaryTest {
         assertThat(Files.readAllLines(directory.resolve("schema-history.jsonl")).stream().filter(line -> line.contains(As400SchemaHistory.VERSION))).hasSize(1);
     }
 
+    @ParameterizedTest
+    @ValueSource(booleans = { false, true })
+    void shouldRetryIncompleteSchemaObservationWithoutIgnoringCleanupFailure(boolean failedCleanup) throws Exception {
+        var f = new SchemaFixture();
+        f.deferObservations = true;
+        f.refreshFailure = new As400OperatorJournalEvidence.IncompleteObservationException(new java.sql.SQLWarning("Catalog changed", "01548", 462));
+        if (failedCleanup) {
+            f.refreshFailure.addSuppressed(new java.sql.SQLException("Connection close failed"));
+        }
+        var restored = f.recover(f.initial);
+        var records = new ArrayList<SourceRecord>();
+        try (var output = new As400OnlineCensusRecovery.Output(restored.definitions(), false);
+                var runtime = f.runtime(f.initial, restored, output, records::add, false)) {
+            if (failedCleanup) {
+                assertThatThrownBy(() -> runtime.poll(f.initial.toOffset()))
+                        .isInstanceOf(As400OperatorJournalEvidence.IncompleteObservationException.class);
+                assertThat(records).isEmpty();
+            }
+            else {
+                var deferred = runtime.poll(f.initial.toOffset());
+                assertThat(deferred.deferred()).isTrue();
+                assertThat(deferred.checkpoint()).isEqualTo(f.initial.toOffset());
+                assertThat(deferred.scan()).contains(f.position(58));
+                assertThat(records).isEmpty();
+                var continued = runtime.poll(deferred.checkpoint());
+                assertThat(continued.deferred()).isFalse();
+                assertThat(continued.checkpoint()).containsEntry("completed_through.sequence", "61");
+                assertThat(records).hasSize(1);
+            }
+        }
+    }
+
     @Test
     void shouldRejectAnAmbiguousCurrentDefinitionOrAnUncommittedSchemaBoundary() throws Exception {
         var f = new SchemaFixture();
@@ -351,7 +419,7 @@ class As400SchemaBoundaryTest {
         assertThatThrownBy(() -> As400SchemaChange.qualify(f.oldB, f.newB, f.range(52, 61), f.order, f.position(57)))
                 .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("before the schema committed");
         assertThatThrownBy(() -> As400SchemaChange.qualify(f.oldB, f.oldB, f.range(52, 77), f.order, f.position(77)))
-                .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("Another table transition");
+                .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("unavailable intermediate table definition");
         var original = f.range(57, 57).get(0);
         byte[] changed = original.data();
         changed[original.header().getEntrySpecificDataOffset() + 18] ^= 1;

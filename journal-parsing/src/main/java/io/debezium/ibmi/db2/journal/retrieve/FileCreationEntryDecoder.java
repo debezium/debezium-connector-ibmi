@@ -33,7 +33,7 @@ public final class FileCreationEntryDecoder {
         boolean logical = control.logicalFile();
         boolean pointers = header.getPointerHandle() != 0;
         require(!pointers || file, "Pointer-backed member creation is unqualified");
-        require(header.getCommitCycle().signum() == 0 && control.nestedCommitLevel() == 0
+        require(header.getCommitCycle().signum() >= 0 && control.nestedCommitLevel() == 0
                 && !control.hasTransactionIdentifier() && !control.hasLogicalUnitOfWork()
                 && control.flags() == ((pointers ? 0x20 : 0) | (logical ? 0x04 : 0)) && control.indicatorFlag() == '0'
                 && info.objectNameIndicator() == '1' && info.objectType().equals(file || logical ? "*FILE" : "*QDDS"),

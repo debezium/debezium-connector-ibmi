@@ -232,9 +232,11 @@ These entries never resolve a transaction or remove a pending before-image.
 Both `OMTJRNE(*NONE)` and `OMTJRNE(*OPNCLO)` are supported: the clear's matched
 start-journaling companions must still restore `IMAGES(*BOTH)`, without inheritance
 or remote journal filtering. An unmatched start/end-journaling record still rejects.
-`CHGPF` still requires a separately qualified schema transition: its subtype-1
-`D/CG` record cannot be assumed harmless just because a tested command changed
-only file size. Abnormal-end/IPL entries (`D/ID`, `F/IU`, `C/BA`) and restore remain
+CL-command subtype-1 `D/CG` records, including `CHGPF SIZE(*NOMAX)`, now use
+identity-checked metadata acquisition. Captured column/key definitions must
+remain unchanged; commands that require an unavailable intermediate row layout
+still reject. The subtype alone is not proof that a command changed only file
+size. Abnormal-end/IPL entries (`D/ID`, `F/IU`, `C/BA`) and restore remain
 unsupported; preserve the checkpoint/history and investigate rather than skipping
 them or resetting offsets. No system IPL or shared-job termination was tested.
 

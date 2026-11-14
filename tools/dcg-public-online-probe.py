@@ -180,7 +180,16 @@ class Experiment(automatic.Experiment):
         (self.control / 'automatic.owned-fixture').write_text(self.library)
         self.rest(worker, '/connectors', {'name': 'automatic', 'config': config})
         def snapshot_complete():
-            status = self.rest(worker, '/connectors/automatic/status')
+            try:
+                status = self.rest(worker, '/connectors/automatic/status')
+            except base.RestError as error:
+                if error.status != 404:
+                    raise
+                # Creation precedes asynchronous publication to the status log.
+                # Keep the existing deadline and fail immediately on task errors.
+                self.report['initial_status_not_found_retries'] = self.report.get('initial_status_not_found_retries', 0) + 1
+                self.save()
+                return False
             (self.directory / 'legacy-status.json').write_text(self.fixture.redact(json.dumps(status, indent=2)))
             if any(t['state'] == 'FAILED' for t in status['tasks']):
                 raise RuntimeError('Ordinary legacy startup failed; retained worker log and status')

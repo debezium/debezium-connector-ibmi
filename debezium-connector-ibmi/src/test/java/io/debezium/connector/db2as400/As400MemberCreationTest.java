@@ -23,6 +23,7 @@ import org.apache.kafka.connect.source.SourceRecord;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -135,9 +136,14 @@ class As400MemberCreationTest {
     }
 
     @ParameterizedTest
-    @ValueSource(booleans = { false, true })
-    void shouldRecoverAnInterruptedMemberAssociationBeforePublishingRows(boolean disk) throws Exception {
+    @CsvSource({ "false,false", "true,false", "false,true", "true,true" })
+    void shouldRecoverAnInterruptedMemberAssociationBeforePublishingRows(boolean disk, boolean remoteEligible) throws Exception {
         var f = new Fixture();
+        if (remoteEligible) {
+            byte[] raw = f.entries.get(0).data();
+            raw[f.entries.get(0).header().getEntrySpecificDataOffset() + 16 + 2] = (byte) 0xf1;
+            f.entries.set(0, f.entry(raw));
+        }
         var saved = f.initial;
         var restored = f.recover(saved);
         var records = new ArrayList<SourceRecord>();
@@ -200,7 +206,7 @@ class As400MemberCreationTest {
     }
 
     @ParameterizedTest
-    @ValueSource(strings = { "partial", "missing", "reordered", "file-id", "member-id", "producer", "image-profile", "association" })
+    @ValueSource(strings = { "partial", "missing", "reordered", "file-id", "member-id", "producer", "inherited-journaling", "association" })
     void shouldRejectIncompleteOrMismatchedNativeMemberEvidence(String fault) throws Exception {
         var f = new Fixture();
         var entries = new ArrayList<>(f.entries);
@@ -209,7 +215,7 @@ class As400MemberCreationTest {
             case "missing" -> entries.remove(2);
             case "reordered" -> java.util.Collections.swap(entries, 2, 3);
             default -> {
-                int index = fault.equals("member-id") ? 3 : fault.equals("image-profile") ? 0 : 2;
+                int index = fault.equals("member-id") ? 3 : fault.equals("inherited-journaling") ? 0 : 2;
                 var entry = entries.get(index);
                 byte[] raw = entry.data();
                 if (fault.equals("producer")) {
@@ -218,7 +224,7 @@ class As400MemberCreationTest {
                 else {
                     int at = switch (fault) {
                         case "association" -> entry.header().getEntrySpecificDataOffset() + 16 + 9;
-                        case "image-profile" -> entry.header().getEntrySpecificDataOffset() + 16 + 2;
+                        case "inherited-journaling" -> entry.header().getEntrySpecificDataOffset() + 16 + 1;
                         default -> 206;
                     };
                     raw[at] ^= 1;

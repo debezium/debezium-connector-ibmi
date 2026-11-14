@@ -6,6 +6,7 @@
 package io.debezium.connector.db2as400;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -169,7 +170,14 @@ class As400OperatorTableEvidenceTest {
             if (type.equals("failure")) {
                 when(f.statements.get(fault).executeQuery()).thenThrow(new SQLException("Unavailable"));
             }
-            assertThrows(SQLException.class, f::collect);
+            var failure = assertThrows(SQLException.class, f::collect);
+            if (type.equals("missing") && fault == 0) {
+                assertThat((Throwable) failure).isInstanceOfSatisfying(As400NativeEvidenceException.class,
+                        absent -> assertThat(absent.catalogAbsent()).isTrue());
+            }
+            if (!type.equals("missing")) {
+                assertThat(failure instanceof As400NativeEvidenceException invalid && invalid.catalogAbsent()).isFalse();
+            }
             f.closed();
         }
     }
@@ -267,6 +275,59 @@ class As400OperatorTableEvidenceTest {
         fixture.closed();
     }
 
+    @ParameterizedTest
+    @ValueSource(booleans = { false, true })
+    void shouldReobserveTheCompleteTableOnABorrowedConnectionAndRejectLateWarnings(boolean warning) throws Exception {
+        var fixture = new BatchFixture();
+        var evidence = new As400OperatorTableEvidence(() -> {
+            throw new AssertionError("Borrowed observation must not open another connection");
+        }, new As400OperatorTableEvidence.Limits(2, 5));
+        try (var connection = fixture.connection) {
+            var first = evidence.collectOn(connection, List.of(REQUEST));
+            fixture.memberCount = 2;
+            if (warning) {
+                fixture.fault = "late-warning";
+                fixture.faultQuery = "IFS_OBJECT_STATISTICS";
+                assertThrows(SQLException.class, () -> evidence.collectOn(connection, List.of(REQUEST)));
+            }
+            else {
+                var second = evidence.collectOn(connection, List.of(REQUEST));
+                assertThat(second).isNotEqualTo(first);
+                assertThat(first.get(0).memberObjects()).hasSize(1);
+                assertThat(second.get(0).memberObjects()).hasSize(2);
+            }
+            assertThat(fixture.catalogBatches).hasSize(4);
+            assertThat(fixture.objectBatches).containsExactly(2, 3);
+            verify(connection, never()).close();
+        }
+        fixture.closed();
+    }
+
+    @Test
+    void shouldUseTheExactNativeMemberDirectoryForAProgramDescribedFile() throws Exception {
+        var fixture = new BatchFixture();
+        fixture.programDescribed = true;
+        fixture.memberCount = 3;
+        var observations = fixture.collect(List.of(new As400OperatorTableEvidence.Request(new JournalReceiver("QSQJRN", "LIB"), "LIB", "A")));
+        assertThat(observations).hasSize(1);
+        assertThat(observations.get(0).format().programDescribed()).isTrue();
+        assertThat(observations.get(0).memberObjects()).hasSize(3);
+        fixture.closed();
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = { "duplicate", "foreign", "journal", "warning", "late-warning", "missing" })
+    void shouldRejectIncompleteOrForeignProgramDescribedMembers(String fault) throws Exception {
+        var fixture = new BatchFixture();
+        fixture.programDescribed = true;
+        fixture.memberCount = 3;
+        fixture.fault = fault;
+        fixture.faultQuery = "IFS_OBJECT_STATISTICS";
+        assertThatThrownBy(() -> fixture.collect(List.of(new As400OperatorTableEvidence.Request(new JournalReceiver("QSQJRN", "LIB"), "LIB", "A"))))
+                .isInstanceOf(SQLException.class);
+        fixture.closed();
+    }
+
     static class BatchFixture {
         final Connection connection = mock(Connection.class);
         final List<PreparedStatement> statements = new ArrayList<>();
@@ -277,6 +338,7 @@ class As400OperatorTableEvidenceTest {
         String faultQuery = "";
         int objectQueries;
         int memberCount = 1;
+        boolean programDescribed;
 
         BatchFixture() throws Exception {
             var template = new Fixture().data;
@@ -306,6 +368,7 @@ class As400OperatorTableEvidenceTest {
                             value.put("TABLE_NAME", parameters.get(i + 2));
                             value.put("SYSTEM_TABLE_MEMBER", parameters.get(i + 2));
                             value.put("NUMBER_MEMBERS", memberCount);
+                            value.put("PROGRAM_DESCRIBED", programDescribed ? "YES" : "NO");
                             values.add(value);
                             if (sql.contains("SYSPARTITIONSTAT")) {
                                 for (int member = 1; member < memberCount; member++) {
@@ -316,20 +379,29 @@ class As400OperatorTableEvidenceTest {
                             }
                         }
                         Collections.reverse(values); // Catalog row order is not a binding rule.
+                        if (programDescribed && sql.contains("SYSPARTITIONSTAT")) {
+                            values.clear();
+                        }
                     }
                     else {
                         objectQueries++;
                         int count = parameters.size() / 2;
+                        boolean memberDirectory = count == 1 && parameters.get(2).equals("*MBR") && parameters.get(1).endsWith(".FILE");
                         assertThat(count).isBetween(1, 16);
                         assertThat(sql.split("UNION ALL", -1)).hasSize(count);
+                        if (memberDirectory) {
+                            count = memberCount;
+                        }
                         verify(statement).setMaxRows(count + 1);
                         verify(statement).setFetchSize(count + 1);
                         objectBatches.add(count);
                         for (int i = 0; i < count; i++) {
-                            var value = new HashMap<>(template.get(parameters.get(i * 2 + 2).equals("*FILE") ? 2 : 3));
-                            value.put("PATH_NAME", parameters.get(i * 2 + 1));
-                            value.put("PATH_LENGTH", parameters.get(i * 2 + 1).length());
-                            long identity = Integer.toUnsignedLong(parameters.get(i * 2 + 1).hashCode()) + 1;
+                            var value = new HashMap<>(template.get(!memberDirectory && parameters.get(i * 2 + 2).equals("*FILE") ? 2 : 3));
+                            String path = memberDirectory ? parameters.get(1) + "/" + (i == 0 ? "A" : String.format(java.util.Locale.ROOT, "M%04d", i)) + ".MBR"
+                                    : parameters.get(i * 2 + 1);
+                            value.put("PATH_NAME", path);
+                            value.put("PATH_LENGTH", path.length());
+                            long identity = Integer.toUnsignedLong(path.hashCode()) + 1;
                             value.put("OBJECT_JID", String.format(java.util.Locale.ROOT, "%020x", identity));
                             value.put("FILE_IDENTIFIER_NUMBER", identity);
                             values.add(value);
@@ -408,6 +480,7 @@ class As400OperatorTableEvidenceTest {
             var format = new HashMap<String, Object>(Map.of("SYSTEM_TABLE_SCHEMA", "LIB", "SYSTEM_TABLE_NAME", "A", "NATIVE_TYPE", "PHYSICAL", "FILE_TYPE", "DATA",
                     "NUMBER_MEMBERS", 1, "NUMBER_RECORD_FORMATS", 1, "FORMAT_NAME", "A", "FORMAT_LEVEL_ID", "29087D5938DDA", "RECORD_LENGTH", 4, "NUMBER_FIELDS", 1));
             format.put("CONTAINS_LOB", "NO");
+            format.put("PROGRAM_DESCRIBED", "NO");
             format.put("CONTAINS_VARYING_LENGTH", "NO");
             data.add(format);
             for (int i = 0; i < 2; i++) {

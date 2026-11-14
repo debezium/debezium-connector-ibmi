@@ -1530,3 +1530,967 @@ artifact qualifications. Long-lived journal-wide transaction retention,
 LOB-heavy cleanup cost and unusual resource/snapshot settings still need workload
 qualification; passing these bounded tests does not establish universal capacity
 or production-deployment readiness.
+
+
+## Transactional DDL and catalog-churn corrections — 2026-11-13
+
+Independent review exposed permanent stops during ordinary DDL, deferred clear
+ordering and catalog churn. The corrections retain source identities and recovery
+positions while handling the following observed sequences.
+
+| Scenario | Verification |
+| --- | --- |
+| Two jobs clear one table in the opposite order to their transaction starts | Native SQL/SQL and CLRPFM/SQL sequences emit exactly `t,c,t,c`; other-table output continues |
+| Commitment-control GRANT/REVOKE, CREATE and ALTER | Native commits and full rollbacks, nested statement savepoints, durable schema history and restart |
+| Consecutive ALTERs before observation | Native final-schema output; local memory/disk restart; captured intermediate layouts still require actual history |
+| Rolled-back CREATE/ALTER rows | Native discard; fresh-instance replay before physical restoration finishes; schema history retains lifecycle marks rather than a mark per discarded row |
+| Excluded program-described file and member removal | Native file creation, member addition/removal and continued captured-table output; exact IFS member identities replace absent SQL member rows |
+| Catalog SQL0462 warnings | Three separately owned library drops caused 13 retry log entries without manual task restart; local mixed/unknown-warning and cleanup-failure cases remain fatal |
+| Empty and retained receiver chains | Real reader/restart across 130 empty receivers locally; 20 native receiver rotations with an open transaction and later schema/offset recovery |
+| Captured `IMAGES(*AFTER)` | Enablement is deferred with zero MIGRATION markers; legacy output and offsets continue |
+| Restart while a selected table's clear is still open | Real replacement uses retained history, then releases the committed clear/reload without a resnapshot |
+
+The source-offset regression run passed 24 checks. The subsequent source-transaction
+run, with transaction metadata, passed 27, including foreign-catalog churn. The
+expanded public schema runner passed 15 checks with 20 retained receiver rotations;
+the image-admission runner passed five. Every owned fixture and local Kafka runtime
+was cleaned up and checked. These tests exercised the packaged connector, not a
+custom publication owner or receipt provider.
+
+The native runs also caught two mistakes in the first correction attempts: an
+admission query lost the SQL warning classification, and a current-catalog image
+check incorrectly rejected restart during a clear's temporary journaling stop.
+Both failed runs are retained as failures. Recovery now relies on retained journal
+history. Image validation applies before accepting a new boundary and before
+HANDOFF is offered, while an unsafe candidate can still be replaced. An already
+acknowledged handoff does not acquire a new idle-catalog prerequisite.
+
+Full Maven verification passed 4,700 Java tests; the Python harness suite passed
+152. Focused admission checks and assembly validation passed after moving the
+image recheck before HANDOFF. The public `dcg-schema-refresh-probe.py` now includes
+transactional authority changes, nested ALTER, consecutive ALTER and full rollback
+cases, using the existing fresh-fixture and verified-cleanup runner.
+
+Artifact provenance remains explicit: the 27-check native run and image check
+used ZIP `b8ff2358d4abc30cadc942df18742bf134c4b53d2f04d875ebfe88fbf5f3a70a`.
+The successful schema/restart run used
+`7c2387d9b9df1d725cf3decf0f5e315a0c4c2b2e925923ef8e4aa9c54e683159`.
+The final pre-HANDOFF placement correction is ZIP
+`650cf6bf00fb06fcea31b5f4a109079b07046a4b46b4673bfc0400b5d062373b`;
+the preceding native results are not relabeled as runs of that final artifact.
+
+This does not establish complete DDL/member parity. Unfinished schema transactions
+can pause scanning; removal of the final member and captured key-constraint changes
+remain unqualified. Missing historical captured layouts and already-published
+unsafe prefixes still reject. The configuration contract now explains that
+skipping a rejected clear loses it, and describes evidence recovery or snapshot
+reconciliation. The unrelated-table progress guarantee for open clears does not
+promise progress past an unfinished schema transaction.
+
+That correction ZIP (`650cf6bf`) also passed a serial 60-second performance
+comparison against the original connector, with 12,300 independently verified
+changes per profile. These measurements precede the third and fourth review
+corrections. Feature-off latency was essentially unchanged;
+CPU per change increased by 4.5% with the feature off and 22.8% with disk buffering.
+Enabled latency was lower. These finite workloads do not establish saturation
+throughput, large-catalog capacity, or long-term memory behavior.
+
+Advisor inspected the actual repository files after these corrections and checks
+and reported no new actionable issue in the reviewed paths. The remaining limits
+above still apply; the next adversarial review is a separate release gate.
+
+## Third independent-review corrections — 2026-11-13
+
+Schema retention now settles the shared replay floor before pruning either the
+lifecycle dependencies or schema timeline. A previously over-advanced schema
+cursor can be repaired only from its unchanged, complete retained F/W interval
+and immutable history; missing openings or changed identities still reject.
+Later statements in the same transaction retain their own nested savepoint
+scopes. A schema commit observed beyond the current reader window waits for a
+fresh verified cut instead of failing against the older window.
+
+Native validation used fresh owned fixtures, ordinary packaged tasks and local
+Kafka. All fixture, inquiry and local-container cleanup checks passed:
+
+| Regression | Native result | Tested ZIP SHA-256 prefix |
+| --- | --- | --- |
+| Clear lifecycle retaining F before an unrelated ALTER | Both control and ALTER cases restart; committed clears are not repeated | `904bea56` |
+| LABEL/COMMENT on captured and excluded tables; excluded AFTER/BOTH image changes | Subsequent rows and restart pass; exact file/member JIDs and the native F/JC apply flag remain checked | `2fb2bda1` |
+| One ALTER, repeated same-table ALTER, two-table ALTER in one transaction | All three commit patterns and subsequent task restart pass with transaction metadata enabled | `2fb2bda1` |
+| Open ALTER across worker replacement | Open for 113.9 seconds; resumes 16.1 seconds after COMMIT without manual task restart; later full rollback discards both tables' rows | `5555cbd6` |
+| Upgrade from the actual preceding faulty build | Saved F=68/W=94 with schema floor 1 resumes at unchanged F, repaired floor 0 and subsequent W=95; no resnapshot or repeated clear | old `650cf6bf` to `5555cbd6` |
+
+The final candidate ZIP is
+`5555cbd695a7094e6c1ebe59afb3d1fb27af9bb5c5caa491531e03d44dfcb77f`.
+The earlier rows in the table are not relabeled as tests of that ZIP. Their
+schema/admin implementations are unchanged; the final revision shares the bounded
+SQL0462 recollection policy with handoff-prefix publication.
+
+Final local verification passed 4,724 Java tests (4,468 connector and 256 parser),
+152 Python tests, Maven verify/package, formatting/import validation and diff
+whitespace checks. The public schema runner also exercises LABEL/COMMENT, excluded
+image changes and a two-table transaction. Local fixture tests cover the separate
+schema-acquisition/reader-window race, complete-history repair versus missing
+history, and persistent catalog warnings without output/offset advancement.
+
+A cold run reproduced the spill-file budget failure despite a 25 ms reclamation
+attempt. The corrected implementation allows up to one second to reclaim obsolete
+scratch chunks before enforcing the same physical budget. The full suite and
+three additional cold 6,700-key-change runs passed. Pending values are never evicted.
+For 1,000 empty detached receivers, the real cut-reader test reduces subsequent
+idle RPC reads from at least 1,000 to at most five without changing R/F/W or hiding
+a later row. Fresh catalog/identity validation still runs. These are focused
+resource checks, not new native throughput or saturation measurements.
+
+The unfinished-DDL pause remains open: unrelated output stayed unpublished during
+the native 60-second observation. Wait/resume logging now identifies it, but does
+not remove it. Savepoint rollback of DDL, unavailable intermediate captured
+layouts, captured key-constraint changes and final-member removal remain separate
+qualification gaps. These corrections do not establish replacement readiness.
+
+## Fourth independent-review corrections — 2026-11-13
+
+The next correction separates metadata-only LABEL/COMMENT pairs from physical
+ALTER lifecycles. Each pair still requires matching producer, file/member journal
+identities, flags and subtype; a transactional pair also requires an observed
+transaction and matching nested savepoint. A complete later clear can establish
+that the file layout is unchanged, but its records remain in the ordinary
+transaction lifecycle so schema acquisition cannot consume or discard the clear.
+
+An unfinished ALTER now stages its owned raw records in the same bounded memory
+or disk budget as other transaction data. Other transactions can advance completed
+output W while replay floor F retains the unfinished transaction. On commit or full
+rollback, every changed table is qualified before the staged records are decoded.
+Schema history records the transaction outcome as its visibility boundary; old
+history encoding remains readable. Restart reconstructs this context from F.
+An already delivered safe prefix can also be acknowledged when later DDL remains
+incomplete. This does not acknowledge the unfinished DDL itself.
+
+Native checks used the ordinary packaged connector with fresh isolated fixtures
+and local Kafka. The following successful runs retained raw journal intervals,
+consumer records, durable offsets and exact artifact identities:
+
+| Scenario | Result | Tested ZIP SHA-256 prefix |
+| --- | --- | --- |
+| Open ALTERs, unrelated output before commit, replacement while both ALTERs remain open, full rollback and later capture-selection restart | Expanded public schema runner: 18 checks passed with source transactions and transaction metadata | `c198b774` |
+| CREATE then LABEL; captured/excluded rename round trips; LABEL then ALTER/LABEL/TRUNCATE in one transaction; ALTER then optimized DELETE; remote-filter eligibility changes | Final correction build: 16 checks passed using ordinary source offsets, including task replacement and exact clear/reload order | `6a98bbc0` |
+
+Both D/CG clear subtypes were observed in the latter workload: 8 for TRUNCATE and
+3 for optimized DELETE. All owned libraries, schemas, inquiry messages and local
+Kafka resources were confirmed absent after cleanup; connection cleanup reported
+no errors. The preceding broad run differs from the final artifact only in output
+schema-cache bookkeeping: the final build retains rename aliases only for actual
+output schemas and removes the old alias during refresh. It is not relabeled as
+a run of the final ZIP.
+
+The final ZIP SHA-256 is
+`6a98bbc07a058e5ead251ca5ecf1c94c395010c0a6c2d919e8be4d8065de10a0`.
+Its retained manifest matches all 198 production sources and 15 packaged JARs.
+Full verification passed 4,788 Java tests and 152 Python tests. After the final
+cache adjustment, 175 affected Java tests and assembly/formatter/import validation
+passed again. The local tests exercise memory and disk storage, fresh-instance
+restart, interrupted delivery, resource limits and malformed identity/history
+rejection. The task-level safe-prefix regression fails against the prior behavior.
+
+The public `tools/dcg-schema-refresh-probe.py` now includes metadata neighbors,
+transactional LABEL/COMMENT, open-ALTER unrelated progress and replacement. Rename
+tests additionally cover a one-way rename locally, including the new output topic
+schema and retirement of the old schema; native validation here covers round
+trips. Same-library rename requires unchanged native file/member identities and
+layout. Cross-library moves, independent member renames and unavailable
+intermediate captured definitions are still rejected.
+
+Earlier failed runs remain retained: one exposed lost capture-selection context
+while validating an excluded file's image settings; another exposed a metadata
+prefix waiting unnecessarily for a later ALTER. The corrected runs above preserve
+the original output, checkpoint and cleanup assertions.
+
+Unfinished CREATE or DROP can still pause unrelated publication. DDL savepoint
+rollback, unavailable intermediate captured layouts, captured key-constraint
+changes and final-member removal remain separate qualification gaps. The bounded
+30-observation SQL0462 retry policy is unchanged; no duration guarantee or new
+native catalog-churn timing result is claimed. These results do not by themselves
+establish replacement readiness or performance parity.
+
+Advisor inspected the actual changed repository files, including the new rename
+handler, after implementation and local/native correctness checks. It reported
+no actionable issue in those changes. That read-only review did not rerun tests
+or evaluate the performance comparison, which finished afterwards. The next
+independent adversarial review remains a separate release gate.
+
+The final ZIP subsequently passed six serial performance runs against the original
+connector: two per profile, in forward and reverse order, each with 12,300 exact
+measured changes after warm-up. All six fixtures and local runtimes were cleaned
+up and verified. Feature-off median delivery delay differed by 0.03%, with 5.2%
+more worker CPU per change. Disk buffering lowered median delay by 41.6%, with
+25.0% more CPU. The [current table](dcg-compatibility-comparison.md#performance)
+and [reproduction method](dcg-performance-comparison.md#fourth-review-correction-comparison--2026-11-13)
+retain the exact artifacts, per-run ranges and measurement limitations. These
+short tests do not establish saturation throughput or long-term memory parity.
+
+## Unfinished CREATE/DROP recovery — 2026-11-13
+
+Transactional CREATE and DROP now retain owned source records while unrelated
+committed changes advance W; F retains the original transaction start. Creation
+validates the physical-file/member association without inventing a schema or
+querying an uncommitted definition. Commit acquires and persists the definition
+before publishing rows. Full rollback leaves no created binding. DROP keeps the
+old decoder long enough to publish earlier rows on commit or undo them on rollback.
+
+The packaged plugin (`a26e1964…`) passed 24 assertions in each of two fresh native
+fixtures: ordinary source offsets, and Kafka source transactions with transaction
+metadata. Each run exercised CREATE/commit, CREATE/rollback, DROP/rollback and
+DROP/commit. Every transaction stayed open across unrelated output and worker
+replacement. Final topic contents matched the committed writer ledger with no
+duplicate or rolled-back rows. The public reproduction is
+`tools/dcg-schema-refresh-probe.py --open-objects`; it uses the standard packaged
+task and retains native journal, offset and broker evidence.
+
+The first correction run exposed a previously untested INSERT→DROP→ROLLBACK
+sequence. The native rollback includes row-compensation records after D/DT.
+The deletion validator now requires their exact transaction, producer and member,
+and only accepts a full rollback outcome. The ordinary transaction buffer still
+checks each compensation during replay. Two sanitized native records were added
+to the existing deletion fixture, including hash and privacy checks; schema
+history does not retain a mark per undone row. A separate initial runner error
+used an unsupported legacy table-filter expression; it was corrected before these
+successful runs. Failed-run evidence was retained and those fixtures were cleaned.
+
+Local verification passed 4,558 connector and 256 parser tests, 152 Python tests,
+Maven verify, assembly packaging, formatter/import validation and diff checks.
+Tests cover memory/disk budgets, fresh instances before and after outcomes,
+malformed identities/savepoints, and rollback rows followed by an invalid commit.
+No new throughput or long-duration memory result is claimed for this build.
+The subsequent independent review's mixed-statement and row-savepoint findings
+remain separate work; this result does not establish replacement readiness.
+
+## Fifth independent-review corrections — 2026-11-13
+
+Source checkpoint `deb8139` addresses all six reported stops. The correction keeps
+schema qualification separate from row/clear delivery: a later clear or its undo
+records cannot be consumed as schema metadata. Identity, producer, savepoint,
+history and unavailable-intermediate-layout checks remain enforced.
+
+| Reported case | Verified behavior |
+| --- | --- |
+| ALTER followed by TRUNCATE/ROLLBACK of the same file before observation | Qualifies the complete clear and physical rollback; emits no rolled-back clear; unrelated output continues. |
+| CREATE followed by another transition before acquisition | Handles ALTER before its first row, an initial primary key before its first row, rows followed by a committed clear, and an empty CREATE/DROP without querying a vanished definition. |
+| Row-only savepoint rollback after ALTER in one transaction | Keeps the committed ALTER, discards the undone row and publishes the surviving row. A savepoint that undoes DDL still needs its own qualification. |
+| CHGPF SIZE on an excluded file | Handles the subtype-1 metadata pair with exact identity/layout checks. The native workload also covers a captured file. |
+| CHECK or other constraint-only changes on captured files | Keeps the decoder and event key already chosen for capture, matching legacy streaming. CHECK add/drop and primary-key removal/re-addition do not reacquire a current key for older buffered rows. |
+| Same-library rename with different SQL/system names | Accepts the validated old-name metadata prefix before the native rename pair; retains name-based capture selection and the new SQL topic name across restart. |
+
+The ordinary packaged connector passed 17 checks in each of two fresh isolated
+native fixtures: ordinary source offsets, and Kafka source transactions with
+transaction metadata enabled. Both runs used the same final ZIP:
+`7f00362ce398f6923d1f7b211f1ff97deb0797413e65d5d973310d913aadc46d`.
+The manifest matches all 198 production source files and all 15 JARs. The embedded
+connector revision also matches `deb8139`.
+
+The public `tools/dcg-schema-refresh-probe.py --mixed-outcomes` workload creates
+observation windows with an ordinary stopped/restarted reader, then checks the
+actual task, dispatcher, durable offsets and broker output. It exercises captured
+and excluded long-name renames, new-table clear/reload order, CHECK add/drop,
+primary-key removal followed by LABEL, worker replacement and key re-addition.
+Final keys, values and record order match the committed writer ledger with no
+duplicates or rolled-back rows in these runs. All owned schemas, libraries,
+inquiry messages and local Kafka resources were confirmed absent after cleanup;
+worker/connection cleanup reported no errors. Ordinary source-offset delivery
+remains at least once; this successful crash schedule is not a general exactly-once
+claim for that mode.
+
+Full local verification passed 4,867 Java tests (4,611 connector and 256 parser)
+and 152 Python tests. After adding the final rename-key history regression, all
+365 affected tests passed again. Maven verify/package, formatter/import validation
+and diff checks passed. Local cases additionally cover memory/disk recovery,
+malformed rollback identities/producers, missing undo records, ambiguous savepoint
+targets and unavailable historical key/layout boundaries. Earlier failed runs
+and negative-control evidence remain retained.
+
+The separate [schema-latency comparison](dcg-performance-comparison.md#fifth-review-schema-change-latency--2026-11-13)
+shows a modest improvement from reusing the observation connection, with material
+extra latency still present. It measures end-to-end probe delivery, not a fixed
+connector pause, and does not replace the earlier row-throughput/CPU measurements.
+Forward recovery reads older schema history; older candidates cannot necessarily
+read new visibility fields, so downgrade after schema-history advancement is not
+assumed safe. Unavailable intermediate captured definitions, rollback of DDL to
+a savepoint, final-member removal and cross-library/member renames remain separate
+qualification gaps. These bounded corrections do not establish replacement readiness.
+
+### Advisor follow-up: clear during transactional creation
+
+Advisor inspected the actual files after the preceding checks and found that a
+clear of an uncommitted creation could stage cycle-zero physical companion records
+for transactional replay, which correctly rejected them. The correction separates
+physical file/member identity from the row schema: the existing lifecycle validates
+the companions, while D/CG remains deferred until commit or is discarded on full
+rollback. The transaction buffer's positive-cycle requirement is unchanged.
+
+Native qualification refined the test sequence. CREATE followed by an uncommitted
+INSERT then TRUNCATE returned SQL0910. CREATE followed by TRUNCATE on the empty
+table succeeds with SQL0100 and produces subtype-8 D/CG in the creation transaction.
+An INSERT can follow that clear. A separate optimized DELETE after an uncommitted
+INSERT abandoned its clear attempt and used row deletes instead. These are bounded
+observations, consistent with [IBM's TRUNCATE example](https://www.ibm.com/support/pages/ibm-i%E4%B8%8Atruncate-table%E7%9A%84%E5%BA%94%E7%94%A8),
+not a claim that every DELETE uses the same strategy. Failed setup runs and raw
+journal evidence were retained, and all their fixtures were cleaned.
+
+The abandoned attempt writes F/CH then C/SU without beginning journaling teardown.
+Schema observation now recognizes that cancellation; the ordinary lifecycle still
+requires its exact observed transaction/savepoint. Cancellation after F/EJ has
+begun, wrong savepoint targets and mismatched identities remain rejected. Local
+tests model the native empty-table clear and separately cover the failed attempt,
+memory/disk recovery, full rollback and interrupted delivery. Both defects have
+negative controls that fail against the preceding implementation.
+
+Checkpoint `48978c6` passed full Maven verification: 4,634 connector and 256 parser
+tests, plus 152 Python tests. Assembly, formatter/import validation and diff checks
+passed. Its frozen plugin SHA-256 is
+`6e317878fe16b2d7fc0655e399ffec18c2a6996a5a3570f96c0dad173c0c6bdb`;
+the embedded revision and all 198 production sources match that checkpoint, with
+all 15 packaged JAR hashes retained. Advisor's finding was corrected and reverified;
+the tool was not called again to claim an independent pass on the correction.
+
+That exact plugin then passed 47 checks in each of two fresh native fixtures:
+ordinary source offsets, and source transactions with transaction metadata. The
+public `--mixed-outcomes` runner repeats the six review corrections and adds
+commit/full rollback for both an empty-table clear and a rejected clear inside
+CREATE. Each of those four transactions remains open across unrelated output and
+worker replacement. Raw journal records distinguish real D/CG from an abandoned
+attempt; broker output and final source contents match the committed ledger.
+The committed empty-table clear emits `t` before its inserted row. Neither the
+failed clear nor a rolled-back creation emits a truncate. Every check passed,
+including final task drain, native connection cleanup and fixture/local-runtime
+removal. These runs validate the tested crash schedules; ordinary source offsets
+still provide at-least-once delivery. Performance measurements above retain their
+earlier artifact identities.
+
+### Final-candidate sustained performance
+
+The exact `48978c6` plugin was subsequently compared with the original connector
+in six serial fresh-fixture runs, two per profile in forward and reverse order.
+All 73,800 measured changes passed exact key/value/before-image and output-count
+checks. Every native session, fixture and owned local Kafka resource was cleaned;
+an independent read-only check confirmed zero remaining schemas, libraries,
+journals and inquiry messages for the six fixtures. Resource sampling and artifact
+identity checks passed. A scan of uncompressed evidence, including exported
+recordings, found no copy of the test password; the owned credential file was
+removed.
+
+Feature-off median delivery delay and CPU/change differed by −0.10% and −0.6%
+respectively. The disk-buffer profile delivered changes with 42.5% lower median
+delay and 19.7% more CPU/change. The
+[performance table and method](dcg-performance-comparison.md#fifth-review-final-candidate-comparison--2026-11-13)
+retain exact artifacts and per-run ranges. These are two 60-second runs per profile
+at approximately 201 offered changes/second, not a saturation, statistical
+equivalence or long-duration memory result. Schema-change latency and the next
+independent DDL review remain separate release gates. No PR was updated from these
+measurements.
+
+## Sixth-review follow-up qualification — 2026-11-13
+
+The independent review confirmed all six fifth-review corrections on the frozen
+`48978c6` plugin, then reproduced SQL-only renames failing for both captured and
+excluded long-name tables. Their native system names remained unchanged and the
+journal contained a metadata pair without D/FN. Local follow-up now preserves the
+physical identity and event key while applying the new SQL name to capture
+selection, topics and immutable restart history. Tests cover both names selected,
+only either name selected and neither selected, plus rejection of changed layouts,
+changed physical identity, ambiguous intermediate names and pending old-name rows.
+
+Local recovery tests also cover excluded newly created tables loaded before an
+ALTER, initial key addition or qualified CL-command change. The acquired SQL name
+must establish exclusion. Complete lifecycle history bounds the older row layout;
+no excluded values are decoded, and the physical envelope, image and null-map
+checks remain enforced. Selected rows that need an unavailable historical layout
+still reject. Memory and disk cases include a fresh restart before the later
+transition and after completed output.
+
+Checkpoint `c882e84` passed full Maven verification with 4,663 connector and 256
+parser tests, plus 152 Python tests. Its frozen plugin SHA-256 is
+`8aec6640d0142ce6c98663a65b3ce488e4193ebe19a9982717dbd2da1c01cc40`.
+That plugin passed all 19 checks in an ordinary-source-offset native run: loaded
+excluded creations, all four SQL-name selection combinations, exact topic/key/value
+output, unrelated progress and worker replacement. Fixture and local-runtime
+cleanup passed. An earlier attempt stopped on a harness comparison against an
+untrimmed fixed-width catalog name; its failure evidence and successful cleanup
+remain retained. These are bounded native results, not general exactly-once
+delivery or performance claims. The earlier performance measurements and independent
+review apply to their recorded immutable artifacts. The public
+`dcg-schema-refresh-probe.py --metadata-followups` mode exercises these cases,
+exact broker output, unrelated progress and worker replacement in a fresh owned
+fixture. Ordinary source offsets and source transactions require separate runs.
+
+Further local cases cover a committed ALTER followed by a physical rename before
+observation, with rows on both sides, and an empty CREATE followed by a physical
+rename. The ALTER keeps its original SQL name until the separate rename boundary.
+The creation may use the final name only when no earlier row or clear needs the
+unknown original SQL name. Native file/member identity and binding-collision
+checks remain mandatory. Memory/disk tests restart between the two boundaries and
+after completion, and reject mismatched catalog/native identities or ambiguous
+earlier output. Subsequent native testing exposed two additional forms: internal
+savepoints between an ALTER's physical companions, and a metadata pair before
+renaming and dropping the old object in a table swap. Both now retain their exact
+transaction, file and member checks.
+
+The frozen `80d192b` plugin passed all 23 checks in an EOS run with transaction
+metadata. It covers the four SQL-name selection combinations, loaded excluded
+creations, CREATE/ALTER followed by physical rename, and a captured table swap
+ending in DROP. Exact keys, values and topics survived worker replacement; dropping
+the old object did not remove the replacement binding or emit an invented truncate.
+Its ZIP SHA-256 is
+`92b1d4419eb9f095d50247c180f98da1496ce85b9b8f19e7116bf83720b10ca8`.
+Full verification passed 4,698 connector and 256 parser tests; assembly and
+formatter/import checks passed. Independent checks confirmed fixture and owned
+Docker resources absent after cleanup.
+
+### Known ALTER/DROP and disappearing catalogs
+
+A completed ALTER followed by DROP can retire a retained identity without fetching
+a vanished definition when no intervening row needs it. The tests preserve
+rejection of rows requiring that layout, foreign identities, incomplete physical
+companions and rollback. If a catalog disappears between the initial journal read
+and acquisition, one retry is allowed only when a new retained DROP or physical
+rename explains the disappearance of that exact file. Other missing evidence,
+authority errors and unsupported layouts retain their failure behavior.
+
+The `e27565c` plugin (production changes at `e5ad14d`, then a harness correction)
+passed the public `--retired-definitions` EOS experiment with transaction metadata.
+Both a captured and an excluded file were altered then dropped; unrelated output
+and the already published captured row remained exact through worker replacement.
+Six empty CREATE/DROP gaps were exercised: 0.5, 1.5, 3, 4, 6 and 8 seconds. Two
+observations actually entered the new retry path and continued without a task
+failure. These gaps describe test scheduling, not a guarantee that every host hits
+the race at the same delay. Task, fixture and local-runtime cleanup passed.
+The frozen ZIP SHA-256 is
+`0d3a2aa3bd6e041bec78ec689875d7f60dfc84aa03ccddf75af7c5f3883e4296`.
+Full verification passed 4,715 connector and 256 parser tests, and 152 Python
+harness tests; assembly and formatting checks passed. The first native attempt
+used an invalid insert for the harness's mixed-column table; its failure and
+cleanup evidence were retained before rerunning with the single-column fixture.
+
+CREATE/load/DROP now has a packaged historical-name path. A separate
+names-only prototype first recovered
+exact names after the objects and their library were removed. A CL-only version
+then read detached receivers after table deletion, including a 46,272-byte
+pointer-backed creation, quoted names, LABEL/COMMENT and an SQL-only rename.
+It changed neither fixture objects nor the source journal; owned-job cleanup and
+independent fixture absence checks passed. These API observations are separate from the packaged run below.
+
+The adapter binds each callback to the retained journal entry, preserves quoted
+SQL names, uses ordinary case-insensitive filtering and signal-table selection,
+and rejects missing/ambiguous/selected historical names. It does not infer a row
+layout. Memory and disk tests retain F across unrelated output and reconstruct
+from a fresh instance before the transient table's deletion. The helper fixes
+QDBRPLAY to names-only mode, bounds native spaces, releases pointer handles in
+the retrieving job and ends only its private API job during stop.
+
+Local verification passed 4,739 connector and 256 parser tests and 152 Python
+tests. The first full run exposed a poll/close race: a closed session could
+replace a previously queued retriable transport error with a fatal admission
+error. The corrected poll preserves that queued failure; both acknowledgement
+modes now force this race deterministically. The failure log is retained, and the
+full suite passed after the correction.
+
+The frozen `73be095` packaged plugin passed all nine checks in the public
+`--transient-tables` EOS experiment with transaction metadata. It covers ordinary
+CREATE/load/DROP, CTAS, a single-transaction lifetime, SQL-only rename and LABEL
+during the transient lifetime, and a quoted mixed-case name. Each was read from a
+detached receiver after deletion. Exact unrelated output survived worker
+replacement. Fixture, journal, inquiry and owned Docker absence were independently
+verified after cleanup. Its ZIP SHA-256 is
+`80a4d2efc3f1335c9c96038136a8c7b06bdbabb1a0566397e2fce47992e039f0`.
+This does not establish selected transient-row decoding or the helper's
+least-privilege authority profile.
+
+Kiro's frozen-checkpoint addendum also identified committed ALTER followed by
+rolled-back or still-open ALTER, plus metadata acquisition races. The complete
+later rollback now has local recovery coverage: its exact physical restoration
+must precede metadata acquisition, and its transaction retains its own history
+and row-discard boundary. A qualified transition overlapping catalog acquisition
+gets one fresh observation per poll; continued movement defers without output or
+checkpoint advancement. Identity/history failures do not enter that retry path.
+The frozen `93b386f` plugin passed the public `--schema-observation` EOS run
+with transaction metadata. It checked committed ALTER followed by rolled-back
+ALTER on both captured and excluded files; the captured layout and exact row
+ledger survived worker replacement. Five scheduled CREATE follow-ups covered
+LABEL, CHECK, ALTER and physical RENAME at 3–5 second gaps. Three metadata-race
+retries and one missing-catalog retry were actually observed. Task and fixture
+cleanup passed. Its ZIP SHA-256 is
+`ce3efbcd2ecc85abe1a5deec3ef52180a67a75598b71aafc3d18870c1fc471ad`.
+Its full verification passed 4,745 connector and 256 parser tests plus 152 Python
+tests. A still-open second ALTER inside the first ALTER's observation window
+remains a separate check. Creation rows before SQL-name changes now require native
+name evidence and cannot silently move to a later selected topic.
+These commits have not had another independent adversarial review. Earlier
+performance results retain their own artifact identities.
+
+The excluded-table variant now has local memory/disk recovery coverage. If a
+later open ALTER prevents catalog acquisition, the already committed prefix can
+retain an identity-only definition only after native SQL-name evidence confirms
+that its name remains excluded. Its row layout is explicitly unobserved, never
+replaced with the earlier layout. Unrelated output advances with F retained, and
+a fresh instance reconstructs the open cycle. Complete-image, member, null-map,
+transaction and selection guards remain tested. An identity-only definition
+cannot build a captured output schema.
+
+The frozen `c5c4718` plugin passed all 13 checks in the public
+`--open-later-alter` EOS run with transaction metadata. In both the rollback and
+commit cases, unrelated rows and W advanced while the second excluded-table
+ALTER stayed open, and F retained its transaction start. A killed worker was
+replaced before each outcome; uncommitted captured rows stayed invisible,
+rollback discarded its row, and commit published its row exactly once. A later
+LABEL reacquired the complete definition. This does not establish automatic
+layout acquisition when capture selection is expanded from identity-only
+history. Fixture, journal, inquiry and owned Docker absence were independently
+verified after cleanup. Its ZIP SHA-256 is
+`66b8698c13f5e2e057be9d285f46323b2ebc5e04a37bbdb316bb57f8d9e3a415`.
+The production changes passed 4,755 connector and 256 parser tests; the final
+harness correction passed assembly, formatter/import checks and all 152 Python
+tests. The preceding native attempt passed its first open-transaction progress
+check, then failed because the harness lacked an assertion helper. Its failure
+and independently verified cleanup evidence were retained.
+
+A separate baseline run used the original `2e19ad27` connector and parser JARs,
+with the same dependency set used in the earlier comparison. With two ALTERs of
+an excluded table, an unrelated row appeared while the second ALTER remained
+open (7.5 seconds). For a captured table, the unrelated row was absent throughout
+the 32.1-second observation, then appeared after rollback. Both probes and their
+follow-ups were delivered once; cleanup was independently verified. This is a
+bounded observation of the original connector's captured-table pause, not a
+throughput measurement or proof of all open-DDL behavior. The baseline ZIP hash is
+`d30e4a8e5a6646a5df009ad4e53b7444dee02dc9486430a023591219fe62e2a8`.
+
+The follow-up removes the LABEL dependency when full rollback leaves a stable
+restored layout. Memory/disk tests restart from the identity-only prefix, observe
+the full restoration, expand capture selection, and publish the next row with
+the acquired columns without replaying earlier excluded rows. Later metadata or
+key changes prevent the rollback observation from adopting their layout;
+different native identities still fail, and already known rollback definitions
+remain unchanged.
+
+The frozen `012b022` plugin passed all 16 checks of the updated
+`--open-later-alter` EOS experiment with transaction metadata. Both outcomes
+preserved unrelated progress and invisible uncommitted rows across worker
+replacement. Capture selection was expanded after each outcome without a LABEL
+or resnapshot; only the two newly inserted rows appeared, with the correct
+restored/committed columns. The exact captured-row ledger passed. Full local
+verification passed 4,760 connector and 256 parser tests plus 152 Python tests;
+assembly and formatter/import checks passed. Its ZIP SHA-256 is
+`3ec09b25e7bfd72d562346a8cae8731ab0ff5e45afa80fe9b1a7dcfcbd039b13`.
+
+A separate negative test on that same artifact passed eight checks. An uppercase
+SQL table and a delimited lowercase name coexisted on different native files.
+The ordinary include predicate selected both. After the lowercase table was
+loaded, deleted and read from a detached receiver, its historical name caused
+rejection at creation; monitored output and the durable checkpoint stayed
+unchanged, including after worker replacement. This proves the exclusion shortcut
+does not accept that selected transient lifetime; it does not add historical
+decoding for selected vanished tables. Two earlier fixture failures were retained:
+an invalid explicit system name for a short SQL name, and an assertion that
+missed padding in the fixed-width catalog name. Both completed cleanup before
+the corrected run used a fresh library.
+Both final runs passed task/fixture cleanup, followed by independent checks for
+remaining schemas, libraries, journals, inquiry messages and owned Docker
+resources. No such resources remained.
+
+### Historical names and excluded lifetimes — 2026-11-13
+
+The `9b30614` plugin passed bounded native EOS runs with transaction metadata for
+four newly created excluded CLOB lifetimes (retained, dropped, committed and fully
+rolled back) and seven short/long physical-rename lifetimes. Unrelated output and
+durable offsets progressed; worker replacement preserved the exact row ledger.
+Its ZIP SHA-256 is
+`b0b53ea58d35d93969a41ca8f5b0933e41362aa308b92d304ce1f98013159902`.
+
+All four historical-name rejection cases passed on that artifact: rows and
+empty-table clears followed by a SQL rename, with either the old or new name
+selected. Monitored output and durable offsets remained unchanged, including
+after worker replacement. The empty clears produced D/CG subtype 8 with no R
+records. The harness retains and accepts only the documented SQL0100 empty-table
+condition; other diagnostics still reject. See IBM's
+[TRUNCATE reference](https://www.ibm.com/docs/en/ssw_ibm_i_74/db2/rbafztruncate.htm).
+
+Native names-only controls distinguish full ALTER (subtype 0) retaining its SQL
+name, LABEL/COMMENT carrying neither name, and subtype-2 removal of an alternative
+SQL name. These observations came from retained receivers after object deletion;
+the name inspection changed neither source objects nor the journal. Missing name
+evidence never becomes permission to discard rows or clear events.
+
+The follow-up `2c049ca` plugin passed the known excluded ALTER/INSERT/DROP sequence
+in one transaction. Unrelated rows and durable W progressed while it remained
+open, with F pinned to the exact C/SC. A worker was killed and replaced before
+commit, and again after physical deletion. The unrelated-row ledger remained
+exactly once in this EOS run. Its ZIP SHA-256 is
+`2c6aac350dfc5fc14ff64f0d5369b72bcbd95f0b3a55dde9e5d2d899bf572b41`.
+
+Full verification at `2c049ca` passed 4,865 connector and 256 parser tests;
+assembly, formatter and import validation passed. Independent offline review
+verified the exact artifacts and passed 70 focused cases at `9b30614`, then 21 at
+`2c049ca`, including independent admission and saved-history challenges. Those
+reviews found no new concrete blocker within their bounded scopes. Earlier
+missing-proof fixture failures remain preserved separately, not recounted as
+passes. The final-window qualification seam was tested locally; a timed native
+catalog race was not simulated in these runs.
+
+Every completed native run above passed task/fixture cleanup and independent
+checks for remaining schemas, libraries, journals, inquiry messages and owned
+Docker resources. Earlier harness errors were retained and corrected on fresh
+fixtures. The runs above do not establish shared ALTER/DROP rollback, selected
+unavailable historical layouts, least-privilege authority for names-only
+observation or whole-feature readiness by themselves. Earlier performance
+measurements retain their original artifact identities.
+
+### Shared ALTER/DROP full rollback — 2026-11-13
+
+The `89ff007` plugin passed a bounded native EOS run with transaction metadata
+for both a captured mixed-column table and an excluded table. Each transaction
+altered its table, inserted a row into it and another captured table, dropped the
+altered table, and fully rolled back. Unrelated autocommit rows and durable W
+continued while the transaction was open; F retained its exact C/SC. The worker
+was killed and replaced before each rollback and again after each restoration.
+
+The actual journal contained D/DT, row compensation, the shared C/RB and the
+four F/EJ, D/EF, D/JF, F/JM restoration records. Neither transaction published
+its rolled-back rows. The captured table then published a new row using all its
+original columns, including their NULL values, without the rolled-back added
+column. The unrelated-row ledger was exact across all four replacements.
+All nine run checks and independent fixture/worker cleanup checks passed.
+
+Tested ZIP SHA-256:
+`9fe97cfbf89f4ebd72e5aff801e323693323efd279a76296cc50597d2c6f03dc`.
+Full verification passed 4,880 connector and 256 parser tests, plus assembly,
+formatter and import checks. Independent offline review verified the artifact
+and passed 23 distinct cases: 15 rollback regressions, two committed controls
+and six independent safety checks. Wrong transaction, producer, member,
+incomplete restoration and savepoint outcomes do not authorize rollback history.
+Fresh replay revalidates row identities even when that history is already saved.
+
+The first native attempt stopped after the excluded case because its private
+runner tried to serialize a decimal transaction identifier directly as JSON.
+Its evidence remains a failed harness run. A separate cleanup completed and
+independently verified removal; the corrected run used a new library.
+
+To reproduce the source sequence, use a fresh isolated journaled library and
+the ordinary packaged plugin with `truncate.transactional.enabled=true`. In one
+commitment-controlled session, run `ALTER TABLE U ADD COLUMN X1 INTEGER DEFAULT 7`,
+`INSERT INTO U (ID) VALUES (703)`, an insert into another captured table, and
+`DROP TABLE U RESTRICT`, then `ROLLBACK`. Insert unrelated autocommit probe rows
+before and after DROP. Kill and replace the Connect worker while that transaction
+is open and after rollback; retain the receivers and binding history. Repeat
+with a captured table, insert into its original columns after restoration, and
+check the source rows, emitted schemas, exact output ledger and durable F/W.
+The ordinary Java fixture regression covers interruption before the final
+restoration record, which this native run did not time deliberately.
+
+This result qualifies the tested full rollback. It does not supply missing
+historical layouts for a committed captured transaction or qualify DDL savepoint
+rollback, unrestricted DDL compositions, downgrade or whole-feature readiness.
+
+
+## Known-table name boundaries — 2026-11-13
+
+The independent review demonstrated two incorrect clear routes and an adjacent
+row route in controlled captured-journal fixtures. A later SQL rename could
+change the topic or capture selection of an earlier clear. A rename followed by
+a clear and DROP could instead retain the old name for that clear. The physical
+rename/row/SQL-rename case could move an earlier row to the later SQL name.
+The clear reproductions used subtype 3 optimized DELETE producing `op=t`;
+subtype 8 was added to the correction tests explicitly.
+
+The correction separates proven name boundaries. Metadata before a clear is
+qualified with historical SQL names, complete object identities and transaction
+outcomes, without inventing an intermediate row layout. A physical rename
+followed by rows retains its own identity until the later SQL metadata boundary.
+Both pre-catalog collection and final-window qualification use these checks.
+The local tests exercise old-only, new-only and combined capture selection,
+LABEL controls, full clear rollback, memory/disk buffers and fresh history
+recovery. Missing or conflicting name proof rejects. An independent follow-up
+found a savepoint rollback that could undo the name change before a later commit;
+the name-only proof now rejects that unproven outcome. Native rollback semantics
+for that SQL-name change are not claimed.
+
+The first packaged native attempt exposed another journal variant: subtype 8
+contained a deeper C/SB/C/SQ pair between D/EF and D/JF. The lifecycle now applies
+the same exact transaction, producer, nesting and release checks already used
+for ALTER at that position. Restart, full rollback and malformed-scope tests
+cover the correction. The failed native attempt is retained separately, with
+fixture cleanup verified; it is not counted as a passing routing test.
+
+Three corrected native runs used fresh isolated libraries and the ordinary
+packaged task. All captured SQL TRUNCATE as subtype 8, with raw journal evidence:
+
+| Capture selection | Build | Delivery | Result |
+| --- | --- | --- | --- |
+| Old SQL names only | `cde0281` | Ordinary source offsets | 16 checks passed, including worker replacement and exact topic contents |
+| New SQL names only | `efa9bb0` | Connect source transactions with transaction metadata | 16 checks passed, including worker replacement and exact topic contents |
+| Both SQL names | `1a5f489` | Connect source transactions with transaction metadata | 16 checks passed, including worker replacement and exact topic contents |
+
+The first build's ZIP SHA-256 is
+`68930e1cca1e9b590e6f83a20182720bc5eb2f6095bc675d1c0a0fb1e6c83846`;
+the second is
+`2cda04e5645d8b7aa53ec74312c9c36a58fe43f8a316391ab4ddd4c84aea6843`;
+the third is
+`ad4ae9836996c784e087c2e63f04b7d2bfc01c001fe145f42d6a819b9d3f59ce`.
+Each artifact retains its source/JAR manifest and embedded commit. These runs
+exercise committed native name changes and clears, not SQL-name savepoint
+rollback. The ordinary fixture tests remain the subtype 3 evidence for these
+particular compositions.
+
+To reproduce, first let the connector acquire a long SQL-name table with a
+separate system name. Stop only the connector while application writes continue.
+Run LABEL, an empty transactional TRUNCATE with COMMIT, then an SQL-only rename;
+resume and verify the truncate belongs to the original name. In another table,
+run SQL-only rename, committed empty TRUNCATE, then DROP; verify the truncate
+belongs to the renamed table. For rows, change only the system name, insert a
+row, change the SQL name, and insert another row. Test selection of either name,
+replace the worker, and check the exact records and durable offsets. Do not
+substitute a row DELETE for independently observed D/CG clear evidence.
+
+The independent follow-up at `efa9bb0` passed 28 targeted parameter cases.
+Separate rejection assertions verified that a savepoint rollback covering the
+name change produces no output, returned checkpoint or installed history.
+Savepoint rollback targets after the name change remain accepted controls. The
+review also checked the internal-clear nesting correction. This is local
+fixture evidence; it does not establish native SQL-rename savepoint rollback.
+
+## Empty final-member recovery — 2026-11-13
+
+A direct comparison established this as an availability regression. The original
+`2e19ad27` plugin continued capture after the last empty member was removed,
+restarted with the file still memberless, accepted a new member and restarted
+again. The earlier transactional build `89ff007` instead stopped at the removal;
+its four later progress checks failed. Both used the same isolated DDS-keyed
+fixture shape and local Kafka, with exact observed output and durable offsets.
+The initial baseline attempt was a harness failure caused by waiting for an
+idle legacy offset with heartbeats disabled. That attempt is retained separately;
+the corrected comparison used the ordinary heartbeat setting on both builds.
+
+Build `1a5f489` retains the physical file with zero active members in durable
+history. The removed member remains only a historical anchor and cannot authorize
+rows or clears. A later exact native member association establishes the new
+active identity; it does not silently reuse a stale member binding.
+
+The frozen plugin with SHA-256
+`ad4ae9836996c784e087c2e63f04b7d2bfc01c001fe145f42d6a819b9d3f59ce`
+passed all six observed native steps in a fresh isolated library: initial insert,
+individual delete to empty the member, unrelated publication after removal,
+publication after worker replacement while no member existed, a row in the newly
+added member, and another row after a second replacement. Each observed row was
+unique and reached the durable checkpoint; source contents were checked too.
+This run used ordinary source offsets. It does not claim that removing a populated
+member emits `op=t`, or add member-aware topics, keys or snapshots.
+
+Eleven new local parameter cases cover memory/disk storage, captured/excluded
+bindings, re-adding the same or another member name, repeated fresh history
+recovery, and stale-member rows rejected before output or checkpoint advancement.
+The explicit memberless history format rejects malformed member attributes and
+cannot be treated as an older single-member format. Existing multi-member removal
+controls still pass. Full Maven verification at this source checkpoint passed
+4,965 connector and 256 parser executions, with assembly, formatter and import
+validation also passing.
+
+To reproduce, start with one empty member, publish and individually delete a row,
+then run `RMVM FILE(library/file) MBR(member)`. Publish to another captured table,
+replace the worker, and publish another unrelated row. Run `ADDPFM` for the file,
+insert into its new member, replace the worker again, and verify the exact topic
+contents and durable offsets. Preserve the raw member-association records and
+binding history. The new memberless table-binding format is not readable by
+earlier experimental builds; retain a compatible plugin for restart.
+
+Runner cleanup and a separate read-only check verified removal of all owned
+libraries, journals, inquiry messages and local Docker objects from these name
+and member runs, including the failed internal-savepoint attempt. A scan of
+1,887 repository/evidence files found no configured password bytes in UTF-8,
+UTF-16 or CCSID 37. That byte scan did not decompress archives.
+
+## Same-file member rename — 2026-11-13
+
+A second native comparison used `RNMM` to rename the only member of an existing
+DDS-keyed file, publish an unrelated row and a row in the renamed member,
+replace the worker, then rename the member back. The original `2e19ad27` plugin
+passed all five observed steps. Build `1a5f489` stopped at F/MN; all four later
+progress observations failed, including after replacement. The first baseline
+attempt stopped in the harness because its member-name assertion omitted the
+padding of the catalog's fixed-width field. That attempt is retained separately;
+the corrected query uses TRIM without changing the expected name or row checks.
+
+Build `265a310` qualifies the standalone F/MN using its old header name, both
+payload names, retained member JID and unchanged physical file/library. It
+preserves the schema, key, SQL table and topic. It does not turn a member rename
+into a file rename or claim a cross-library move. The qualified transition is
+stored before subsequent rows, and an F/MN already owned by a physical-file
+rename stays part of that existing lifecycle.
+
+The frozen ZIP SHA-256 is
+`271b89d3dcad7ac9ce9dc725880eaaa2d64d1737407d06c40cc9f04282bea487`.
+Its source/JAR manifest and embedded revision match the committed build. It
+passed the same five native observations on a fresh isolated fixture using
+ordinary source offsets, with unique records, durable progress and final source
+contents checked. The raw interval retains both F/MN records and subsequent
+rows under their new member names.
+
+Fourteen new local cases cover memory/disk recovery, captured/excluded output,
+exact keys and topics, secondary-member preservation, malformed identities and
+names, collisions, unsupported transactional context, incomplete payloads, and
+stale old-name rows rejected on repeated fresh recovery. They preserve no-output
+and unchanged-history assertions. Full Maven verification passed 4,979 connector
+and 256 parser executions. Assembly, formatting and import validation passed.
+
+To reproduce, use one existing member in an owned fixture, publish a keyed row,
+then run `RNMM FILE(library/file) MBR(old) NEWMBR(new)`. Publish unrelated and
+renamed-member rows, replace the task, publish another row, rename back and
+verify the exact ledger and durable offsets. The old and new member share the
+same native identity; a foreign identity or a target name already used by
+another member must reject. See [IBM's RNMM command](https://www.ibm.com/docs/en/ssw_ibm_i_74/cl/rnmm.htm)
+and [journal entry layout](https://www.ibm.com/docs/en/i/7.5.0?topic=information-layouts-variable-length-portion-journal-entries).
+
+Independent review of the same frozen build passed 49 targeted cases: the 14
+new cases, 29 relevant controls and six additional authority checks. It verified
+cached-history replay, preservation of other members and ownership of F/MN
+records within a physical-file rename. This was offline evidence; the native
+comparison above was a separate run. Independent cleanup found no remaining
+fixture schemas, libraries, journals, inquiry messages or local Docker objects.
+A byte scan of 1,210 repository/evidence files found no configured password in
+UTF-8, UTF-16 or CCSID 37; it did not decompress archives.
+
+## File moves between libraries — 2026-11-13
+
+A native comparison moved an excluded physical file between two fresh owned
+libraries in the same storage pool, keeping its original journal. It inserted a
+row in the destination, published unrelated captured rows, replaced the worker,
+and moved the file back. The original `2e19ad27` plugin passed all four progress
+observations. Build `265a310` passed the initial observation but failed at D/FM;
+the other three observations failed, including after replacement. The first
+baseline attempt encountered a harness error serializing an audit timestamp
+after the move. Its result is retained separately, and both libraries were
+cleaned before the corrected baseline ran.
+
+Build `9036bcf` passed the same four observations using ordinary source offsets.
+The final independent topic dump contains each probe row exactly once, and the
+fixture's final source rows and durable offsets agree. These are availability
+and identity checks, not a cross-partition ordering or exactly-once guarantee.
+The frozen ZIP SHA-256 is
+`ff3de39f6080e24256ae44206fd692157958cedbd13735dff0db4a78945bbdba`;
+its manifest, compiled classes and embedded revision match the committed build.
+
+The correction validates D/FM and every retained member's F/MM, then saves the
+unchanged file/member identities under the new library. It does not acquire a
+later catalog name or layout. Twenty-one new local cases cover both buffer
+types, old/new/both/excluded capture selection, long SQL names, fresh recovery
+between association records, stale-library rows, foreign identities, incomplete
+member sets and unfinished transactions. Full Maven verification passed 5,000
+connector and 256 parser executions; assembly, formatter and import validation
+passed. Local captured-table tests do not establish native captured-move support.
+The native comparison covered an excluded file only, with one member; it did not
+test a cross-pool save/restore or a whole-library rename.
+
+To reproduce, create two isolated libraries and an excluded journaled file in
+one, confirm the target has no matching object, and use
+`MOVOBJ OBJ(source/file) OBJTYPE(*FILE) TOLIB(target)`. Verify that journaling
+still uses the source journal, publish unrelated captured rows, replace the task,
+move the file back and compare the exact rows and offsets. Cleanup must track
+the same owned object's identity in whichever library currently holds it.
+See [IBM's MOVOBJ command](https://www.ibm.com/docs/en/i/7.5.0?topic=cbm-move-object-1)
+and [D/FM and F/MM entry descriptions](https://www.ibm.com/docs/en/i/7.5.0?topic=information-all-journal-entries-by-code-type).
+
+The independent offline review at `9036bcf` passed 47 targeted cases, including
+six additional checks of cached member evidence, destination collisions and
+SQL-name/key authority. That result covers plain moves, not every statement
+composition. Independent cleanup verified all eight libraries used by the
+plain-move comparisons, with no owned local Docker resources left.
+
+### ALTER followed by a move during catch-up
+
+A separate native experiment stopped the worker, altered an existing excluded
+file, moved it to the other owned library, then restarted. Build `9036bcf` failed
+with `Unqualified schema-change lifecycle`; another task replacement failed the
+same way. This was a combined-statement gap in schema acquisition. The original
+connector was not rerun for this combined case; its passing plain-move comparison
+above remains a separate result.
+
+Build `04d40bd` follows the complete, verified move to locate the altered file's
+catalog definition. It records the ALTER and move at separate positions, keeping
+rows before the move under their original library/topic. Repeated moves are
+followed only while the native identities, SQL name and layout remain proven.
+A later move during acquisition triggers re-observation; a different catalog
+identity, SQL name, library or subsequent layout cannot authorize the earlier
+ALTER.
+
+The frozen ZIP SHA-256 is
+`6772a7f39e6c45f9584b24e638a38599cf6862971209c7e32a30f7b936fcb614`.
+Its manifest, compiled classes and embedded revision match `04d40bd`. The same
+native experiment passed all four progress observations on fresh fixtures:
+before the move, after ALTER/move catch-up, after another worker replacement,
+and after moving back. Each unrelated probe row appeared exactly once in the
+final topic dump; final source contents and durable offsets were checked.
+This uses ordinary source offsets and an excluded moved file. It does not
+establish native captured-move routing or broker exactly-once delivery.
+
+Fourteen additional local cases cover memory/disk restart, captured/excluded
+rows, a move round trip before acquisition, foreign catalog/row identities,
+unproven SQL names and layouts, and the late-acquisition race. Invalid proof
+emits no records and leaves history unchanged. Full Maven verification passed
+5,014 connector and 256 parser executions; assembly, formatting and imports
+passed. The before-fix native failure and its cleanup evidence are preserved.
+Runner cleanup and a separate read-only check verified that all four libraries
+from the failing and corrected combined cases, their journals and inquiry
+messages, and their local Docker resources were absent.
+
+Independent review of the same frozen build passed 57 distinct offline cases:
+the 14 added cases, 37 controls and six additional checks. Both capture-selection
+directions preserved topics, keys and the ALTER layout through recovery. Changed
+saved member-association bytes rejected without new output, returned checkpoint
+or history mutation. Artifact identity and Advisor review passed. These local
+results remain separate from the native experiment above; they do not establish
+every DDL composition or whole-feature readiness.
+
+### CREATE and load followed by a move during catch-up
+
+A further native comparison created a new excluded file, inserted a row and
+moved it before the stopped connector could acquire its creation. The original
+`2e19ad27` build continued, including worker replacement and move-back. Build
+`04d40bd` failed with `Unqualified schema-change lifecycle`; replacement failed
+at the same retained sequence. These pre-fix results remain separate from the
+passing ALTER/move case above.
+
+Build `7587127` validates the new file/member association and the complete
+D/FM/F/MM move before locating the catalog in its destination. It qualifies the
+creation under the original library and replays the move separately. The final
+catalog cannot supply a different identity or layout for earlier records, and
+incomplete creation/outcome evidence cannot authorize output. No new history
+format or change to ordinary row dispatch is involved.
+
+The frozen ZIP SHA-256 is
+`02f853357a08935881fd87fd791f8fdca21125bf10c0de6d5ee4b9ed122ad2e5`.
+Its manifest, compiled classes and embedded revision match `7587127`. On fresh
+native fixtures it passed all four observations: before the move, after the
+CREATE/load/move catch-up, after worker replacement and after moving back.
+Each unrelated probe appeared once in the final topic dump; source contents and
+durable offsets were also checked. This validates excluded-file progress with
+ordinary source offsets. Captured cross-library routing and broker exactly-once
+delivery remain outside this native result.
+
+Fifteen added local cases cover old/new/excluded capture selection in both
+storage modes, exact topics and keys across four fresh recoveries, and a durable
+checkpoint between D/FM and F/MM. Conflicting catalog, row or member identities,
+later layouts, incomplete moves and unfinished creation reject without output or
+new history. A move after the catalog observation requires re-observation. The
+focused DDL suite passed 531 cases. Full Maven verification passed 5,029 connector
+and 256 parser executions; assembly, formatter and import validation passed.
+
+Runner cleanup and a separate read-only check found no remaining schemas,
+libraries, journals, inquiry messages or owned Docker resources from all three
+comparisons. A byte scan of 2,604 repository/evidence files found no configured
+password in UTF-8, UTF-16 or CCSID 37; archives were not decompressed. The
+performance matrix remains pinned to `04d40bd`, not this subsequent correction.
+
+Independent review of the same frozen build passed 88 distinct offline cases:
+the 15 added cases, 59 controls and 14 additional recovery/authority checks.
+Repeated moves preserved the original, intermediate and final library topics
+and keys through six fresh recoveries, including checkpoints between each
+D/FM/F/MM pair. Changed saved companion bytes and unsafe historical-name
+selection rejected without new output, checkpoint return or history mutation.
+Artifact identity and Advisor review passed. The native result above is separate;
+these local checks do not establish arbitrary DDL combinations or whole-feature
+readiness.

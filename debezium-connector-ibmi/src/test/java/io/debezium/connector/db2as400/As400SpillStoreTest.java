@@ -49,6 +49,28 @@ class As400SpillStoreTest {
     Path directory;
 
     @Test
+    void shouldReclaimObsoleteScratchPagesWithoutLosingLiveValuesOrIncreasingTheBudget() {
+        long budget = 2 * 1024 * 1024;
+        try (var store = store(budget)) {
+            var data = store.map("replacement", As400SpillCodec.INT, As400SpillCodec.BYTES);
+            var random = new Random(91);
+            var expected = new java.util.HashMap<Integer, byte[]>();
+            for (int batch = 0; batch < 80; batch++) {
+                for (int key = 0; key < 64; key++) {
+                    byte[] bytes = new byte[2048];
+                    random.nextBytes(bytes);
+                    data.put(key, bytes);
+                    expected.put(key, bytes);
+                }
+                store.flush();
+                assertThat(store.usage().fileBytes()).isLessThanOrEqualTo(budget);
+            }
+            assertThat(data).hasSize(expected.size());
+            expected.forEach((key, value) -> assertThat(data.get(key)).containsExactly(value));
+        }
+    }
+
+    @Test
     void shouldPreserveOwnedRowTypesAndExactSourceMetadataAfterSpill() {
         Timestamp timestamp = Timestamp.valueOf("2026-01-02 03:04:05.123456789");
         Object[] values = { null, new byte[]{ 1, 2, 3 }, "text\u0000\ud800\ud83d\ude80", new BigDecimal("123456789.00100"), BigInteger.ONE.shiftLeft(63),

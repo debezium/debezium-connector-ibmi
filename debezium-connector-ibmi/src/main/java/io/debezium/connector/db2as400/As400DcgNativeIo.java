@@ -42,6 +42,7 @@ final class As400DcgNativeIo implements AutoCloseable {
     final As400OperatorJournalEvidence journals;
     final As400JdbcNativeIdentityEvidence identities;
     final As400BindingHistory history;
+    final As400NativeHistoricalNames historicalNames;
     final As400OperatorCutReader.Limits cutLimits = new As400OperatorCutReader.Limits(128, 10000, 16_000_000);
     private final Configuration raw;
     private volatile String server;
@@ -73,6 +74,7 @@ final class As400DcgNativeIo implements AutoCloseable {
         sockets.setLoginTimeout(15000);
         transport.setSocketProperties(sockets);
         transport.setThreadUsed(false);
+        historicalNames = new As400NativeHistoricalNames(transport, journal, lifecycle);
         reader = new RetrieveJournal(new RetrieveConfigBuilder().withAs400(() -> transport)
                 .withJournalInfo(new JournalInfo(journal.name(), journal.library(), false))
                 .withTransactionControls(true).withServerFiltering(false).withJournalBufferSize(1024 * 1024).withMaxServerSideEntries(1000).build(),
@@ -225,13 +227,31 @@ final class As400DcgNativeIo implements AutoCloseable {
     }
 
     static void noWarnings(ResultSet rows, Statement statement) throws SQLException {
-        if (rows.getWarnings() != null || statement.getWarnings() != null) {
-            throw new SQLException("Incomplete native evidence: SQL warning");
+        var rowWarning = rows.getWarnings();
+        var statementWarning = statement.getWarnings();
+        As400OperatorJournalEvidence.incompleteWarnings(rowWarning, statementWarning);
+        if (rowWarning != null || statementWarning != null) {
+            throw new SQLException("Incomplete native evidence: SQL warning", rowWarning == null ? statementWarning : rowWarning);
         }
     }
 
-    void requireRetention() throws SQLException {
-        journals.collect();
+    void requireRetention() throws SQLException, InterruptedException {
+        for (int attempt = 0;; attempt++) {
+            try {
+                lifecycle.checkOpen();
+                journals.collect();
+                return;
+            }
+            catch (java.io.IOException stopped) {
+                throw new SQLException("Native D/CG session stopped", stopped);
+            }
+            catch (As400OperatorJournalEvidence.IncompleteObservationException incomplete) {
+                if (incomplete.getSuppressed().length > 0 || attempt >= 2) {
+                    throw incomplete;
+                }
+                Thread.sleep(1000);
+            }
+        }
     }
 
     As400HandoffWork handoffWork(As400ContinuousRuntime.Limits limits, Runnable checkRunning) {
@@ -274,7 +294,14 @@ final class As400DcgNativeIo implements AutoCloseable {
 
     void requestStop() {
         lifecycle.requestStop();
-        cancellation.start(reader::cancelJob);
+        cancellation.start(() -> {
+            try {
+                reader.cancelJob();
+            }
+            finally {
+                historicalNames.cancel();
+            }
+        });
     }
 
     @Override
@@ -293,7 +320,12 @@ final class As400DcgNativeIo implements AutoCloseable {
                 // A failed JDBC close or allocation release must remain a
                 // reported failure, but must not leak the separate RPC handle.
                 try {
-                    transport.disconnectAllServices();
+                    try {
+                        historicalNames.close();
+                    }
+                    finally {
+                        transport.disconnectAllServices();
+                    }
                 }
                 finally {
                     Exception failure = null;

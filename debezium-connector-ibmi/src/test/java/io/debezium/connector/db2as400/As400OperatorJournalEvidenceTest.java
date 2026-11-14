@@ -47,13 +47,16 @@ class As400OperatorJournalEvidenceTest {
     }
 
     @ParameterizedTest
-    @ValueSource(strings = { "before", "after", "unknown", "chained", "wrong-state", "wrong-code" })
+    @ValueSource(strings = { "before", "after", "unknown", "chained", "chained-incomplete", "user-warning", "wrong-state", "wrong-code" })
     void shouldDiscardTheEntireObservationWhenNativeMetadataReturnsAWarning(String fault) throws Exception {
         var f = new Fixture();
-        var warning = new SQLWarning("Native metadata incomplete", fault.equals("wrong-state") ? "01000" : "01548",
+        var warning = new SQLWarning("Native metadata incomplete", fault.equals("wrong-state") ? "42501" : fault.equals("user-warning") ? "01H99" : "01548",
                 fault.equals("wrong-code") ? 0 : 462);
         if (fault.equals("chained")) {
             warning.setNextWarning(new SQLWarning("Another warning"));
+        }
+        if (fault.equals("chained-incomplete")) {
+            warning.setNextWarning(new SQLWarning("Another incomplete object", "01548", 462));
         }
         if (fault.equals("unknown")) {
             warning = new SQLWarning("Unknown warning");
@@ -65,9 +68,9 @@ class As400OperatorJournalEvidenceTest {
             when(f.statements.get(0).getWarnings()).thenReturn(null, warning);
         }
         var failure = assertThrows(SQLException.class, f::collect);
-        if (List.of("before", "after").contains(fault)) {
+        if (List.of("before", "after", "chained-incomplete", "user-warning").contains(fault)) {
             assertThat((Throwable) failure).isInstanceOf(As400OperatorJournalEvidence.IncompleteObservationException.class);
-            assertThat(failure.getSQLState()).isEqualTo("01548");
+            assertThat(failure.getSQLState()).isEqualTo(warning.getSQLState());
             assertThat(failure.getErrorCode()).isEqualTo(462);
         }
         else {
@@ -174,6 +177,7 @@ class As400OperatorJournalEvidenceTest {
     void shouldTraverseOnlyTheRequiredNativeChainAndRejectAnUnderreportedCount(boolean underreported) throws Exception {
         var f = new Fixture();
         int count = 129;
+        var directory = new ArrayList<Map<String, Object>>();
         f.data.get(0).put("NUMBER_JOURNAL_RECEIVERS", underreported ? count - 1 : count);
         f.data.get(0).put("ATTACHED_JOURNAL_RECEIVER_NAME", "R" + (count - 1));
         for (int i = 0; i < count; i++) {
@@ -186,10 +190,19 @@ class As400OperatorJournalEvidenceTest {
             row.put("PREVIOUS_JOURNAL_RECEIVER", i == 0 ? null : "R" + (i - 1));
             row.put("NEXT_JOURNAL_RECEIVER_LIBRARY", i == count - 1 ? null : "LIB");
             row.put("NEXT_JOURNAL_RECEIVER", i == count - 1 ? null : "R" + (i + 1));
-            if (i > 0) {
-                f.append(row);
-            }
+            directory.add(row);
         }
+        var index = new AtomicInteger(-1);
+        when(f.rows.get(1).next()).thenAnswer(call -> index.incrementAndGet() < directory.size());
+        when(f.rows.get(1).getString(anyString())).thenAnswer(call -> {
+            var value = directory.get(index.get()).get(call.getArgument(0));
+            return value == null ? null : value.toString();
+        });
+        when(f.rows.get(1).getBigDecimal(anyString())).thenAnswer(call -> {
+            var value = directory.get(index.get()).get(call.getArgument(0));
+            return value == null ? null : new BigDecimal(value.toString());
+        });
+        f.append(f.data.get(0));
         var collector = As400OperatorJournalEvidence.retained(() -> f.connection, new JournalReceiver("JRN", "LIB"));
         if (underreported) {
             assertThrows(SQLException.class, () -> collector.collectFrom(new JournalReceiver("R0", "LIB")));
@@ -197,9 +210,10 @@ class As400OperatorJournalEvidenceTest {
         else {
             var observed = collector.collectFrom(new JournalReceiver("R0", "LIB"));
             assertThat(As400OperatorCutReader.chain(observed, new JournalReceiver("R0", "LIB"))).hasSize(count);
-            for (var statement : f.statements) {
-                verify(statement).setMaxRows(2);
-            }
+            assertThat(f.statements).hasSize(3);
+            verify(f.statements.get(0)).setMaxRows(2);
+            verify(f.statements.get(1)).setMaxRows(count + 1);
+            verify(f.statements.get(2)).setMaxRows(2);
             f.closed();
         }
     }

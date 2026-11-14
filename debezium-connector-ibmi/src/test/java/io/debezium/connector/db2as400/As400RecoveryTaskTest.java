@@ -78,6 +78,92 @@ class As400RecoveryTaskTest {
 
     @ParameterizedTest
     @ValueSource(booleans = { false, true })
+    void shouldAcknowledgeCompletedOutputBeforeRetryingLaterSchemaEvidence(boolean disk) throws Exception {
+        var fixture = new Fixture(directory);
+        var candidate = fixture.history().recordOnlineCandidate(fixture.journalIdentity, Fixture.position(29), fixture.receiverIdentity,
+                fixture.definitions, Fixture.POLICY, new As400BindingHistory.Discovery(Fixture.position(29), fixture.receiverIdentity),
+                Map.of("offset.event_sequence", "28", "offset.receiver", Fixture.RECEIVER.name(),
+                        "offset.receiver_library", Fixture.RECEIVER.library(), "offset.processed", "true", "snapshot_completed", "true"));
+        var initial = As400Checkpoint.afterVerifiedBoundary(fixture.journalIdentity, candidate.fingerprint(), Fixture.position(29),
+                fixture.receiverIdentity).toOffset();
+        var observations = new java.util.concurrent.atomic.AtomicInteger();
+        var attempts = new java.util.concurrent.atomic.AtomicInteger();
+        var input = new As400RecoveryTaskFixture(directory, initial.get("capture_fingerprint")) {
+            @Override
+            public As400ContinuousRuntime.Limits runtimeLimits() {
+                var limits = super.runtimeLimits();
+                return new As400ContinuousRuntime.Limits(limits.transactions(), limits.lifecycle(), limits.outputRecords(), true, limits.storage());
+            }
+
+            @Override
+            public boolean allowLegacyHandoffRecovery() {
+                return true;
+            }
+
+            @Override
+            As400BindingHistory.Recovered recoverHistory(Map<String, ?> durable) throws Exception {
+                return this.fixture.history().recoverOnlineCandidate(durable, journalIdentity(), Fixture.POLICY);
+            }
+
+            @Override
+            public As400OperatorCutReader.Cut read(Map<String, ?> durable,
+                                                   java.util.Optional<io.debezium.ibmi.db2.journal.retrieve.RawJournalPage.Entry> scan)
+                    throws Exception {
+                // The first poll has no verified interval and cannot emit even a heartbeat.
+                if (attempts.incrementAndGet() <= 3) {
+                    throw new As400OperatorJournalEvidence.IncompleteObservationException(new java.sql.SQLWarning("Catalog changed", "01548", 462));
+                }
+                return super.read(durable, scan);
+            }
+
+            @Override
+            public As400SchemaChange schemaChange(As400BindingDefinition before, io.debezium.ibmi.db2.journal.retrieve.RawJournalPage.Entry opening,
+                                                  As400SourceNormalizer.TableResolver bindings) {
+                observations.incrementAndGet();
+                throw new As400SchemaTimeline.PendingChangeException();
+            }
+        };
+        input.fixture.entries.removeIf(entry -> entry.position().offset().longValueExact() > 42);
+        try (var stream = getClass().getResourceAsStream("/native-transactions/transactional-ddl-rollback.json")) {
+            for (var item : new com.fasterxml.jackson.databind.ObjectMapper().readTree(stream).path("entries")) {
+                byte[] raw = java.util.Base64.getDecoder().decode(item.path("raw").asText());
+                var bytes = java.nio.ByteBuffer.wrap(raw);
+                long sequence = bytes.getLong(24);
+                if (sequence != 47) {
+                    continue;
+                }
+                // A cycle-zero CREATE still needs its physical completion and
+                // catalog evidence immediately. An open transactional CREATE
+                // now stages records instead of globally waiting here.
+                bytes.putLong(24, 44);
+                var names = new com.ibm.as400.access.AS400Text(10, 37);
+                names.toBytes(Fixture.RECEIVER.library(), raw, 167);
+                names.toBytes(Fixture.RECEIVER.library(), raw, bytes.getInt(8) + 16 + 10);
+                input.fixture.entries.add(new io.debezium.ibmi.db2.journal.retrieve.RawJournalPage.Entry(Fixture.position(44),
+                        new io.debezium.ibmi.db2.journal.retrieve.rjne0200.EntryHeaderDecoder(37).decode(raw, 0), raw));
+            }
+        }
+        input.tail = 44;
+        input.storage = storage(disk);
+        try (var run = new Running(input, initial)) {
+            run.start();
+            var batch = run.throughCheckpoint("42");
+            assertThat(As400RecoveryTestSupport.data(batch)).containsExactly("c:DCOC1107.A:8");
+            assertThat(observations).hasValue(1);
+            assertThat(attempts).hasValue(4);
+            assertThat(input.reads).hasValue(1);
+            assertThat(run.durable.get()).isEqualTo(initial);
+            run.ack(batch);
+            await(() -> observations.get() > 1);
+            assertThat(input.stopped).isFalse();
+            assertThat(input.reads.get()).isGreaterThan(1);
+            assertThat(run.durable.get().get("completed_through.sequence")).isEqualTo("42");
+            assertThat(run.task.recoveredOffset()).isEqualTo(run.durable.get());
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = { false, true })
     void interruptedClearBatchReplaysWholeBatchFromPreviousDurableWInFreshTask(boolean disk) throws Exception {
         Map<String, String> initial = As400RecoveryTaskFixture.initialize(new Fixture(directory));
         Map<String, ?> saved;

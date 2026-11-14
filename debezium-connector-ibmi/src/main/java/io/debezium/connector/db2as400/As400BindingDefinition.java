@@ -50,6 +50,7 @@ record As400BindingDefinition(TableIdentity identity, Table schema, List<As400Bi
     static final String RRN_COLUMN = "__IBMI_RRN";
     private static final String EXCLUDED = "ibmi.output.excluded";
     private static final String EXCLUDED_LOB = "ibmi.output.excluded.lob";
+    static final String UNOBSERVED_LAYOUT = "UNOBSERVED";
 
     As400BindingDefinition(TableIdentity identity, Table schema, List<Codec> codecs) {
         this(identity, schema, codecs, Map.of(identity.member(), identity.memberJournalId()));
@@ -91,10 +92,12 @@ record As400BindingDefinition(TableIdentity identity, Table schema, List<As400Bi
             varying |= List.of("VARBINARY", "VARCHAR", "VARGRAPHIC").contains(codecs.get(i).kind());
         }
         String[] format = identity.recordFormat().split(":", -1);
-        require(format.length == 5 && format[0].matches("[A-Z0-9_#$@]{1,10}") && format[1].matches("[0-9A-F]{13}")
-                && format[2].matches("[1-9][0-9]{0,7}") && Integer.parseInt(format[2]) <= MAX_ROW_BYTES
-                && format[3].matches("[1-9][0-9]{0,3}") && Integer.parseInt(format[3]) <= CompleteRowEntryDecoder.MAX_COLUMNS
-                && List.of("true", "false").contains(format[4]), "Invalid native record format");
+        require(excluded && identity.recordFormat().equals(UNOBSERVED_LAYOUT)
+                || format.length == 5 && format[0].matches("[A-Z0-9_#$@]{1,10}") && format[1].matches("[0-9A-F]{13}")
+                        && format[2].matches("[1-9][0-9]{0,7}") && Integer.parseInt(format[2]) <= MAX_ROW_BYTES
+                        && format[3].matches("[1-9][0-9]{0,3}") && Integer.parseInt(format[3]) <= CompleteRowEntryDecoder.MAX_COLUMNS
+                        && List.of("true", "false").contains(format[4]),
+                "Invalid native record format");
         // SYSFILES can retain CONTAINS_VARYING_LENGTH=YES after the last
         // varying column is dropped (observed with a four-byte INTEGER row).
         // Preserve that native observation in the identity; derive decoding
@@ -120,11 +123,24 @@ record As400BindingDefinition(TableIdentity identity, Table schema, List<As400Bi
         return schema.attributeWithName(EXCLUDED) != null;
     }
 
+    boolean unobservedLayout() {
+        return excluded() && identity.recordFormat().equals(UNOBSERVED_LAYOUT);
+    }
+
+    /** Retained identity only; no earlier field layout is claimed to describe new excluded rows. */
+    As400BindingDefinition withoutObservedLayout() {
+        var id = new TableIdentity(identity.tableId(), identity.physicalFile(), identity.member(), identity.fileJournalId(), identity.memberJournalId(),
+                UNOBSERVED_LAYOUT);
+        var excluded = excluded(id);
+        return new As400BindingDefinition(id, excluded.schema(), List.of(), members);
+    }
+
     static Map<String, String> validatedMembers(TableIdentity identity, Map<String, String> members) {
-        require(identity.memberJournalId().equals(members.get(identity.member())), "Canonical member is absent or changed");
         if (members instanceof MemberMap validated && validated.fileJournalId.equals(identity.fileJournalId())) {
+            require(members.isEmpty() || identity.memberJournalId().equals(members.get(identity.member())), "Canonical member is absent or changed");
             return members;
         }
+        require(identity.memberJournalId().equals(members.get(identity.member())), "Canonical member is absent or changed");
         var ordered = new TreeMap<>(members);
         require(ordered.values().stream().distinct().count() == ordered.size(), "Member journal identities must be distinct");
         ordered.forEach((member, jid) -> {
@@ -132,6 +148,16 @@ record As400BindingDefinition(TableIdentity identity, Table schema, List<As400Bi
                     "Complete distinct member journal identity required");
         });
         return new MemberMap(identity.fileJournalId(), ordered);
+    }
+
+    /** The retained identity anchors history; its former member is no longer authorized for rows. */
+    As400BindingDefinition withoutMembers() {
+        require(members.size() == 1, "Last-member removal requires exactly one retained member");
+        return new As400BindingDefinition(identity, schema, codecs, new MemberMap(identity.fileJournalId(), Map.of()));
+    }
+
+    boolean memberless() {
+        return members.isEmpty();
     }
 
     /** Share one validated immutable mapping across member decoder views, never copy the whole file's members per row. */
@@ -167,7 +193,7 @@ record As400BindingDefinition(TableIdentity identity, Table schema, List<As400Bi
 
     TableBinding binding(int maximumRowBytes) {
         if (excluded()) {
-            return new TableBinding(identity, null, false, true, members, schema.attributeWithName(EXCLUDED_LOB) != null);
+            return new TableBinding(identity, null, false, true, members, unobservedLayout() || schema.attributeWithName(EXCLUDED_LOB) != null);
         }
         boolean[] nullable = new boolean[codecs.size()];
         for (int i = 0; i < nullable.length; i++) {
@@ -201,7 +227,9 @@ record As400BindingDefinition(TableIdentity identity, Table schema, List<As400Bi
         schema.attributes().forEach(a -> attributes.put(a.name(), a.value()));
         // Keep existing single-member history byte-compatible. Version 2 pins
         // every member, sharing the file's schema and physical decoders.
-        attributes.put(PREFIX + "version", members.size() == 1 ? "1" : "2");
+        // Version 3 explicitly retains a physical file with no active members.
+        // Older readers must reject it rather than revive its historical anchor.
+        attributes.put(PREFIX + "version", memberless() ? "3" : members.size() == 1 ? "1" : "2");
         if (members.size() > 1) {
             members.forEach((member, jid) -> attributes.put(PREFIX + "members." + member, jid));
         }
@@ -221,7 +249,7 @@ record As400BindingDefinition(TableIdentity identity, Table schema, List<As400Bi
 
     static As400BindingDefinition restore(Table stored) {
         String version = value(stored, "version");
-        require(List.of("1", "2").contains(version), "Unsupported binding version");
+        require(List.of("1", "2", "3").contains(version), "Unsupported binding version");
         var identity = new TableIdentity(stored.id(), value(stored, "file"), value(stored, "member"),
                 value(stored, "file.jid"), value(stored, "member.jid"), value(stored, "format"));
         List<Codec> codecs = new ArrayList<>();
@@ -234,12 +262,13 @@ record As400BindingDefinition(TableIdentity identity, Table schema, List<As400Bi
         if (version.equals("1")) {
             members.put(identity.member(), identity.memberJournalId());
         }
-        else {
+        else if (version.equals("2")) {
             stored.attributes().stream().filter(a -> a.name().startsWith(PREFIX + "members."))
                     .forEach(a -> require(members.put(a.name().substring((PREFIX + "members.").length()), a.value()) == null, "Duplicate member binding"));
             require(members.size() > 1, "Version 2 requires a complete multi-member binding");
         }
-        var restored = new As400BindingDefinition(identity, clean.create(), codecs, members);
+        var restored = new As400BindingDefinition(identity, clean.create(), codecs,
+                version.equals("3") ? new MemberMap(identity.fileJournalId(), Map.of()) : members);
         // Reject extra/duplicate attributes and noncanonical descriptors instead of dropping them.
         require(stored.attributes().stream().sorted(Comparator.comparing(Attribute::name)).toList().equals(restored.storedTable().attributes()),
                 "Incomplete or unsupported binding attributes");

@@ -30,6 +30,27 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
 class As400DcgScopeTest {
+    @org.junit.jupiter.api.io.TempDir
+    java.nio.file.Path directory;
+
+    @ParameterizedTest
+    @ValueSource(strings = { "", "after-images", "stopped-journaling", "wrong-journal", "missing", "duplicate", "warning" })
+    void shouldRequireCompleteCapturedImagesBeforeOnlineAdmission(String fault) throws Exception {
+        var f = new Fixture(fault);
+        when(f.connection.isReadOnly()).thenReturn(true);
+        var definitions = new As400RecoveryTestSupport.Fixture(directory).definitions;
+        var journal = new io.debezium.ibmi.db2.journal.retrieve.JournalReceiver("APPJRN", "JOURNALS");
+        if (fault.isEmpty()) {
+            As400DcgScope.requireImages(f.connection, journal, definitions);
+            assertThat(f.objects).hasSize(definitions.size());
+        }
+        else {
+            assertThrows(SQLException.class, () -> As400DcgScope.requireImages(f.connection, journal, definitions));
+            assertThat(f.objects).hasSize(1);
+        }
+        assertThat(f.locks).isEmpty();
+    }
+
     @Test
     void completeInventoryIncludesUncapturedFilesAndUsesBoundedExactQueries() throws Exception {
         var f = new Fixture("");

@@ -22,6 +22,7 @@ import io.debezium.connector.db2as400.As400TransactionBuffer.CommittedBatch;
 import io.debezium.connector.db2as400.As400TransactionBuffer.Limits;
 import io.debezium.ibmi.db2.journal.retrieve.FileChangeEntryDecoder;
 import io.debezium.ibmi.db2.journal.retrieve.JournalPosition;
+import io.debezium.ibmi.db2.journal.retrieve.RawJournalPage;
 import io.debezium.ibmi.db2.journal.retrieve.TransactionControlEntryDecoder;
 import io.debezium.ibmi.db2.journal.retrieve.TransactionControlEntryDecoder.Control;
 import io.debezium.ibmi.db2.journal.retrieve.TransactionControlEntryDecoder.Kind;
@@ -51,6 +52,16 @@ final class As400ReplayCoordinator implements AutoCloseable {
     private final Set<BigInteger> orphans;
     private final As400SpillStore spill;
     private final As400SpillStore.Codec<SourceRecord> outputCodec;
+    private final Map<BigInteger, Map<JournalPosition, As400JournalLifecycle.Entry>> deferredSchemas = new java.util.HashMap<>();
+    private final As400SpillStore.Codec<As400JournalLifecycle.Entry> deferredCodec = As400SpillCodec.codec((out, entry) -> {
+        As400SpillCodec.position(out, entry.position());
+        As400SpillCodec.bytes(out, entry.bytes());
+    }, in -> {
+        var position = As400SpillCodec.position(in);
+        byte[] bytes = As400SpillCodec.bytes(in);
+        return new As400JournalLifecycle.Entry(new io.debezium.ibmi.db2.journal.retrieve.rjne0200.EntryHeaderDecoder(RawJournalPage.METADATA_CCSID).decode(bytes, 0),
+                bytes, position);
+    });
     private As400Checkpoint checkpoint;
     private JournalPosition completed;
     private JournalPosition scan;
@@ -150,6 +161,20 @@ final class As400ReplayCoordinator implements AutoCloseable {
 
     boolean replaying() {
         return replaying;
+    }
+
+    BigInteger schemaCycle(RawJournalPage.Entry opening) {
+        ensureRunning();
+        if (journalLifecycle == null) {
+            throw new IllegalStateException("Deferred schema requires native lifecycle validation");
+        }
+        return journalLifecycle.schemaCycle(opening);
+    }
+
+    void requireIdleTable(As400TransactionBuffer.TableIdentity table) {
+        ensureRunning();
+        buffer.requireIdleTable(table);
+        autocommit.requireIdleTable(table);
     }
 
     /** Call only at a verified journal tail, not at an empty RPC page or filter boundary. */
@@ -285,8 +310,60 @@ final class As400ReplayCoordinator implements AutoCloseable {
     private void drainValidatedEntries() throws Exception {
         while (pending == null && journalLifecycle.hasReady()) {
             var entry = journalLifecycle.poll().orElseThrow();
+            var objectCycle = tables.deferredObjectCycle(entry.header(), entry.position());
+            var cycle = objectCycle == null ? entry.header().getCommitCycle() : objectCycle;
+            if (tables.deferredSchema(cycle) && !entry.type().equals("C/SC")) {
+                boolean terminal = entry.header().getJournalCode() == 'C' && Set.of("CM", "RB").contains(entry.header().getEntryType());
+                if (!terminal) {
+                    buffer.retainDeferred(cycle, entry.bytes().length);
+                    var held = deferredSchemas.computeIfAbsent(cycle, key -> spill == null ? new java.util.LinkedHashMap<>()
+                            : spill.map("deferred-schema/" + key, As400SpillCodec.POSITION, deferredCodec));
+                    held.put(entry.position(), entry);
+                    continue;
+                }
+                drainDeferredSchema(entry);
+            }
             acceptComponent(entry.header(), entry.bytes(), 0, entry.position());
         }
+    }
+
+    private void drainDeferredSchema(As400JournalLifecycle.Entry terminal) throws Exception {
+        var cycle = terminal.header().getCommitCycle();
+        var held = deferredSchemas.remove(cycle);
+        if (held == null || held.isEmpty()) {
+            throw new IllegalArgumentException("Deferred schema has no retained lifecycle entries");
+        }
+        JournalPosition previous = null;
+        var entries = held.values().iterator();
+        while (entries.hasNext()) {
+            var entry = entries.next();
+            var objectCycle = tables.deferredObjectCycle(entry.header(), entry.position());
+            if (!cycle.equals(objectCycle == null ? entry.header().getCommitCycle() : objectCycle) || order.compare(entry.position(), terminal.position()) >= 0
+                    || previous != null && order.compare(previous, entry.position()) >= 0) {
+                throw new IllegalArgumentException("Deferred schema entries changed source order or cycle");
+            }
+            previous = entry.position();
+            entries.remove();
+            buffer.releaseDeferred(cycle, entry.bytes().length);
+            var raw = new RawJournalPage.Entry(entry.position(), entry.header(), entry.bytes());
+            if (tables.schemaChangeRequiresIdle(raw)) {
+                var table = tables.resolve(entry.header().getFile(), entry.header().getLibrary());
+                if (!table.excluded()) {
+                    buffer.requireIdleTable(table.identity());
+                    autocommit.requireIdleTable(table.identity());
+                }
+            }
+            if (!tables.replaySchemaEntry(raw) && !As400JournalLifecycle.administrative(entry, tables)) {
+                var source = As400SourceMetadata.from(entry.header(), entry.position());
+                buffer.replayDeferred(source, () -> {
+                    if (normalizer.accept(entry.header(), entry.bytes(), 0, entry.position()).isPresent()) {
+                        throw new IllegalStateException("Deferred schema released output before its terminal");
+                    }
+                });
+            }
+        }
+        held.clear();
+        tables.finishDeferredSchema(new RawJournalPage.Entry(terminal.position(), terminal.header(), terminal.bytes()));
     }
 
     /**
@@ -487,7 +564,19 @@ final class As400ReplayCoordinator implements AutoCloseable {
         }
         As400Checkpoint snapshot = new As400Checkpoint(loaded.journalIdentity(), loaded.captureFingerprint(), oldest.orElse(boundary), oldest.isPresent(), boundary,
                 order.incarnation(oldest.orElse(boundary)), order.incarnation(boundary), checkpoint.snapshotState(), checkpoint.schemaState());
-        return tables.schemaCheckpoint(journalLifecycle == null ? snapshot : journalLifecycle.retainContext(snapshot));
+        As400Checkpoint previous;
+        do {
+            previous = snapshot;
+            snapshot = tables.retainSchemaContext(snapshot);
+            if (journalLifecycle != null) {
+                snapshot = journalLifecycle.retainContext(snapshot);
+            }
+        } while (!snapshot.replayFrom().equals(previous.replayFrom()) || snapshot.replayInclusive() != previous.replayInclusive());
+        // Neither history can retire dependencies until both have settled F.
+        if (journalLifecycle != null) {
+            journalLifecycle.releaseContextBefore(snapshot);
+        }
+        return tables.schemaCheckpoint(snapshot);
     }
 
     private void completeBatch(CommittedBatch batch) {
@@ -527,6 +616,7 @@ final class As400ReplayCoordinator implements AutoCloseable {
 
     private RecoveryException stop(String message, Exception cause) {
         stopped = true;
+        deferredSchemas.clear();
         buffer.abort();
         if (autocommit != null) {
             autocommit.close();
@@ -554,6 +644,7 @@ final class As400ReplayCoordinator implements AutoCloseable {
             orphans.clear();
         }
         pending = null;
+        deferredSchemas.clear();
     }
 
     interface RecordFactory {

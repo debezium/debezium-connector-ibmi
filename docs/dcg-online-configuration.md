@@ -98,8 +98,19 @@ unresolved native sequences or a same-table transactional prefix already exposed
 before the clear are rejected without acknowledging past the clear. Temporary
 indexes and row images use disposable disk storage; they never replace the journal
 as recovery authority. After all held work drains, normal online admission resumes
-without resnapshotting. Clears skipped before the saved legacy position are not
-repaired by enabling the feature.
+without resnapshotting. Different jobs may have started their transactions in a
+different order from their eventual clears; each outcome is matched to its own
+producer and source position. Clears skipped before the saved legacy position are
+not repaired by enabling the feature.
+
+A rejected held clear is not a temporary admission delay: it stops the task at the
+safe position, and restart rejects the same unresolved evidence. Disabling the
+feature and skipping `t` would discard that clear; it is not a lossless recovery
+procedure. Restore the required receiver history or correct the identified source
+configuration first. If the original history or row definition cannot be recovered,
+reconcile the affected destination from a new consistent snapshot and establish a
+new connector generation under the normal snapshot procedure. Keep the old offsets
+and history for diagnosis; never reset them merely to get past the failed entry.
 
 A failed `DLCOBJ` must not be treated as a released lock. The server program makes
 three bounded release attempts; after an explicit terminal release failure, the
@@ -194,32 +205,279 @@ with these online-specific differences:
   just by changing a filter. Minimized/defaulted or ambiguous row metadata still
   rejects. Catalog reads use bounded batches without caching.
   Excluded updates may use `IMAGES(*AFTER)` because no before-image is published
-  or paired for them. Captured updates still require their exact before-image.
-  Grant/revoke and trigger creation/removal records are identity-checked metadata.
-  Triggered row changes are still processed as ordinary journaled rows. Constraint changes on
-  excluded files do not produce output; captured constraint changes remain
-  rejected until their effect on output keys can be established. A complete
+  or paired for them. Captured files must use `IMAGES(*BOTH)`, checked before
+  accepting an enablement candidate and again before offering its durable handoff.
+  A busy or unsafe candidate is still replaceable at that point; no handoff is
+  acknowledged first. Already acknowledged handoffs recover through their retained
+  journal/history protocol instead of adding a current-catalog startup condition.
+  Ordinary recovery validates the retained journal lifecycle instead of requiring
+  today's catalog to look idle: a valid transactional clear can temporarily end
+  journaling. Captured updates still require their exact before-image.
+  Grant/revoke and trigger creation/removal records are identity-checked metadata,
+  including commitment-control records tied to their actual producer, transaction
+  start and active native savepoint.
+  Triggered row changes are still processed as ordinary journaled rows. Constraint
+  additions/removals (`D/AC`, `D/DC`) preserve the already chosen decoder and event
+  key, as legacy streaming does; they do not reacquire today's key and apply it to
+  older buffered rows. This includes CHECK, foreign-key and primary-key constraints.
+  Removing a database uniqueness constraint does not make duplicate event keys
+  unique; consumers still receive the retained key values. A qualified column
+  schema refresh or a new capture establishes its own key definition. A newly
+  created table may establish its initial key before its first row; earlier rows
+  that need an unavailable initial key definition still reject. A complete
   physical-file deletion retires its binding in durable schema history. A
   transactional DROP requires its verified commit and physical deletion records;
   rollback retains the original binding. The old decoder remains available for
   buffered rows until the physical deletion completes. DROP
   does not emit a truncate or delete existing topic records. A later creation
-  under the same name requires a newly qualified file/member identity.
+  under the same name requires a newly qualified file/member identity. Member
+  removal is qualified by its exact F/DM and F/MD pair and retains the identities
+  of any remaining members. Removing the final member retains the physical file
+  with no active member in durable history. Unrelated capture and restart can
+  continue; rows or clears cannot use the removed member. A later member requires
+  a newly qualified native association before its rows can be decoded. Removal
+  itself does not emit a truncate or add member-aware keys or snapshots. The
+  native compatibility test covers an empty final member, not implicit deletion
+  of its populated contents. A program-described file excluded from capture uses
+  native IFS member identities when the SQL member catalog contains no rows;
+  it does not need a fabricated SQL schema. Capturing its untyped record layout
+  is not supported.
   Object-identity queries group at most 16 exact file/member paths; this bounds
   each SQL request, not the total file inventory. Missing, duplicate, foreign,
   mismatched or incomplete observations reject the whole acquisition. The full
   before/after metadata and raw journal checks still apply.
   Observed column changes and ordinary file creation have validated transitions:
   persist the new schema before affected output, and replay the boundary from
-  history after restart. Multiple intervening definitions, incomplete creation,
-  identity replacement and unqualified journaling transitions still reject;
-  current catalog equality alone cannot prove an older row layout. This is
-  limited current-definition refresh, consistent with the original connector,
-  rather than arbitrary historical DDL reconstruction.
+  history after restart. Transactional CREATE and ALTER require their actual
+  commit or full rollback; nested statement savepoints are matched to the native
+  markers. A completed internal savepoint between an ALTER's D/EF and D/JF
+  records must match its transaction, producer, deeper level and exact release
+  target; it does not release the outer ALTER scope. IBM documents these
+  [internal nested operations](https://www.ibm.com/docs/en/i/7.5.0?topic=objects-sequence-journal-entries-under-commitment-control).
+  A rolled-back creation leaves no binding, and a rolled-back ALTER
+  retains the original definition after verifying its journaling restoration.
+  A savepoint established after the last schema change may undo rows without
+  undoing that schema change; its compensation and rollback control still pass
+  through the ordinary transaction buffer. Rolling back the DDL itself to a
+  savepoint remains unqualified. Discarded rows do not add per-row records to
+  schema history. Consecutive ALTERs
+  may share one observed final definition when no captured row needs an intermediate
+  layout; excluded rows do not require that layout. Captured intervening rows,
+  incomplete creation, identity replacement and unqualified journaling transitions
+  still reject: current catalog equality alone cannot prove an older row layout.
+  CREATE followed by ALTER can acquire the final definition when no earlier row
+  requires the creation's intermediate layout. The complete creation, ALTER and
+  transaction outcomes remain in recovery history. For an excluded new table,
+  earlier rows need no value decoder: the acquired SQL identity must prove its
+  exclusion, and the complete creation/change interval bounds where historical
+  row lengths may differ. Native identities, complete-image flags, payload and
+  null-map bounds, transaction effects and replay history remain checked. This
+  also covers initial key additions and qualified CL-command changes. A vanished
+  table's unknown SQL identity is not inferred from its system name.
+  A later fully rolled-back
+  clear of the same file does not invalidate an earlier ALTER observation: its
+  exact physical restoration must be present and still passes through truncate
+  recovery without being consumed as schema-only metadata.
+  CREATE followed by DROP without intervening rows needs no vanished catalog
+  definition. CREATE followed by a clear retains the ordinary row/clear ordering
+  and rollback rules; those records are not discarded as creation metadata.
+  An open transactional CREATE, ALTER or DROP retains its owned journal records in the configured
+  memory or disk buffer while unrelated committed changes continue. Scan R and
+  completed output W may advance; replay floor F retains the original transaction
+  start. The connector acquires the changed definition after the native commit or
+  full rollback is observed, persists qualified schema history, then decodes and
+  releases that transaction. Raw records share the transaction payload/entry
+  budget; they are never evicted to make progress. A replacement rebuilds them
+  from F. New history records identify the outcome at which the schema becomes
+  visible; existing history records retain their original encoding and hashes.
+  This is forward compatibility with retained old history, not permission to
+  downgrade: older builds that cannot read outcome-visible history or combined
+  ALTER/DROP lifecycles must not resume these offsets. Keep the matching connector,
+  offsets and history together.
+  An unfinished CREATE retains validated file/member identities without inventing
+  a queryable schema. Its rows remain invisible until commit; full rollback
+  leaves no binding. DROP retains the old decoder until its physical deletion
+  completes, so earlier rows in the transaction can still publish at commit.
+  Incomplete physical companions or unavailable outcome metadata can defer scanning;
+  the connector logs the
+  waiting position/table and elapsed wait. The connector refreshes observed
+  current definitions; it cannot reconstruct arbitrary historical DDL.
+  LABEL and COMMENT records retain their distinct physical-file or member
+  identities, including their observed transaction/savepoint context. They can
+  follow CREATE or ALTER in the same acquisition window. A miscellaneous change
+  to a captured table must leave its retained column/key definition unchanged,
+  or a subsequent qualified ALTER must establish the new definition without an
+  intervening captured row that needs an unavailable layout. A complete metadata
+  prefix with no intervening rows can retain the old definition until that ALTER,
+  allowing unrelated output to continue while the ALTER is open.
+  CL-command subtype-1 changes, such as `CHGPF SIZE(*NOMAX)`, also require exact
+  file/member identity. For captured files the acquired column/key definition
+  must remain unchanged. A command sequence needing an unavailable intermediate
+  row layout is rejected rather than decoded using the final catalog definition.
+  Same-library physical renames require the original file JID, every retained
+  member's matching rename, and an acquired definition with the same columns,
+  keys and record format. Recovery follows the new name through immutable
+  history. Distinct SQL and system names may put a metadata pair on the old name
+  before the physical rename. Historical callbacks establish the SQL name at
+  that metadata boundary; the native name changes at the separately validated
+  rename boundary.
+  A committed ALTER followed by a physical rename can acquire the definition
+  through the proven new file name while retaining the old SQL name for rows
+  before D/FN. The rename remains a separate history and output boundary; later
+  layout changes, incomplete member associations and ambiguous SQL names reject.
+  An empty new file can also be renamed before its first metadata acquisition:
+  the complete creation and rename association are retained together. This
+  requires no earlier rows or clear that would need the unavailable old SQL name,
+  and the new name must not replace another retained binding.
+  A physical rename followed by a complete DROP can retire the old binding
+  without querying the vanished alias when no row between them needs that
+  alias. A replacement created under the original name has its own file/member
+  identities; completing the old object's DROP cannot remove the replacement.
+  Missing companions, an uncommitted or rolled-back DROP, and intervening rows
+  that require the vanished SQL name do not qualify for this shortcut.
+  For excluded tables, exact historical SQL names can instead establish a
+  creation or rename prefix independently of a later DROP. Every name in that
+  prefix must remain outside the ordinary capture predicate, including the
+  signal table. The prefix is saved as a separate history transition, and
+  ordinary replay handles the later rename and deletion. A new object's binding
+  records identity only, with no inferred row layout. Replacement tasks can
+  resume between these transitions; selected names and missing proof reject.
+  A completed ALTER followed by a complete DROP can retire a known binding
+  without reading a vanished catalog, provided no intervening row requires the
+  missing definition. Both file and member identities and the separate outcomes
+  remain checked. A missing catalog is retried once only when a new retained
+  DROP or physical rename explains the disappearance of that exact file. The
+  retry must qualify the full lifecycle; absence alone never proves exclusion.
+  A validated transition that overlaps metadata acquisition also gets one fresh
+  observation. Continued movement defers that poll without accepting stale
+  metadata or advancing output. A committed ALTER followed by a fully rolled-back
+  ALTER requires the latter's exact physical restoration before acquisition and
+  keeps each transaction's history and row-discard boundary separate. A second
+  ALTER still open inside the first's observation window can still defer scanning
+  when a captured table needs an unavailable intermediate layout. For an excluded
+  table, native SQL-name evidence can qualify the first committed prefix without
+  querying the blocked catalog. History then stores identity only and explicitly
+  marks the row layout unobserved. Unrelated output can advance while F retains
+  the second transaction. This definition cannot supply captured values; a later
+  capture/name transition requires a complete acquired schema. After full
+  rollback, the restored definition is reacquired when retained history shows
+  no later schema, name or key transition overlapping the catalog observation.
+  A known pre-rollback definition is retained exactly. The names-only
+  API authority described below also applies to this case. Older candidate builds
+  cannot read this identity-only history and must not be used to roll it back.
+  A rollback that reacquires a previously unobserved layout also needs the
+  updated history reader: earlier candidates require identical definitions on
+  both sides of every rollback and reject that record. Keep the required
+  receivers and use a compatible build; changing the flag does not convert
+  versioned recovery offsets back to legacy offsets.
+  A new file created, loaded and dropped before observation can be discarded
+  only when retained native D/CT and metadata records establish every SQL name
+  in its lifetime and the ordinary capture predicate excludes all of them
+  (including the signal table). Missing names and selected transient rows with
+  no historical layout remain errors. A private API job lazily compiles a CL
+  helper in QTEMP and invokes QDBRPLAY with its names-only flag fixed to `1`.
+  It never replays DDL or creates a shadow application table. The job needs
+  authority to create/compile its private CL programs and user spaces, read the
+  retained receiver and call the native APIs; least-privilege authority for this
+  optional observation has not yet been qualified. Pointer-backed metadata is
+  copied and released in the retrieving job with IBM's 16,773,120-byte bound.
+  Historical names are not row schemas, and a missing current catalog never
+  supplies or substitutes a name. The replay floor retains the complete lifetime
+  until deletion, so a replacement repeats the proof from retained history.
+  This lifetime proof also covers a qualified ALTER before the DROP, including
+  a shared transaction outcome. Pointer-backed rows of new excluded files are
+  checked as bounded metadata; their external values are never read or published.
+  Captured rows still require complete values and a supported historical layout.
+  If an existing excluded table's ALTER commits before a later DROP, its known
+  identity can retain an explicitly unobserved layout until ordinary replay
+  retires the file. Its historical SQL name must remain excluded and unchanged.
+  The same proof is required if the DROP first appears in the final journal
+  observation after catalog acquisition.
+  An existing excluded file can also be altered, loaded and dropped in one
+  transaction. The shared commit must validate both lifecycles, and every row
+  must retain the exact member identity and transaction. Recovery keeps the
+  original binding and both lifecycles in history, pins the replay floor through
+  physical deletion, and rechecks historical names and capture selection on
+  restart. Selecting that table or losing its name evidence rejects replay;
+  the saved history does not authorize discarding newly selected rows.
+  A full rollback of ALTER/load/DROP can instead restore a known original
+  definition for either a captured or excluded table. ALTER and DROP must
+  identify the same full rollback; all four native restoration records and
+  the exact row/member, producer and transaction identities must validate.
+  The temporary layout is never used for output. The replay floor retains
+  the unfinished restoration, including across replacement, before ordinary
+  rows resume with the original definition. This does not qualify a savepoint
+  rollback that undoes DDL or a committed captured layout that was never observed.
+  A SQL-only rename can retain the system name and journal only a metadata pair.
+  It requires unchanged physical/member identities, columns, record format and
+  event key. Filtering and topics then use the SQL name at the qualified change
+  boundary, with that change persisted for restart. A known physical rename can
+  retain its original SQL name for rows before a later SQL-only rename. A clear
+  between metadata boundaries keeps the historical name at that clear, including
+  when a later DROP makes the catalog unavailable. The name-only proof never
+  authorizes decoding rows with an unknown intermediate layout. Missing or
+  conflicting name evidence, or a savepoint rollback that may have undone the
+  name change, rejects before accepting that proof. Unavailable intermediate SQL
+  names still reject; a rename does not remove records already published to the
+  old topic.
+  Creation-time name checks cover the entire observed interval, including rows,
+  clears and metadata after an ALTER. A newly acquired SQL name cannot silently
+  move earlier selected events to another topic or discard them under a changed
+  filter. This also applies to a clear that emits no individual row records.
+  Removing an alternative SQL name is distinguished from an ALTER that retains
+  it: the qualified miscellaneous rename records the journaled native target as
+  the resulting SQL name. LABEL/COMMENT callbacks that omit both names retain
+  the proven name. These checks do not substitute a current catalog name for a
+  missing historical name.
+  Standalone same-file member renames qualify their exact F/MN record: the old
+  member name and retained journal ID must agree, the payload must name the same
+  file and library, and the new member name must be unused. The schema, event
+  key, SQL table name and topic remain unchanged. Recovery retains the new
+  association; the old member name cannot authorize later rows. A member record
+  already belonging to a physical-file rename remains part of that transition.
+  A file moved to another library qualifies its D/FM and one F/MM for each
+  retained member. The library changes while the SQL table name, physical file
+  name, format, key and native identities remain unchanged. The full association
+  must be present before the transition is saved; F retains the opening until
+  all member records have been replayed. An unfinished transaction on the file,
+  a conflicting target binding or a changed identity rejects the move. Subsequent
+  output uses the destination schema and the ordinary capture filter; the old
+  library cannot authorize later rows. When a completed ALTER precedes the move
+  in the same catch-up interval, the verified move locates the current catalog
+  in its destination library. The ALTER and move retain separate history
+  boundaries, so rows before the move keep their original library and topic.
+  A completed CREATE followed by rows and a move can likewise acquire its
+  surviving definition in the destination. Its native creation and complete
+  file/member move must both qualify. The creation is saved under its original
+  library, then the move changes subsequent routing; the destination catalog
+  cannot relabel earlier rows or bypass capture selection. An unfinished
+  creation or incomplete move cannot authorize that definition.
+  Every member association must be present, and later layout/name changes cannot
+  substitute a different current definition. A move during catalog acquisition
+  requires a fresh observation. This does not qualify a cross-pool
+  save/restore operation or a library-wide rename. Captured rows between
+  unavailable intermediate SQL names remain unqualified.
+  Journal-attribute changes may switch
+  an excluded file between `IMAGES(*AFTER)` and `IMAGES(*BOTH)`; captured files
+  continue to require `IMAGES(*BOTH)`.
   Both `OMTJRNE(*NONE)` and `OMTJRNE(*OPNCLO)` are supported. Complete before/after
-  images remain mandatory; the clear's matched journaling companions cannot enable
-  remote filtering or inheritance. Ordinary open/close records are identity-checked
-  metadata, not table changes or transaction completion.
+  images remain mandatory, and inherited journaling remains unqualified.
+  `RMTJRNFTR(*YES)` is accepted on the required local journal: it makes entries
+  eligible for filtering during remote transmission, without removing local
+  entries ([IBM command semantics](https://www.ibm.com/docs/en/i/7.5.0?topic=ssw_ibm_i_75%2Fcl%2Fchgjrnobj.html)).
+  This does not admit reading a filtered remote journal. Ordinary open/close records are identity-checked
+  metadata, not table changes or transaction completion. Empty receivers do not
+  consume the entry-page budget or invent a completed output position. Long retained
+  receiver chains use bounded identity-query batches and a directory observation;
+  every poll still validates the required chain without a stale catalog cache.
+  A verified empty detached receiver avoids another RPC page read only while its
+  freshly observed native identity, range, links and recording settings match.
+  A catalog observation reporting only SQL0462 warning conditions is discarded and
+  retried without publishing or advancing checkpoints. After 30 consecutive
+  incomplete observations, streaming or handoff-prefix publication stops with
+  the underlying SQL warning; repair the catalog problem before restarting.
+  A complete observation resets this limit. Other warnings, partial
+  identity evidence and unverified cleanup remain errors.
 - The connector creates one task, as in ordinary CDC; `tasks.max` is a ceiling,
   so an omitted or larger positive value does not create additional tasks.
   Use a runtime compatible with the connector's Debezium version.
@@ -513,6 +771,23 @@ response codecs are explicit, so a German, Danish or Japanese worker locale does
 not reinterpret object names. This does not change column CCSIDs. Existing
 experimental native fingerprints without this metadata policy reject; ordinary
 legacy offsets can still be considered for a newly qualified handoff.
+
+### History after the last member is removed
+
+A physical file with no active members uses table-binding format version 3.
+The retained file identity anchors recovery; its former member identity cannot
+validate a new row. A later native member association supplies a new active
+identity. Existing single-member and multi-member definitions keep their
+previous formats.
+
+Earlier experimental builds do not understand this memberless format and must
+reject it. After such a transition has been saved, use a build that supports it
+for recovery. Replacing the plugin with an older build is not a supported
+rollback, and deleting offsets or history is not a safe downgrade procedure.
+This table-binding format is separate from the manifest version described below.
+Similarly, saved standalone member-rename and file-move transitions require a
+reader that understands those transitions; earlier experimental builds are not
+interchangeable.
 
 ### Output configuration changes on restart
 

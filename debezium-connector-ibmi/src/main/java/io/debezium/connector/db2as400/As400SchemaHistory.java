@@ -99,13 +99,18 @@ final class As400SchemaHistory {
             }
             require(record.previous().equals(previous[0]), "Missing or reordered schema history");
             var change = record.change();
-            String key = key(change.after() == null ? change.before() : change.after());
+            String key = key(change.before() == null ? change.after() : change.before());
             require(java.util.Objects.equals(change.before(), tables.get(key)), "Schema history lost its previous table definition");
+            String next = change.after() == null ? key : key(change.after());
+            require(next.equals(key) || !tables.containsKey(next), "Schema history rename collides with another retained file");
+            if (!next.equals(key)) {
+                tables.remove(key);
+            }
             if (change.after() == null) {
                 tables.remove(key);
             }
             else {
-                tables.put(key, change.after());
+                tables.put(next, change.after());
             }
             previous[0] = record.cursor();
             if (previous[0].ordinal() == required.floor().ordinal()) {
@@ -142,9 +147,36 @@ final class As400SchemaHistory {
             }
         });
         if (following[0] != null) {
-            int compared = order.compare(following[0].change().change(), checkpoint.replayFrom());
+            int compared = order.compare(following[0].change().visibility(), checkpoint.replayFrom());
             require(compared > 0 || compared == 0 && checkpoint.replayInclusive(), "Replay floor omits a required schema dependency");
         }
+    }
+
+    /** Repair an over-advanced schema cursor only from the unchanged, fully retained F/W interval. */
+    As400SchemaState reconcileFloor(As400Checkpoint checkpoint, As400JournalOrder order) throws Exception {
+        Cursor[] floor = { checkpoint.schemaState().floor() };
+        read(record -> {
+            if (record.cursor().ordinal() > checkpoint.schemaState().floor().ordinal()) {
+                return;
+            }
+            var change = record.change();
+            var mark = change.records().stream().filter(item -> item.position().equals(change.visibility())).findFirst().orElseThrow();
+            if (order.covers(mark.position(), mark.receiverIdentity())) {
+                int compared = order.compare(mark.position(), checkpoint.replayFrom());
+                if (compared > 0 || compared == 0 && checkpoint.replayInclusive()) {
+                    var opening = change.records().get(0);
+                    require(order.covers(opening.position(), opening.receiverIdentity())
+                            && order.compare(opening.position(), checkpoint.replayFrom()) >= (checkpoint.replayInclusive() ? 0 : 1),
+                            "Schema cursor repair requires the complete original transition at F");
+                    if (record.previous().ordinal() < floor[0].ordinal()) {
+                        floor[0] = record.previous();
+                    }
+                }
+            }
+        });
+        var corrected = new As400SchemaState(floor[0], checkpoint.schemaState().completed());
+        verifyFloor(checkpoint.withSchemaState(corrected), order);
+        return corrected;
     }
 
     Record append(Cursor previous, As400SchemaChange change) throws Exception {

@@ -127,3 +127,33 @@ clears, a following F/CR across restart and eventual handoff without another sna
 fixture authorization and cleanup as the public probe. Raw native evidence is
 private until inspected and sanitized; missing-history and already-published
 same-table prefix rejection are also covered by local Java tests.
+
+For unrelated-table progress during unfinished CREATE and DROP, use
+`python tools/dcg-schema-refresh-probe.py --open-objects NEW_DIRECTORY DCNCdddd source-offsets`
+(or replace `source-offsets` with `eos`). The runner uses the packaged connector
+and the same isolated-fixture authorization and cleanup. It holds each DDL
+transaction open across unrelated output and worker replacement, then commits
+or rolls it back. It checks durable F/W, invisible uncommitted rows, creation
+metadata, and rows written before a DROP. Native journal intervals and output
+evidence stay in the chosen directory; inspect and sanitize them before sharing.
+
+For mixed schema and transaction outcomes, use
+`python tools/dcg-schema-refresh-probe.py --mixed-outcomes NEW_DIRECTORY DCNCdddd source-offsets`
+(or `eos metadata`). It pauses the reader to reproduce ALTER followed by a
+rolled-back clear and CREATE followed by ALTER before metadata acquisition. It
+also commits an ALTER with a later row-only savepoint rollback, exercises
+CREATE→DROP, CREATE→clear/reload, adding a new table's key before its first row,
+`CHGPF SIZE(*NOMAX)`, and captured/excluded renames with distinct SQL/system names.
+It adds/removes a captured CHECK constraint and preserves the already published
+key through primary-key constraint removal, replacement and re-addition.
+It replaces the worker and checks exact output against the committed writer ledger. The same
+fresh-library authorization, retained raw evidence and verified cleanup apply.
+
+For a serial comparison of schema-refresh latency, run
+`python tools/dcg-schema-refresh-probe.py --schema-timing NEW_DIRECTORY DCNCdddd source-offsets`
+once per packaged build in different fresh libraries. Run without other local
+or native workloads where possible. The report separates DDL execution time,
+probe insertion-to-observation time and insertion-to-durable-offset time. Two
+rounds alternate baseline probes with captured/excluded ALTER and LABEL changes;
+every probe must appear exactly once. This includes broker-observer overhead and
+does not measure connector-only pause time or saturation throughput.

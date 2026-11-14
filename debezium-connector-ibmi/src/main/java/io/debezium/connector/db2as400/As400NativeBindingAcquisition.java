@@ -131,32 +131,52 @@ final class As400NativeBindingAcquisition {
     }
 
     Acquired collect(List<Request> requested) throws SQLException {
+        List<Request> requests = requests(requested);
+        require(!Thread.currentThread().isInterrupted(), "Native acquisition stopped");
+        try (Connection connection = Objects.requireNonNull(connections.open())) {
+            return collectOn(connection, requests);
+        }
+    }
+
+    private List<Request> requests(List<Request> requested) throws SQLException {
         List<Request> requests = List.copyOf(requested);
         require(!requests.isEmpty() && requests.size() <= limits.maximumTables() && requests.stream().distinct().count() == requests.size(),
                 "Distinct bounded native binding requests required");
-        var before = tables.collect(requests);
-        List<As400BindingDefinition> definitions = new ArrayList<>();
+        return requests;
+    }
+
+    /** Reuse transport, never evidence: both complete native observations execute around the column/key reads. */
+    Acquired collectOn(Connection connection, List<Request> requested) throws SQLException {
+        List<Request> requests = requests(requested);
         require(!Thread.currentThread().isInterrupted(), "Native acquisition stopped");
-        try (Connection connection = Objects.requireNonNull(connections.open())) {
+        Objects.requireNonNull(connection);
+        try {
             connection.setReadOnly(true);
             check(connection);
+            var before = tables.collectOn(connection, requests);
+            List<As400BindingDefinition> definitions = new ArrayList<>();
             for (Observation observation : before) {
                 var definition = acquire(connection, observation);
                 definitions.add(new As400BindingDefinition(definition.identity(), definition.schema(), definition.codecs(), observation.memberJournalIds()));
             }
             check(connection);
+            require(before.equals(tables.collectOn(connection, requests)), "Native object/member/format changed during acquisition");
+            check(connection);
+            return new Acquired(before, definitions);
         }
         catch (IllegalArgumentException | ArithmeticException e) {
             throw new As400NativeEvidenceException("Unsupported native physical binding", e);
         }
-        require(before.equals(tables.collect(requests)), "Native object/member/format changed during acquisition");
-        return new Acquired(before, definitions);
     }
 
     private As400BindingDefinition acquire(Connection connection, Observation observation) throws SQLException {
         if (captured.test(observation.table())) {
+            require(!observation.format().programDescribed(), "Captured program-described files have no SQL column schema");
             require(!observation.format().lob(), "LOB value capture is unsupported");
             return read(connection, observation);
+        }
+        if (observation.format().programDescribed()) {
+            return As400BindingDefinition.excluded(observation.tableIdentity());
         }
         if (observation.format().lob()) {
             // Preserve ordinary table filtering. Only fixed source identity and
@@ -496,6 +516,7 @@ final class As400NativeBindingAcquisition {
     }
 
     private static void warning(SQLWarning warning) throws SQLException {
+        As400OperatorJournalEvidence.incompleteWarnings(warning);
         if (warning != null) {
             throw new As400NativeEvidenceException("Partial native binding evidence rejected", warning);
         }

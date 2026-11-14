@@ -468,11 +468,29 @@ class As400ContinuousRuntimeTest {
                 assertThat(progress.checkpoint()).containsEntry("completed_through.sequence", "59");
                 assertThat(As400RecoveryTestSupport.data(records)).containsExactly("c:A:8", "t:B", "c:B:100", "c:A:9");
             }
+            else if (List.of("persistent", "mixed-race").contains(fault)) {
+                for (int poll = 0; poll < 3; poll++) {
+                    var progress = runtime.poll(first.checkpoint(), f.initial);
+                    assertThat(progress.deferred()).isTrue();
+                    assertThat(progress.scan()).isEqualTo(first.scan());
+                    assertThat(progress.checkpoint()).isEqualTo(first.checkpoint());
+                    assertThat(records).hasSize(sent);
+                }
+            }
             else {
                 assertThrows(Exception.class, () -> runtime.poll(first.checkpoint(), f.initial));
                 assertThat(records).hasSize(sent);
             }
-            assertThat(attempts).hasValue(List.of("recovers", "persistent", "mixed-race").contains(fault) ? 4 : 2);
+            assertThat(attempts).hasValue(List.of("persistent", "mixed-race").contains(fault) ? 10 : fault.equals("recovers") ? 4 : 2);
+            if (fault.equals("persistent")) {
+                var failure = assertThrows(IllegalStateException.class, () -> {
+                    for (int poll = 0; poll < As400OperatorJournalEvidence.MAX_INCOMPLETE_OBSERVATIONS; poll++) {
+                        runtime.poll(first.checkpoint(), f.initial);
+                    }
+                });
+                assertThat(failure).hasMessageContaining("Native catalog remained incomplete");
+                assertThat(records).hasSize(sent);
+            }
             assertThat(observedOffsets).allSatisfy(offset -> assertThat(offset).isEqualTo(f.initial));
             assertThat(observedScans).allSatisfy(scan -> assertThat(scan.orElseThrow().position()).isEqualTo(first.scan().orElseThrow()));
             assertThat(f.initial).containsEntry("completed_through.sequence", "29");
