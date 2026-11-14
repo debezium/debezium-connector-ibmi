@@ -157,3 +157,38 @@ probe insertion-to-observation time and insertion-to-durable-offset time. Two
 rounds alternate baseline probes with captured/excluded ALTER and LABEL changes;
 every probe must appear exactly once. This includes broker-observer overhead and
 does not measure connector-only pause time or saturation throughput.
+
+For captured files moving between libraries on the same journal, run
+`python tools/dcg-library-move-probe.py NEW_DIRECTORY DCNCdddd DCNCeeee --distribution PLUGIN.zip`.
+Both libraries must be fresh and absent; the second library is a separately
+inventoried destination. The runner validates exact object ownership before and
+after each `MOVOBJ` and cleans up each fixture using its own inventory. It uses standard
+exclusion filters throughout legacy startup and online activation, so tables
+created later are not named in a legacy server-side file filter.
+
+The default `--selection both --delivery source-offsets` checks exact topics,
+keys, values and ordering for ALTER/row/move and CREATE/row/move catch-up. It
+replaces the worker while the moved table has an open truncate, checks unrelated
+progress, commit and rollback, moves both files back and restarts again. Use
+`--selection source` or `--selection destination` to check capture selection on
+each side, and `--delivery eos` for the supported Kafka source-transaction mode.
+Each run retains its plugin hash, independent broker ledgers, native journal
+interval and cleanup evidence. These bounded scenarios do not qualify
+cross-pool moves, save/restore, or clearing one member of a multi-member file.
+
+For a bounded disk-buffer endurance run, use
+`python tools/dcg-soak-probe.py NEW_DIRECTORY DCNCdddd --distribution PLUGIN.zip --label candidate --mode transactional --buffer-storage disk --duration 1200 --rows 100 --backlog-rows 5000`.
+This retains exact mixed-value and before-image checks, commits and rolls back
+5,000-row transactions, and keeps a clear open while unrelated output advances.
+By default it rotates three owned receivers during that open clear and performs
+three task stop/resume cycles during the timed workload. Each restart checks
+durable F/W and unchanged binding history. `--held-clear-rotations 0` and
+`--restart-count 1` retain the earlier simpler schedule. The observer has explicit
+row, byte and time bounds; a 20-minute pass is not a multi-day soak or a maximum
+capacity measurement.
+
+During the soak, offset-topic inspection retains the latest value or tombstone
+per key through a fixed broker endpoint. It bounds scanned records, retained
+keys/data and elapsed time, so obsolete offset updates do not exhaust the
+ordinary event inspector's 1,000-record limit. Data-topic observations still
+retain every record and check exact counts; duplicate output is not collapsed.

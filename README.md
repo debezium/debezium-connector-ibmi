@@ -1,541 +1,217 @@
-# Project
+# Debezium connector for IBM i
 
-Use the IBM I journal as a source of CDC events see https://github.com/debezium/debezium-connector-ibmi/tree/main/journal-parsing/ for the journal fetch/decoding
+Capture changes from the Db2 for IBM i journal and publish Debezium change events.
+The connector supports snapshots and streaming row changes. This branch adds
+optional transactional truncate capture, so a clear followed by a reload does
+not leave stale rows in a downstream system.
 
-# Configuration
+**Status:** the complete transactional-truncate proposal is in
+[draft PR #117](https://github.com/debezium/debezium-connector-ibmi/pull/117), tracking
+[debezium/dbz#3027](https://github.com/debezium/dbz/issues/3027).
+The feature defaults to off. Bounded native validation has passed; upstream CI,
+maintainer acceptance and broader workload qualification remain separate gates.
 
-## IBMI Permissions
+## How clears are captured
 
+IBM i can clear a file without recording a delete for every row. Native `CLRPFM`
+can produce `F/CR`; SQL `TRUNCATE` and optimized bulk `DELETE` can produce `D/CG`
+subtypes 8 and 3. The actual journal records depend on the operation and context.
+The connector emits the standard Debezium truncate envelope: `op=t`, a null key,
+and null `before` and `after` values.
+
+With transactional capture enabled:
+
+- `TRUNCATE → INSERT → COMMIT` publishes the truncate before the inserted rows.
+- A full rollback publishes neither the clear nor its rolled-back rows.
+- Unrelated committed changes continue while a clear transaction remains open.
+- Recovery rebuilds unfinished work from retained journal records. Separate scan,
+  replay-floor and acknowledged-output positions prevent a successful read from
+  being mistaken for durable delivery.
+
+Working transaction data spills to H2 MVStore on disk by default. Standard source
+offsets and immutable schema/binding history are the recovery authority; the
+working spill files are disposable. No custom ownership or receipt service is
+required. See the [architecture](docs/dcg-architecture.md).
+
+## Build and install
+
+Use JDK 21 and the Maven wrapper:
+
+```sh
+./mvnw -B -ntp clean install -Passembly -DskipITs \
+  -Dformat.formatter.goal=validate -Dformat.imports.goal=check
+python3 -B -m unittest discover -s tools -p 'test_*.py'
 ```
+
+This repository uses Debezium `3.8.0-SNAPSHOT` dependencies. If they are unavailable,
+build the matching core modules listed in
+[the Maven workflow](.github/workflows/cross-maven.yml) first. `-DskipITs` avoids
+live IBM i integration tests; the default Java tests need no IBM i account.
+
+The distribution is generated under `debezium-connector-ibmi/target/` as
+`debezium-connector-ibmi-3.8.0-SNAPSHOT-plugin.zip` and `.tar.gz`.
+Extract the complete distribution into a dedicated Kafka Connect plugin directory
+and restart the workers. Configure the connector class as
+`io.debezium.connector.db2as400.As400RpcConnector`.
+
+Set `database.hostname`, `database.user`, `database.password`, `database.dbname`
+and `database.schema` for the source, plus `topic.prefix` and the standard
+Debezium table selection and snapshot settings. Supply credentials through the
+runtime's secret/config provider. TLS is controlled by `secure` and defaults to
+`true`; install the source's trusted CA certificate in the worker JVM truststore.
+Kafka bootstrap servers, converters, schema registry and REST listeners belong
+to the chosen runtime/deployment; a schema registry is not a universal requirement
+of this connector.
+
+Distributed Connect, standalone Connect and Embedded Engine have distinct offset
+and delivery contracts. The tested Debezium Server JVM/HTTP profile uses ordered
+processing with file-backed history and offsets. See the
+[runtime compatibility evidence](docs/dcg-compatibility-baseline.md) before choosing
+a deployment mode; one validated Server sink does not qualify every sink.
+
+See [configuration and troubleshooting](docs/connector-usage.md) for a minimal
+connector request, CCSID settings, TLS and journal diagnostics.
+
+## Enable transactional truncate on an existing stream
+
+Read the [online configuration contract](docs/dcg-online-configuration.md) before
+enabling the feature. The essential additions to an already-streaming connector
+are:
+
+```properties
+truncate.transactional.enabled=true
+skipped.operations=none
+event.processing.failure.handling.mode=fail
+dcg.journal=JRNLIB/JOURNAL
+dcg.retention=operator-managed
+```
+
+Keep the existing source partition, topic prefix and capture selection during
+handoff. Use the normal `table.include.list`/`table.exclude.list`; there is no
+separate per-table truncate flag. Leave `dcg.mode=disabled` for this online path.
+The settings above are additions, not a complete connector configuration: durable
+history, internal topics or file storage, source authorities and complete captured
+images must also satisfy the linked contract.
+
+The connector can start from an existing durable legacy offset without another
+snapshot or an administrator-managed writer pause. It discovers and validates
+the journal scope, then uses brief automatic write-excluding locks to establish
+a safe handoff. Busy attempts defer while ordinary capture continues. Metadata
+collection runs outside the held interval. A transactional clear encountered
+before handoff holds its affected table until its outcome is known; unrelated
+tables continue.
+
+The separate [operator-controlled first-start profile](docs/dcg-configured-native.md)
+supports an explicitly planned initialization window. Do not mix its settings
+with the online activation path.
+
+### F/CR without transactional capture
+
+With `truncate.transactional.enabled=false` and `dcg.mode=disabled`, enabling
+`skipped.operations=none` captures qualified clears outside commitment control
+on single-member files. A nonzero commit cycle or ambiguous member scope is
+rejected. Autocommit or SQL `IMMEDIATE` alone does not prove a zero commit cycle;
+inspect the source journal. See [F/CR integration testing](docs/fcr-testing.md).
+
+### Ordering and downstream handling
+
+A keyless truncate cannot be ordered against keyed rows in different Kafka
+partitions. Use **one partition per table topic**, or equivalent downstream
+coordination, when whole-table clear/reload ordering is required. Ordinary row
+capture can retain multiple partitions. Internal history/control topics have
+their own single-partition requirements.
+
+Consumers and transforms must preserve and understand `op=t`. Source capture does
+not enable sink truncate handling. A truncate is not a series of per-key deletes
+and does not erase old keys from Kafka's compacted history. Previously stale
+destination data still needs reconciliation if no later clear is applied.
+
+## IBM i authorities and retained history
+
+The ordinary journal reader needs access to its journal, receivers and captured
+files. Example grants, adapted to the actual libraries and service account:
+
+```text
 GRTOBJAUT OBJ(<JRNLIB>) OBJTYPE(*LIB) USER(<CDC_USER>) AUT(*EXECUTE)
 GRTOBJAUT OBJ(<JRNLIB>/*ALL) OBJTYPE(*JRNRCV) USER(<CDC_USER>) AUT(*USE)
 GRTOBJAUT OBJ(<JRNLIB>/<JRN>) OBJTYPE(*JRN) USER(<CDC_USER>) AUT(*USE *OBJEXIST)
-```
-```
-GRTOBJAUT OBJ(<PROJECT_LIB>) OBJTYPE(*LIB) USER(<CDC_USER>) AUT(*EXECUTE)
-GRTOBJAUT OBJ(<PROJECT_LIB>/*ALL) OBJTYPE(*FILE) USER(<CDC_USER>) AUT(*USE)
-```
-Where:
-
-* `<JRNLIB>` is the library where the journal and receivers reside
-* `<JRN>` is the journal name
-* `<PROJECT_LIB>` is the Figaro database library
-* `<CDC_USER>` is the username of the CDC service account
-
-The optional transactional truncate path also uses the QSYS2 catalog, journal,
-member, object-statistics and lock-information services. Online initialization
-executes `ALCOBJ`, `DLCOBJ` and `SNDJRNE` through `QSYS2.QCMDEXC` in dedicated
-sessions. Native API-job encoding is checked through JT400 job information
-(`QUSRJOBI`), and cancellation ends only the connector's captured reader job. The grants
-above alone are not a complete authority specification for that profile. Qualify
-the service account for those operations on the complete journal scope, including
-tables excluded from output; an authorization failure cannot be treated as an
-empty inventory or successful release. See [the optional runtime contract](docs/dcg-configured-native.md).
-
-## Required
-The following environment variables are mandatory configuration and have no default values
-
-```
-DEBEZIUM_BOOTSTRAP_SERVERS
-SCHEMA_REGISTRY_URL
-
-DEBEZIUM_REST_ADVERTISED_HOST_NAME
+GRTOBJAUT OBJ(<APPLICATION_LIB>) OBJTYPE(*LIB) USER(<CDC_USER>) AUT(*EXECUTE)
+GRTOBJAUT OBJ(<APPLICATION_LIB>/*ALL) OBJTYPE(*FILE) USER(<CDC_USER>) AUT(*USE)
 ```
 
-## Production
-
-Choose the replication factor for the available Kafka brokers. The ordinary
-row-only example below assumes at least three brokers:
-
-```
-PARTITIONS=3
-REPLICATION_FACTOR=3
-```
-
-If you enable truncate capture, use **one partition per table topic** so the
-keyless clear remains ordered with row events. This is a requirement of truncate
-ordering, not a change to the partition count required for ordinary row capture.
-
-## Row processing and restart compatibility
-
-With `event.processing.failure.handling.mode=fail` (the default), a row decode or
-dispatch failure stops the task before the journal position advances. Earlier
-versions could log some failures and continue, losing the row. `warn` and `skip`
-retain their explicitly lossy behavior for ordinary row processing. Truncate and
-online handoff failures remain fatal; those paths cannot safely skip a clear.
-
-Before upgrading an existing deployment, check these behavior changes even if
-transactional truncate remains disabled:
-
-- Unsupported row decoding now stops a task in `fail` mode instead of silently
-  dropping the row. This does not add support for captured CLOB/BLOB columns.
-- An existing `skipped.operations=none` configuration now captures F/CR clears.
-  The legacy reader still rejects transactional and ambiguous member clears.
-- The optional `source.rrn` field changes the source schema. Check consumer schema
-  compatibility; it does not change the event key.
-
-Keep the original offsets and history when installing a corrected build. After
-online handoff, the original connector cannot read the native F/W checkpoints or
-binding history: replacing the binary with the original version is not an
-in-place rollback. Do not erase offsets or history to bypass a startup failure.
-The [compatibility and performance comparison](docs/dcg-compatibility-comparison.md)
-records measured costs and the remaining qualification limits.
-
-A queue interrupted by the watchdog is retried from its retained offset rather
-than being treated as malformed data. As with other interrupted deliveries, an
-already emitted prefix can repeat. When transaction metadata is enabled and a
-restart begins inside a transaction, BEGIN/END describe the observed suffix;
-counts before the saved offset are not reconstructed.
-
-Journal row events include the optional string field `source.rrn` (relative record
-number), adapted from [PR #92](https://github.com/debezium/debezium-connector-ibmi/pull/92)
-by Jona J. It is populated from the row's native journal header in both legacy and
-transaction-buffered streaming. Snapshot, truncate and transaction-control records
-have no row RRN. This field does not change Kafka keys or restart offsets. IBM i can
-reuse record numbers after a clear and change them during physical reorganization;
-they are physical coordinates within a member, not permanent business identifiers.
-
-# Limitations
-
-* TODO integrate with exit program to prevent journal loss https://github.com/jhc-systems/debezium-ibmi-exitpgm
-* Limited support for table changes - the journal entries for table changes are not documented so rely on fetching table structure at runtime and refetching when table change detected
-* No support for remote journals and fail over
-* No support for clobs/xml and similar large text/blobs
-
-## Table clears and truncate events
-
-The connector can emit a standard Debezium truncate event (`op=t`, null key,
-null `before` and `after`) for `F/CR` member clears. This follow-up also classifies
-`D/CG` subtype `8` (SQL truncate) and subtype `3` (optimized bulk DELETE) using
-the object-level entry-specific data. The legacy reader refreshes the schema for
-other D/CG subtypes. The online path supports validated, observed column-schema
-changes and newly created tables, saving their definitions before output. It rejects ambiguous historical
-changes rather than decoding old rows with an unproven current definition.
-
-The transactional path uses bounded transaction buffering, immutable binding
-history and durable replay checkpoints. See the [architecture](docs/dcg-architecture.md)
-and [validation scope](docs/dcg-validation.md) for its recovery contract and limits.
-
-For an already-streaming connector, the default-off
-`truncate.transactional.enabled` option enables online handoff without another
-snapshot or an administrator-managed write pause. It uses brief automatic native
-locks and standard table filters; read the
-[online configuration and restrictions](docs/dcg-online-configuration.md) before enabling it.
-Online startup can use ordinary durable source offsets without Kafka source
-transactions. Binding history can use Kafka or the standard file-history settings
-for an ordered Engine deployment, including the tested Server JVM/HTTP profile.
-Delivery remains at least once; see the
-[runtime evidence and remaining gaps](docs/dcg-compatibility-baseline.md).
-The separate [configured first-start profile](docs/dcg-configured-native.md)
-provides an operator-controlled initial snapshot, including explicit RRN key
-support when physical row keys are explicitly wanted. Otherwise files without
-declared primary keys retain Debezium's null-key behavior in either profile.
-
-See [contributor testing](docs/dcg-contributor-testing.md) for offline, local Kafka
-and optional isolated IBM i tests. Historical design experiments and progress
-reports are retained in the [development archive](docs/dcg-validation.md#historical-evidence),
-not required by the build or plugin.
-
-The behavior below describes the **legacy reader with `dcg.mode=disabled` and
-`truncate.transactional.enabled=false`**.
-In that path, D/CG capture remains limited to commit cycle zero and single-member
-files; a clear subtype by itself does not prove a transaction has committed.
-
-Truncate capture is **opt-in**. The inherited `skipped.operations` default is `t`.
-Set `skipped.operations=none`, or a list that does not contain `t`, to enable it.
-
-This initial implementation supports clears **outside commitment control on
-single-member files**. It queries `QSYS2.SYSPARTITIONSTAT` before emitting a clear
-and requires one matching member. The legacy reader does not buffer
-transactions, so an enabled clear with a nonzero commit-cycle identifier stops
-the connector through its error handler. It also stops for ambiguous member
-scope, a missing member on an included table, unavailable table schema, or failed
-truncate dispatch, rather than silently acknowledging the clear. Clears with a
-missing file or library name are logged and skipped because the connector cannot
-determine whether they belong to an included table. Transactional truncates,
-including rolled-back truncates, require transaction buffering and restart-safe
-replay before they can be supported.
-Auto-commit alone does not guarantee a zero commit-cycle identifier; verify the
-source journal. Do not assume that adding `IMMEDIATE` alone bypasses this guard.
-
-Use one Kafka partition per table topic when consuming truncates: a keyless clear
-has no ordering guarantee relative to keyed row events in other partitions.
-Transforms and sinks must preserve and handle `op=t`; enabling this source feature
-does not enable sink truncate handling. In particular, check any unwrap transform
-and sink configuration before enabling capture. A truncate event is not a series
-of per-key deletes and does not remove earlier keys from Kafka's compacted history.
-Existing stale destination rows still need reconciliation if no subsequent clear
-is applied.
-
-### Testing truncate capture
-
-Run the unit tests and build the plugin with JDK 21:
-
-```sh
-./mvnw clean install -Passembly -DskipITs \
-  -Dformat.formatter.goal=validate -Dformat.imports.goal=check
-```
-
-The main branch uses Debezium snapshot dependencies; build the matching core
-modules as described in `.github/workflows/cross-maven.yml` first if those
-artifacts are unavailable. `-DskipITs` keeps this build independent of a live IBM i.
-
-The live `As400ConnectorIT` class uses a disposable IBM i library named `DTEST`
-by default and table `TESTT`. Set `-Dtest.database.schema=YOURTEST` to use a separate
-library for concurrent testing; replace every `DTEST` reference in the fixture
-setup and cleanup below with that name. The name must contain only uppercase
-letters, digits, and underscores, begin with a letter, and be at most ten characters.
-The test deletes rows during setup and clears and reloads the table.
-Use a dedicated test environment and an account allowed to create this fixture,
-read its journal, and execute `CLRPFM`. Do not point it at an application library.
-
-Using an IBM i SQL client with commitment control disabled (`*NONE`), execute
-`CREATE SCHEMA DTEST` first. **Stop if it fails or DTEST already exists**; do not
-reuse or drop someone else's library. After successful creation, create the table:
-
-```sql
-CREATE SCHEMA DTEST;
-CREATE TABLE DTEST.TESTT (
-    ID INTEGER NOT NULL PRIMARY KEY,
-    NAME VARCHAR(40) CCSID 37 NOT NULL
-);
-```
-
-SQL schema creation supplies the fixture's `QSQJRN` journal and receiver. Verify
-that `DTEST.TESTT` is journaled to `DTEST.QSQJRN` and has one member named `TESTT`.
-Keep the fixture on a disposable system where creating and clearing it is safe.
-
-Create a private Java properties file outside the checkout with the connection
-settings below; restrict access to that file and do not commit it:
-
-```properties
-database.hostname=<test-host>
-database.user=<test-user>
-database.password=<test-password>
-```
-
-After the build above, run only this integration-test class from the repository root:
-
-```sh
-./mvnw -pl debezium-connector-ibmi \
-  -Dit.test=As400ConnectorIT \
-  -Dfailsafe.systemPropertiesFile=/absolute/path/to/private-test.properties \
-  -DenablePropertiesElement=false \
-  failsafe:integration-test failsafe:verify
-```
-
-The properties flag prevents the test report from listing JVM system properties;
-review logs before sharing them because connection information can still appear.
-The tests run the connector in a local embedded Debezium engine and consume records
-in memory. They cover snapshot/insert streaming and clear/reload using both
-`CLRPFM` and SQL `TRUNCATE TABLE ... IMMEDIATE`, with commitment control disabled,
-under `initial` and `no_data` snapshot modes. Both modes load table schemas;
-`no_data` skips snapshot rows so the clear is the first captured data event. Use a separate
-`-Ddbz.test.data.dir=/absolute/path/to/test-offsets` for concurrent runs.
-Each clear case asserts a keyless truncate followed by an insert. The SQL case
-requires a system where the operation produces `F/CR`; it does not establish
-support for `D/CG`. Inspect the fixture journal to record the entry type observed.
-These tests do not exercise Kafka, transforms, or a downstream sink.
-
-After the connector has stopped, remove only the fixture created for this run.
-Verify the library still contains only its test table and generated catalog,
-journal, and receiver objects, and that its journal has no other users. With
-commitment control disabled, drop `DTEST.TESTT RESTRICT`, then `DTEST RESTRICT`:
-
-```sql
-DROP TABLE DTEST.TESTT RESTRICT;
-DROP SCHEMA DTEST RESTRICT;
-```
-
-If the server asks whether to delete the fixture's unsaved journal receiver
-(`CPA7025`), confirm only the receiver belonging to this disposable fixture.
-The SQL client can appear to hang while this inquiry is pending. Verify that both
-the SQL schema and the IBM i library are gone, and remove the private credentials
-file. Do not use `CASCADE` to bypass unexpected dependencies.
-
-These F/CR integration tests do not qualify transactional D/CG or optimized
-DELETE. Their separate native, restart and runtime evidence is recorded in the
-[transactional validation report](docs/dcg-validation.md). Downstream handling
-still depends on the selected transform and consumer.
-
-# Problems
-
-## running with a self signed certificate
-
-capture your ca cert normally the bottom of the output:
-`openssl s_client -showcerts -connect <host>:9471`
-
-between the last pair of `-----BEGIN CERTIFICATE-----` and end and save it to iseries-cert.pem
-	
-
-If using docker simply mount your certs at /var/tls
-
-If running natively import the cert
-	
-	keytool -import -noprompt -alias iseries-cert  -storepass changeit -keystore /usr/lib/jvm/java-1.17.0-openjdk-amd64/lib/security/cacerts -file iseries-cert.pem
-
-## Journals deleted
-
-If the journal is deleted before it is read it will log an error: "Lost journal at position xxx" and reset to the beginning journal
-
-At this point you really need to resync, this does not happen automatically
-
-* Todo needs to support ad-jhoc snapshotting
-
-## Memory
-
-Recommended minimum memory 1GB
-
-This can either be configured with cloud resources or using `JAVA_OPTIONS=-Xmx1g`
-
-## Tracing
-
-```
-DEBEZIUM_
-
-
-```
-
-```
-producer.interceptor.classes=brave.kafka.interceptor.TracingProducerInterceptor
-consumer.interceptor.classes=brave.kafka.interceptor.TracingConsumerInterceptor
-
-producer.zipkin.sender.type=KAFKA
-producer.zipkin.local.service_name=ksql
-producer.zipkin.bootstrap.servers=mskafka:9092
-```
-
-# Configuring the CDC
-
-## Use the REST interface to post a new connector
-
-Create a new connector configuration `connector-name.json`:
-
-`curl -i -X POST -H "Accept:application/json" -H "Content-Type:application/json" http://localhost:8083/connectors/ -d '@./connector-name.json'`
-
-file connector-name.json:
-
-```
-{
-  "name": "connector-name",
-  "config": {
-    "connector.class": "io.debezium.connector.db2as400.As400RpcConnector",
-    "sanitize.field.names": "true",
-    "tasks.max": "1",
-    "database.hostname": "ibmiserver",
-    "database.dbname": "database name",
-    "database.schema": "SCHEMA",
-    "database.user": "xxx",
-    "database.password": "xxx",
-    "port": "",
-    "secure": true
-    "poll.interval.ms": "2000",
-    "transforms": "unwrap",
-    "transforms.unwrap.delete.handling.mode": "rewrite",
-    "transforms.unwrap.drop.tombstones": "false",
-    "transforms.unwrap.type": "io.debezium.transforms.ExtractNewRecordState",
-    "table.include.list": "SCHEMA.TABLE1",
-    "snapshot.mode": "initial",
-
-    "key.converter.schema.registry.url": "http://schema-registry:8081",
-    "value.converter.schema.registry.url": "http://schema-registry:8081",
-    "key.converter": "io.confluent.connect.avro.AvroConverter",
-    "value.converter": "io.confluent.connect.avro.AvroConverter",
-
-    "snapshot.max.threads": 4
-  }
-}
-```
-
-
-Note the `dbname` can be blank and will be used as part of the jdbc connect string : `dbc://hostname/dbname`
-
-
-Optional:
-
-```
-    "driver.socket timeout": "300000",
-    "driver.keep alive": "true",
-    "driver.thread used": "false"
-```
-the above help with connections that can be blocked (firewalled) or dropped due to vpn issues
-
-## CCSID
-
-Unusually we have the incorrect CCSID on all our tables and the data is forced into the tables with the wrong encoding
-
-This issue should really be corrected and the data translated but with thousands of tables and many clients all configured incorrectly this is a huge job with significant risk. Instead we have an additional pair of settings from.ccsid which is the ccsid on the table and to.ccsid which will use this ccsid instead - this is for the entire system and all tables.
-
-
-## The list of connectors
-
-`curl -i -X GET -H "Accept:application/json" -H "Content-Type:application/json" http://localhost:8083/connectors/`
-
-```
-[connector-name]
-```
-
-## Deleting a connector
-
-and deleted with
-
-`curl -i -X DELETE -H "Accept:application/json" -H "Content-Type:application/json" http://localhost:8083/connectors/connector-name`
-
-## Getting the running configuration of the connector
-
-`curl -i -X GET -H "Accept:application/json" -H "Content-Type:application/json" http://localhost:8083/connectors/connector-name`
-
-## Adding tables
-
-The configuration can be updated with
-
-`curl -i -X PUT -H "Accept:application/json" -H "Content-Type:application/json" http://localhost:8083/connectors/connector-name/config/ -d "@connector-name-config.json"`
-
-Notes
-* the `connector-name` in the url must match the `name` in the json file
-* the update file only contains the inner `config`
-
-```
-{
-    "connector.class": "io.debezium.connector.db2as400.As400RpcConnector",
-    "sanitize.field.names": "true",
-    "database.hostname": "ibmiserver",
-    "database.dbname": "database name",
-    "database.schema": "SCHEMA",
-    "database.user": "xxx",
-    "database.password": "xxx",
-    "port": "",
-    "poll.interval.ms": "2000",
-    "transforms": "unwrap",
-    "transforms.unwrap.delete.handling.mode": "rewrite",
-    "transforms.unwrap.drop.tombstones": "false",
-    "transforms.unwrap.type": "io.debezium.transforms.ExtractNewRecordState",
-    "table.include.list": "SCHEMA.TABLE1",
-    "snapshot.mode": "initial",
-
-    "key.converter.schema.registry.url": "http://schema-registry:8081",
-    "value.converter.schema.registry.url": "http://schema-registry:8081",
-    "key.converter": "io.confluent.connect.avro.AvroConverter",
-    "value.converter": "io.confluent.connect.avro.AvroConverter",
-    "tasks.max": "1"
-}
-```
-
-Here we've added TABLE2 to the list.
-
-# monitoring
-
-prometheus stats are avaialble on port 7071
-
-sample prometheus stats are in
-
-* metrics/prometheus
-
-sample grafana charts
-
-* metrics/grafana.txt
-
-
-# Troubleshooting
-
-See upstream project: https://github.com/debezium/debezium-connector-ibmi/tree/main/journal-parsing
-
-## No journal entries found check journalling is enabled and set to *BOTH
-
-`dspfd MYTABLE`
-
-```
-    File is currently journaled . . . . . . . . :            Yes
-    Current or last journal . . . . . . . . . . :            MYJRN
-      Library . . . . . . . . . . . . . . . . . :            MYLIB
-    Journal images  . . . . . . . . . . . . . . : IMAGES     *BOTH
-
-```
-
-# Development
-
-## Class diagram
-https://lucid.app/lucidchart/invitations/accept/inv_b0dba11e-fb73-4bfc-9efd-1c14d7ef2642
-
-## Testing/debugging
-
-main class
-* `org.apache.kafka.connect.cli.ConnectDistributed`
-
-runtime argument of the configuration e.g. for
-* local kafka `src/test/resources/protobuf.properties`
-* remote confluent `src/test/resources/confluent.properties`
-
-Logging - vm args `-Dlogback.configurationFile=src/test/resources/logback.xml`
-
-## Running kafka locally
-https://bitbucket.org/jhc-systems/kafka-kubernetes/src/master/docker/
-
-## Running debezium locally
-
-Configure the IP addresses in `conf/local.env`, `src/test/resources/protobuf.properties`, and `src/test/resources/confluent.properties` to be your IP address. If running using localhost, you can use `0.0.0.0` for each of these.
-
-### VS Code
-
-To run in VS Code, configure the following launch.json file, and run from the Run and Debug extension.
-```
-{
-    // Use IntelliSense to learn about possible attributes.
-    // Hover to view descriptions of existing attributes.
-    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
-    "version": "0.2.0",
-    "configurations": [
-        {
-            "type": "java",
-            "name": "Launch",
-            "request": "launch",
-            "mainClass": "org.apache.kafka.connect.cli.ConnectDistributed",
-            "projectName": "debezium-connector-ibmi",
-            "env": {},
-            "args": "src/test/resources/protobuf.properties",
-            "logback.configurationFile": "src/test/resources/logback.xml"
-        }
-    ]
-}
-```
-
-## Release notes
-
-## debezium v3.0.0
-
-`from_ccsid` is now `from.ccsid` and `to_ccsid` is `now to.ccsid` they stay as top level config
-
-jdbc configuration needs the prefix `driver.<parameter>` e.g. `driver.date format` it now defaults to `iso`
-
-### 1.10.4
-
-New configuration paramater `secure` this defaults to true
-
-### 1.10.2
-
-Fixes data loss bugs:
-* * when receivers reset
-* * after receiving a continuation offset the first entry is occasionally lost (when the next request doesn't contain a continuation offset)
-
-### 1.9
-
-additional configuration parameters required for avro in the submitted json
-
-```
-    "key.converter.schema.registry.url": "http://schema-registry:8081",
-    "value.converter.schema.registry.url": "http://schema-registry:8081",
-    "key.converter": "io.confluent.connect.avro.AvroConverter",
-    "value.converter": "io.confluent.connect.avro.AvroConverter",
-```
-
-optional parameter
-
-```
-"snapshot.max.threads": 4
-```
-
-# Build
-
-## build docker image and publish to local docker server
-
-mvn compile jib:dockerBuild
+These grants are **not a complete authority specification** for transactional
+capture. That path also uses native object/member identities, QSYS2 catalog and
+lock services, dedicated allocation/marker/release sessions and reader-job
+identification/cancellation. Qualify those authorities for the complete journal
+scope, including files excluded from output. An authorization failure must not
+look like an empty inventory or a successful lock release.
+
+Operators must retain receivers back to the replay floor, including history
+needed by unfinished transactions on excluded tables. Automatic receiver deletion
+cannot discard that evidence. Keep binding history immutable and durable alongside
+the source offsets. Missing history stops recovery; erasing offsets or history is
+not a repair. Restoring the required evidence or creating a new consistent
+generation is an explicit recovery operation.
+
+## Upgrade behavior and support boundaries
+
+Even with transactional capture disabled, check these upgrade changes:
+
+- Processing mode `fail` now stops before journal advancement on decode/dispatch
+  errors that older versions could log and lose. Ordinary row `warn`/`skip`
+  processing remains explicitly lossy; online activation requires `fail`.
+- An existing `skipped.operations=none` configuration enables F/CR capture and its
+  transaction/member safety checks.
+- Row source metadata gains optional string `source.rrn`, adapted from
+  [PR #92](https://github.com/debezium/debezium-connector-ibmi/pull/92) by Jona J.
+  It does not change keys. IBM i may reuse or reorganize relative record numbers;
+  they are member coordinates, not permanent business identifiers.
+
+Ordinary offsets provide at-least-once delivery: an interrupted output prefix can
+repeat. Kafka source transactions have a separately qualified runtime contract.
+An interrupted queue is retried from retained progress; transaction metadata
+after a mid-transaction restart describes the observed suffix, not reconstructed
+counts from before the saved offset.
+
+The connector preserves existing row keys, topics and supported conversions.
+It does not add captured external LOB/XML values, arbitrary historical DDL
+reconstruction, or member-aware keys/topics/snapshots. Ordinary multi-member rows
+retain the original shared-topic contract; clearing one member cannot safely
+become a whole-table `op=t`. Unknown historical names/layouts or missing identity
+proof reject rather than silently misroute data. Remote journals and independent
+ASPs remain unqualified. Native storage-pool validation has used pool 1.
+
+After online handoff, the original connector cannot read the new offsets/history.
+Downgrades require a compatible reader; replacing the binary is not automatically
+an in-place rollback. Read the [compatibility matrix](docs/dcg-compatibility-comparison.md)
+and [configuration restrictions](docs/dcg-online-configuration.md) for the exact
+qualified cases and remaining gaps.
+
+## Validation and contributor guidance
+
+The published runtime at `96a395a` has the following bounded evidence:
+
+| Check | Result and scope |
+| --- | --- |
+| Offline verification | 5,285 Java executions on matching production sources; formatter/import and assembly checks. Subsequent test-inspector correction: four distinct Java cases and 153 Python tests |
+| Captured file moves | Four native configurations, 148 assertions: both/source/destination selection with ordinary offsets, plus both-library capture with Kafka source transactions; restart, clear outcomes and exact broker output checked |
+| Original vs. candidate | Six serial 120-second native runs, 144,000 verified changes total at about 201 changes/second. Feature-off CPU/change +3.6%; disk path +23.6%, with lower observed delivery delay at that load |
+| Restart endurance | Fresh 20-minute mixed-workload run: 92,401 observed events, three task restarts, three receiver rotations, 5,000-row commit/rollback and unrelated progress during an open clear |
+
+The first endurance attempt exposed a test-inspector record limit; its failure
+is preserved and the corrected harness passed on a fresh fixture. One initial
+move run needed a controller resume before its workload; subsequent runs used
+the corrected harness. All owned native fixtures and local runtimes were removed
+and independently checked. These are not maximum-capacity, multi-day or universal
+replacement-readiness claims. Upstream CI still requires maintainer approval.
+
+- [Reproduce offline, local Kafka and optional isolated native tests](docs/dcg-contributor-testing.md)
+- [Validation scope, artifact identity and historical evidence](docs/dcg-validation.md)
+- [Performance methods, measurements and limitations](docs/dcg-performance-comparison.md)
+- [Repository contribution guidance](AGENTS.md)
+
+The modules are `debezium-connector-ibmi` (task/runtime), `journal-parsing`
+(retrieval/decoding), and `jt400-override-ccsid` (driver encoding support).
+Optional validation harnesses live in `tools/`; contracts and results live in
+`docs/`. Native tests require a fresh, owned, disposable library and explicit
+authorization; they must never target an existing application library.

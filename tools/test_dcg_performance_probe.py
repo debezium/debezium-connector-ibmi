@@ -6,6 +6,7 @@ from pathlib import Path
 import tempfile
 from types import SimpleNamespace
 import unittest
+from unittest.mock import Mock
 
 SPEC = importlib.util.spec_from_file_location('performance', Path(__file__).with_name('dcg-performance-probe.py'))
 probe = importlib.util.module_from_spec(SPEC)
@@ -49,6 +50,21 @@ class PerformanceEvidenceTest(unittest.TestCase):
     def test_should_reject_records_observed_before_the_measurement_started(self):
         with self.assertRaisesRegex(AssertionError, 'clock or record selection'):
             self.exp.record([self.row(1)], 11, 12, 'A-c', 2)
+
+    def test_should_compact_only_offset_observations_when_explicitly_enabled(self):
+        self.exp.latest_offsets = True
+        self.exp.command = Mock()
+        offset = {'key': '["automatic", {"server": "test"}]', 'value': None}
+        (self.exp.control / 'automatic-latest-offsets-read_committed.json').write_text(json.dumps([offset]))
+        rows = self.exp.snapshot('observer', 'automatic', 'latest', offsets=True)
+        self.assertEqual([{'key': ['automatic', {'server': 'test'}], 'value': None}], rows)
+        self.assertEqual('latest-per-key', self.exp.command.call_args.args[-1])
+
+        event = {'key': '{"ID": 1}', 'value': '{"op": "c"}'}
+        (self.exp.control / 'automatic-all-records-read_committed.json').write_text(json.dumps([event, event]))
+        rows = self.exp.snapshot('observer', 'automatic', 'all')
+        self.assertEqual(2, len(rows))
+        self.assertNotIn('latest-per-key', self.exp.command.call_args.args)
 
 
 if __name__ == '__main__':

@@ -2494,3 +2494,88 @@ selection rejected without new output, checkpoint return or history mutation.
 Artifact identity and Advisor review passed. The native result above is separate;
 these local checks do not establish arbitrary DDL combinations or whole-feature
 readiness.
+
+### Captured library-move validation on the published build — 2026-11-13
+
+The published `96a395a9c4dd64ce474895d3ce339cbea6d864c1` plugin was exercised in
+four fresh two-library fixtures. Its SHA-256 is
+`c8a28302ff5b8bebf54d7922c40dba9e937842d9dacfaa01d7b3d1727a96cd80`.
+Preflight matched all 203 production sources and 15 packaged JARs to the frozen
+publication manifest. The production code and plugin were unchanged during the
+runs; the new runner is `tools/dcg-library-move-probe.py`.
+
+Ordinary-offset runs selected both libraries, only the original library, and
+only the destination. A fourth run selected both under Kafka source transactions.
+Each passed 37 assertions, for 148 total. A stopped reader caught up through an
+existing table's ALTER/row/move and a new table's CREATE/row/move. Exact broker
+ledgers checked topics, keys, values and order before and after each move. The
+runner replaced the worker during an open truncate of the moved table, checked
+unrelated progress with F behind W, then checked commit, rollback, move-back and
+another replacement. No duplicate output appeared in these bounded schedules.
+Ordinary offsets still provide at-least-once delivery outside those schedules.
+
+A separate audit of the retained broker dumps checked source coordinates and
+row RRNs. Each native journal interval contained four D/FM moves and two subtype-8
+D/CG clears; these were SQL TRUNCATE tests, not optimized DELETE tests. All four
+runner cleanups passed. Independent read-only checks found no remaining fixture
+schemas, libraries, journals, inquiry messages or owned Docker resources.
+
+Two test-controller setup mistakes are retained separately. The initial include
+filter named a not-yet-created table and failed inherited legacy startup; its
+fixture cleanup passed. The corrected runner uses standard exclusion filters.
+The first successful both-library ordinary-offset run required an explicit
+controller resume before any move workload because the shared legacy setup
+leaves the connector stopped. That missing step was added to the runner; the
+other three successful runs needed no intervention. These were harness changes,
+not connector fixes. This evidence does not qualify cross-pool moves, save/restore,
+multi-member clear semantics or every possible DDL composition.
+
+### Published-build performance and endurance — 2026-11-14
+
+The same `96a395a` plugin passed a matched six-run comparison with the original
+connector: two 120-second measurements per profile, 144,000 verified changes in
+total. Feature-disabled median delay was 5.130 s versus the original's 5.124 s,
+with 3.6% more CPU per change. The disk-buffer profile's median delay was 1.934 s,
+with 23.6% more CPU per change. All sustained approximately 200.8 changes/second.
+See the [full comparison](dcg-performance-comparison.md#published-build-performance-comparison--2026-11-14)
+for dependencies, worker mode, ranges and measurement limits.
+
+A separate packaged disk-buffer run completed 1,204.7 seconds of mixed-column
+workload with Kafka source transactions. Its 243 timed rounds produced 72,900
+inserts/updates; this serial burst workload waits for observation between bursts
+and is not the 200-change/second performance workload. Including warm-up, backlog,
+transaction and restart probes, the independent observer retained exactly 92,401
+events: 67,400 creates, 25,000 updates and one truncate. All 37 runner assertions
+passed. A separate audit checked exact counts, duplicate keys/operations and
+broker offsets, discarded rollback rows, clear/reload order and checkpoint
+progress.
+
+Before the timed interval, two 5,000-row backlog/resume trials and separate
+5,000-row transaction commit/rollback cases passed. A clear stayed open for 61.0
+seconds while ten unrelated bursts progressed and three journal receivers were
+rotated. Its replay floor remained protected, and commit released the clear
+before all 1,000 reload rows. Three task stop/resume cycles during the timed
+workload preserved immutable history and non-regressing F/W. These are graceful
+task restarts; the preceding library-move runs separately killed and replaced
+workers while a clear was open.
+
+Whole-worker resident memory peaked at 490.6 MiB across the run and 486.1 MiB
+during the timed interval. Quarter-by-quarter median RSS was 445.6, 430.8, 422.1
+and 423.0 MiB. The 261 recorded collections left 36.8–55.0 MiB of used heap after
+GC, ending at 37.9 MiB; total GC pause time was 788 ms. This one run with task
+restarts does not establish multi-day leak freedom or maximum capacity.
+
+The first endurance attempt is retained as a harness failure, not a connector
+failure or completed soak. Its second restart exceeded the generic broker
+inspector's 1,000-record limit while reading obsolete offset versions. The
+test-only inspector now has an explicit latest-value-per-key mode for offsets,
+including tombstones and a fixed broker endpoint. Key/data/scan/time bounds
+remain, and ordinary event inspection still retains every record. Four targeted
+Java cases and the 153-test Python harness suite passed. The full endurance
+schedule then ran again in a fresh fixture; the connector ZIP was unchanged.
+
+Independent final queries found no remaining schemas, libraries, journals or
+inquiry messages for all 18 owned fixture libraries across successful and failed
+attempts. All 13 owned Docker run prefixes were absent. Final verification again
+matched all 203 production sources and 15 plugin JARs to the publication manifest.
+No production connector change was needed for this validation.
