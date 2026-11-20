@@ -27,7 +27,7 @@ class RetrieveJournalTest {
         JournalProcessedPosition positionMatches = firstPosition();
         EntryHeader entryHeader = new EntryHeader(-1, -1, -1l, positionMatches.getOffset(), BigInteger.TWO,
                 Instant.ofEpochMilli(2l), 'Z', "UB", "OBJECT", BigInteger.TEN, -1, -1,
-                positionMatches.getReceiver().name(), positionMatches.getReceiver().library());
+                positionMatches.getReceiver().name(), positionMatches.getReceiver().library(), BigInteger.TWO);
         assertTrue(RetrieveJournal.alreadyProcessed(positionMatches, entryHeader), "compare sequence number, library and receiver match");
 
         JournalProcessedPosition positionIncorrectReceiver = new JournalProcessedPosition(BigInteger.ONE, new JournalReceiver("receiverDoesn'tMatch", "receiverLibrary"),
@@ -48,12 +48,12 @@ class RetrieveJournalTest {
         JournalProcessedPosition positionMatches = firstPosition();
         EntryHeader entryHeader = new EntryHeader(-1, -1, -1l, positionMatches.getOffset(), BigInteger.TWO,
                 Instant.ofEpochMilli(2l), 'Z', "UB", "OBJECT", BigInteger.TEN, -1, -1,
-                positionMatches.getReceiver().name(), positionMatches.getReceiver().library());
+                positionMatches.getReceiver().name(), positionMatches.getReceiver().library(), BigInteger.TWO);
         assertTrue(RetrieveJournal.alreadyProcessed(positionMatches, entryHeader), "compare only sequence number, library and receiver empty");
 
         EntryHeader entryHeaderDifferentOffset = new EntryHeader(-1, -1, -1l, positionMatches.getOffset().add(BigInteger.ONE), BigInteger.TWO,
                 Instant.ofEpochMilli(2l), 'Z', "UB", "OBJECT", BigInteger.TEN, -1, -1,
-                "", "");
+                "", "", BigInteger.TWO);
         assertFalse(RetrieveJournal.alreadyProcessed(positionMatches, entryHeaderDifferentOffset), "compare only sequence number, library and receiver empty");
 
     }
@@ -65,14 +65,14 @@ class RetrieveJournalTest {
 
         EntryHeader entryHeader = new EntryHeader(-1, -1, -1l, positionMatchesNotProcessed.getOffset(), BigInteger.TWO,
                 Instant.ofEpochMilli(2l), 'Z', "UB", "OBJECT", BigInteger.TEN, -1, -1,
-                positionMatchesNotProcessed.getReceiver().name(), positionMatchesNotProcessed.getReceiver().library());
+                positionMatchesNotProcessed.getReceiver().name(), positionMatchesNotProcessed.getReceiver().library(), BigInteger.TWO);
 
         assertTrue(RetrieveJournal.alreadyProcessed(positionMatches, entryHeader), "compare sequence number, library and receiver match");
         assertFalse(RetrieveJournal.alreadyProcessed(positionMatchesNotProcessed, entryHeader), "compare sequence number, library and receiver match");
 
         EntryHeader entryHeaderEmptyReceiver = new EntryHeader(-1, -1, -1l, positionMatchesNotProcessed.getOffset(), BigInteger.TWO,
                 Instant.ofEpochMilli(2l), 'Z', "UB", "OBJECT", BigInteger.TEN, -1, -1,
-                "", "");
+                "", "", BigInteger.TWO);
 
         assertTrue(RetrieveJournal.alreadyProcessed(positionMatches, entryHeaderEmptyReceiver), "compare sequence number, library and receiver match");
         assertFalse(RetrieveJournal.alreadyProcessed(positionMatchesNotProcessed, entryHeaderEmptyReceiver), "compare only sequence number, library and receiver empty");

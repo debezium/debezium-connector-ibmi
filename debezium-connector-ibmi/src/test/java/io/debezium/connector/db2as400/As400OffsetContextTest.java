@@ -121,7 +121,7 @@ public class As400OffsetContextTest {
 
         // entry without its own receiver (the common case): sequence comes from the entry, receiver falls back to position
         final EntryHeader entryHeader = new EntryHeader(-1, -1, -1L, ENTRY_SEQUENCE, BigInteger.TWO,
-                Instant.ofEpochSecond(200_000L), 'R', "UP", "OBJECT", BigInteger.TEN, -1, -1, "", "");
+                Instant.ofEpochSecond(200_000L), 'R', "UP", "OBJECT", BigInteger.TEN, -1, -1, "", "", BigInteger.valueOf(7L));
         offsetContext.updateSourceInfo(entryHeader);
 
         final Struct source = offsetContext.getSourceInfo();
@@ -144,7 +144,7 @@ public class As400OffsetContextTest {
         // the position (RECV008/RCV_LIB) has not yet been advanced past the rollover boundary,
         // but the dispatched entry already names the new receiver
         final EntryHeader entryHeader = new EntryHeader(-1, -1, -1L, BigInteger.valueOf(101L), BigInteger.TWO,
-                Instant.ofEpochSecond(200_000L), 'R', "UP", "OBJECT", BigInteger.TEN, -1, -1, "RECV009", "RCV_LIB");
+                Instant.ofEpochSecond(200_000L), 'R', "UP", "OBJECT", BigInteger.TEN, -1, -1, "RECV009", "RCV_LIB", BigInteger.valueOf(7L));
         offsetContext.updateSourceInfo(entryHeader);
 
         final Struct source = offsetContext.getSourceInfo();
@@ -153,6 +153,7 @@ public class As400OffsetContextTest {
                 .as("receiver must follow the entry across a rollover, not the lagging position")
                 .isEqualTo("RECV009");
         assertThat(source.getString("receiver_library")).isEqualTo("RCV_LIB");
+        assertThat(source.getString("rrn")).isEqualTo("7");
     }
 
     @Test
