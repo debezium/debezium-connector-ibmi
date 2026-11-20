@@ -152,7 +152,7 @@ public class As400ConnectorTask extends BaseSourceTask<As400Partition, As400Offs
                 DocumentReader.defaultReader(),
                 previousOffsetPartition);
 
-        final EventDispatcher<As400Partition, TableId> dispatcher = new EventDispatcher<>(connectorConfig, // CommonConnectorConfig
+        final EventDispatcher<As400Partition, TableId> dispatcher = new As400EventDispatcher(connectorConfig, // CommonConnectorConfig
                 topicNamingStrategy, // TopicSelector
                 schema, // DatabaseSchema
                 queue, // ChangeEventQueue

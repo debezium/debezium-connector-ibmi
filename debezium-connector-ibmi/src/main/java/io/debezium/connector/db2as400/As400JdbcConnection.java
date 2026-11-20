@@ -52,6 +52,10 @@ public class As400JdbcConnection extends JdbcConnection implements Connect<Conne
     private static final String GET_ALL_SYSTEM_TABLE_NAME = "select trim(system_table_name), trim(table_name) from qsys2.systables where system_table_schema=?";
 
     private static final String GET_TABLE_NAME = "select trim(table_name) from qsys2.systables where system_table_schema=? AND system_table_name=?";
+    private static final String GET_MEMBERS = """
+            SELECT TRIM(SYSTEM_TABLE_MEMBER) FROM QSYS2.SYSPARTITIONSTAT
+            WHERE SYSTEM_TABLE_SCHEMA=? AND SYSTEM_TABLE_NAME=? FETCH FIRST 2 ROWS ONLY
+            """;
     private static final String GET_INDEXES = """
             SELECT c.column_name FROM qsys.QADBKATR k
                   INNER JOIN qsys2.SYSCOLUMNS c on c.table_schema=k.dbklib and c.system_table_name=k.dbkfil AND c.system_column_name=k.DBKFLD
@@ -284,6 +288,25 @@ public class As400JdbcConnection extends JdbcConnection implements Connect<Conne
                 return Optional.of(systemName);
             }
         }
+    }
+
+    /**
+     * A member clear can be represented by a table truncate only for a single-member file.
+     * Do not cache this metadata: members can be added while the connector is running.
+     */
+    public boolean isOnlyMember(String schemaName, String systemName, String member) throws SQLException {
+        return prepareQueryAndMap(GET_MEMBERS,
+                call -> {
+                    call.setString(1, schemaName);
+                    call.setString(2, systemName);
+                },
+                rs -> {
+                    if (!rs.next()) {
+                        return false;
+                    }
+                    String onlyMember = rs.getString(1);
+                    return member.equals(onlyMember) && !rs.next();
+                });
     }
 
     public String getLongName(String schemaName, String systemName) {

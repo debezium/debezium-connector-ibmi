@@ -17,13 +17,19 @@ import io.debezium.jdbc.JdbcConfiguration;
 
 public class TestHelper {
 
-    private static final String DATABASE_NAME = "DTEST";
+    public static String schemaName() {
+        String schema = System.getProperty("test.database.schema", "DTEST");
+        if (!schema.matches("[A-Z][A-Z0-9_]{0,9}")) {
+            throw new IllegalArgumentException("test.database.schema must be an uppercase IBM i library name");
+        }
+        return schema;
+    }
 
     public static JdbcConfiguration defaultJdbcConfig() {
         return JdbcConfiguration.copy(Configuration.fromSystemProperties(ConfigurationNames.DATABASE_CONFIG_PREFIX))
                 .withDefault(JdbcConfiguration.PORT, "")
                 .withDefault(JdbcConfiguration.USER, "debezium")
-                .withDefault(JdbcConfiguration.DATABASE, DATABASE_NAME)
+                .withDefault(JdbcConfiguration.DATABASE, schemaName())
                 .withDefault("secure", "false")
                 .build();
     }
@@ -38,11 +44,11 @@ public class TestHelper {
                 (field, value) -> builder.with(ConfigurationNames.DATABASE_CONFIG_PREFIX + field, value));
 
         final var tableNamesStr = Stream.of(tableNames)
-                .map(x -> DATABASE_NAME + "." + x)
+                .map(x -> schemaName() + "." + x)
                 .collect(Collectors.joining(","));
 
         return builder.with(CommonConnectorConfig.TOPIC_PREFIX, "server1")
-                .with(As400ConnectorConfig.SCHEMA, DATABASE_NAME)
+                .with(As400ConnectorConfig.SCHEMA, schemaName())
                 .with(As400ConnectorConfig.TABLE_INCLUDE_LIST, tableNamesStr)
                 .withDefault("secure", "false")
                 .build();

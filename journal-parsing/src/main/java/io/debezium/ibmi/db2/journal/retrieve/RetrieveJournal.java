@@ -50,10 +50,10 @@ public class RetrieveJournal {
     private static final Logger log = LoggerFactory.getLogger(RetrieveJournal.class);
 
     private static final JournalCode[] REQUIRED_JOURNAL_CODES = new JournalCode[]{ JournalCode.D, JournalCode.R,
-            JournalCode.C };
+            JournalCode.C, JournalCode.F };
     private static final JournalEntryType[] REQURED_ENTRY_TYPES = new JournalEntryType[]{ JournalEntryType.PT,
             JournalEntryType.PX, JournalEntryType.UP, JournalEntryType.UB, JournalEntryType.DL, JournalEntryType.DR,
-            JournalEntryType.CT, JournalEntryType.CG, JournalEntryType.SC, JournalEntryType.CM };
+            JournalEntryType.CT, JournalEntryType.CG, JournalEntryType.CR, JournalEntryType.SC, JournalEntryType.CM };
     private final FirstHeaderDecoder firstHeaderDecoder = new FirstHeaderDecoder();
     private final EntryHeaderDecoder entryHeaderDecoder = new EntryHeaderDecoder();
     private final SimpleDateFormat dateFormatter = new SimpleDateFormat("yyMMdd-hhmm");

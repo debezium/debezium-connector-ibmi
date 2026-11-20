@@ -55,11 +55,7 @@ public class As400RpcConnection implements AutoCloseable, Connect<AS400, IOExcep
     private final boolean isSecure;
 
     public As400RpcConnection(As400ConnectorConfig config, As400StreamingChangeEventSourceMetrics streamingMetrics, List<FileFilter> includes, long cacheWait) {
-        super();
-        this.config = config;
-        this.isSecure = config.getJdbcConfig().getBoolean("secure", config.isSecure());
-        this.streamingMetrics = streamingMetrics;
-        this.journalInfoRetrieval = new JournalInfoRetrieval(cacheWait, config.cacheAdditionalDelay(), config.getPollInterval().toMillis());
+        this(config, streamingMetrics, new JournalInfoRetrieval(cacheWait, config.cacheAdditionalDelay(), config.getPollInterval().toMillis()), null);
         try {
             System.setProperty("com.ibm.as400.access.AS400.guiAvailable", "False");
             journalInfo = journalInfoRetrieval.getJournal(connection(), config.getSchema(), includes);
@@ -76,6 +72,15 @@ public class As400RpcConnection implements AutoCloseable, Connect<AS400, IOExcep
         catch (final IOException e) {
             log.error("Failed to fetch library", e);
         }
+    }
+
+    As400RpcConnection(As400ConnectorConfig config, As400StreamingChangeEventSourceMetrics streamingMetrics,
+                       JournalInfoRetrieval journalInfoRetrieval, RetrieveJournal retrieveJournal) {
+        this.config = config;
+        this.isSecure = config.getJdbcConfig().getBoolean("secure", config.isSecure());
+        this.streamingMetrics = streamingMetrics;
+        this.journalInfoRetrieval = journalInfoRetrieval;
+        this.retrieveJournal = retrieveJournal;
     }
 
     @Override
