@@ -24,6 +24,7 @@ import io.debezium.connector.SourceInfoStructMaker;
 import io.debezium.ibmi.db2.journal.retrieve.JournalProcessedPosition;
 import io.debezium.ibmi.db2.journal.retrieve.RetrieveConfig;
 import io.debezium.jdbc.JdbcConfiguration;
+import io.debezium.jdbc.TemporalPrecisionMode;
 import io.debezium.relational.ColumnFilterMode;
 import io.debezium.relational.RelationalDatabaseConnectorConfig;
 import io.debezium.relational.RelationalTableFilters;
@@ -395,6 +396,12 @@ public class As400ConnectorConfig extends RelationalDatabaseConnectorConfig {
 
     public CharSequenceTrimMode getCharSequenceTrimMode() {
         return charSequenceTrimMode;
+    }
+
+    @Override
+    public TemporalPrecisionMode getTemporalPrecisionMode() {
+        TemporalPrecisionMode tpm = super.getTemporalPrecisionMode();
+        return (tpm == null) ? TemporalPrecisionMode.ADAPTIVE : tpm;
     }
 
     /**
