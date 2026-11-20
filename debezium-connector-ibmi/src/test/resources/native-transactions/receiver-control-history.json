@@ -1,0 +1,2206 @@
+{
+  "scope": "test-only-native-control-inventory-v1",
+  "startup_proof": false,
+  "provenance": {
+    "library": "DCNC0924",
+    "source": "live-05 receiver pending experiment, 2026-11-09",
+    "report_sha256": "36e582129661478c03492d12b9d3939719b8fba96820c53e02541173562bbc64",
+    "interpretation": "Original raw controls and native identity observations, no substituted thread IDs. Expected open cycles from the independently controlled transaction schedule. Row/lifecycle completeness and publication are separate gates.",
+    "fixture_cleanup": "passed"
+  },
+  "entries": {
+    "dd3809a546aa4e0a0dfaa89d241559e394d9c4457d33fca9a504ff63f69bc0e3": {
+      "position": {
+        "library": "DCNC0924",
+        "receiver": "QSQJRN0002",
+        "sequence": "4"
+      },
+      "type": "J/PR",
+      "cycle": "0",
+      "base64": "AAAAAAAAAQwAAAEQAAAAAAAAAAAAAADsAAAAAAAAAASwLUkcuDUAAAAAAAAAAACfAAAAAAAAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAAAAADR19nY6cTB4tbJ1cnj2OTixdlAQEBAQPjw8PDz9tjD1MTF58PxQEBc1tTJ4+PFxEBAXNbUyePjxcRAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQOPF4uPk4sXZQEAAAAAAAAAAAAAA8OPF4uNAQEBA8PAAQEBAQEBAQEBAQAAAAAAAAADY4tjR2dXw8PDyxMPVw/D58vRAQFzi6OLCweJAQEAAAQAAAADw8PDy8AAAAAAAAAAAAAAA2OLY0dnV8PDw8cTD1cPw+fL0QEAAAAAAAAAAAAAAAAA="
+    },
+    "e1fb8708b517d0b7700b6d0e9826eab57b8508b5ec522550703ca74a44155567": {
+      "position": {
+        "library": "DCNC0924",
+        "receiver": "QSQJRN0002",
+        "sequence": "5"
+      },
+      "type": "J/XP",
+      "cycle": "0",
+      "base64": "AAAAAAAAAOwAAADwAAAAAAAAAAAAAAAAAAAAAAAAAAWwLUkeHjQAAAAAAAAAAAAPAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAIAAAAAAAAAAAAAAAAAAAAAAADR59fY6cTB4tbJ1cnj2OTixdlAQEBAQPjw8PDz+djpxMHi1snVyeNc1tTJ4+PFxEBAXNbUyePjxcRAQMFAQEBAQEBAQEDEw9XD8Pny9EBAQEBAQEBAQEBAQOPF4uPk4sXZQEDpQAAjFm+xiAAD8OPF4uNAQEBA8PEAXMbJ08VAQEBAQAAAAAAAAAAAAAAA8PDw8PAAAAAAAAAAAAAAAA=="
+    },
+    "2015874e47e1f3a71f53af79a76d9b40c5fc1870d0c2af58f4e65c25d54cf9cb": {
+      "position": {
+        "library": "DCNC0924",
+        "receiver": "QSQJRN0002",
+        "sequence": "15"
+      },
+      "type": "J/XP",
+      "cycle": "0",
+      "base64": "AAAAAAAAAOwAAADwAAAAAAAAAAAAAAAAAAAAAAAAAA+wLUkews0AAAAAAAAAAAAPAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAoAAAAAAAAAAAAAAAAAAAAAAADR59fY6cTB4tbJ1cnj2OTixdlAQEBAQPjw8PDz+djpxMHi1snVyeNc1tTJ4+PFxEBAXNbUyePjxcRAQMJAQEBAQEBAQEDEw9XD8Pny9EBAQEBAQEBAQEBAQOPF4uPk4sXZQEDpQAAjFm+xiAAF8OPF4uNAQEBA8PEAXMbJ08VAQEBAQAAAAAAAAAAAAAAA8PDw8PAAAAAAAAAAAAAAAA=="
+    },
+    "64d21223ba2b8f45b83d3e371b1cf880c9405580cf902833e8bab29bf952e4e6": {
+      "position": {
+        "library": "DCNC0924",
+        "receiver": "QSQJRN0002",
+        "sequence": "25"
+      },
+      "type": "J/XP",
+      "cycle": "0",
+      "base64": "AAAAAAAAAOwAAADwAAAAAAAAAAAAAAAAAAAAAAAAABmwLUkfXicAAAAAAAAAAACfAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAgAAAAAAAAAAAAAAAAAAAAAAADR59fY6cTB4tbJ1cnj2OTixdlAQEBAQPjw8PDz9tjpxMHi1snVyeNc1tTJ4+PFxEBAXNbUyePjxcRAQNRAQEBAQEBAQEDEw9XD8Pny9EBAQEBAQEBAQEBAQOPF4uPk4sXZQEDpQAAjFm+xiAAH8OPF4uNAQEBA8PEAXMbJ08VAQEBAQAAAAAAAAAAAAAAA8PDw8PAAAAAAAAAAAAAAAA=="
+    },
+    "087d356567889176c5e6249d87107fd08dc9fc06156ae546487f0f6cbc5e7c3e": {
+      "position": {
+        "library": "DCNC0924",
+        "receiver": "QSQJRN0002",
+        "sequence": "35"
+      },
+      "type": "J/XP",
+      "cycle": "0",
+      "base64": "AAAAAAAAAOwAAADwAAAAAAAAAAAAAAAAAAAAAAAAACOwLUkgEDkAAAAAAAAAAACfAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAYAAAAAAAAAAAAAAAAAAAAAAADR59fY6cTB4tbJ1cnj2OTixdlAQEBAQPjw8PDz9tjpxMHi1snVyeNc1tTJ4+PFxEBAXNbUyePjxcRAQORAQEBAQEBAQEDEw9XD8Pny9EBAQEBAQEBAQEBAQOPF4uPk4sXZQEDpQAAjFm+xiAAJ8OPF4uNAQEBA8PEAXMbJ08VAQEBAQAAAAAAAAAAAAAAA8PDw8PAAAAAAAAAAAAAAAA=="
+    },
+    "853d44a5046bf625753ea6e84e56109b589e3a6e0329ad6953322ff03b178080": {
+      "position": {
+        "library": "DCNC0924",
+        "receiver": "QSQJRN0002",
+        "sequence": "99"
+      },
+      "type": "C/BC",
+      "cycle": "0",
+      "base64": "AAAAAAAAAOwAAADwAAAAAAAAAAAAAAAAAAAAAAAAAGOwLUlMzTgAAAAAAAAAAAAyAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAgAAAAAAAAAAAAAAAAAAAAAAADDwsPY6cTB4tbJ1cnj2OTixdlAQEBAQPjw8PDz+NjpxMHi1snVyeNc1tTJ4+PFxEBAXNbUyePjxcRAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQOPF4uPk4sXZQEAAAAAAAAAAAAAA8OPF4uNAQEBA8PAAQEBAQEBAQEBAQAAAAAAAAAAAAAAA8PDw8PAAAAAAAAAAAAAAAA=="
+    },
+    "664f36ba27ac4b68cb197f0ecc7bfb7d8912aada4fb844dcda5e032e5cb07f71": {
+      "position": {
+        "library": "DCNC0924",
+        "receiver": "QSQJRN0002",
+        "sequence": "100"
+      },
+      "type": "C/SC",
+      "cycle": "100",
+      "base64": "AAAAAAAAAOwAAADwAAAAAAAAAAAAAAAAAAAAAAAAAGSwLUlMza8AAAAAAAAAAAAyAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABkAAAAAAAAAAkAAAAAAAAAAAAAAAAAAAAAAADD4sPY6cTB4tbJ1cnj2OTixdlAQEBAQPjw8PDz+NjpxMHi1snVyeNc1tTJ4+PFxEBAXNbUyePjxcRAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQOPF4uPk4sXZQEAAAAAAAAAAAAAA8OPF4uNAQEBA8PAAQEBAQEBAQEBAQAAAAAAAAAAAAAAA8PDw8PAAAAAAAAAAAAAAAA=="
+    },
+    "8b8be7c3bbc6cf7e12cafa376553835a3b4dc424150ec3e757266fc22e7c7e1a": {
+      "position": {
+        "sequence": "104",
+        "receiver": "QSQJRN0002",
+        "library": "DCNC0924"
+      },
+      "type": "J/NR",
+      "cycle": "0",
+      "base64": "AAAAAAAAAOwAAADwAAAAAAAAAAAAAAAAAAAAAAAAAGiwLUlNsyIAAAAAAAAAAAAcAAAAAAAAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAIAAAAAAAAAAAAAAAAAAAAAAADR1dnY6cTB4tbJ1cnj2OTixdlAQEBAQPjw8PD08NjD1MTF58PxQEBc1tTJ4+PFxEBAXNbUyePjxcRAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQOPF4uPk4sXZQEAAAAAAAAAAAAAA8OPF4uNAQEBA8PAAQEBAQEBAQEBAQAAAAAAAAAAAAAAA8PDw8vAAAAAAAAAAAAAAANji2NHZ1fDw8PPEw9XD8Pny9EBA"
+    },
+    "ca2fa293b3aafb3d626a598a3da914913ba645ca7b6d74c0f727c7101cacf868": {
+      "position": {
+        "library": "DCNC0924",
+        "receiver": "QSQJRN0003",
+        "sequence": "105"
+      },
+      "type": "J/PR",
+      "cycle": "0",
+      "base64": "AAAAAAAAAQwAAAEQAAAAAAAAAAAAAADsAAAAAAAAAGmwLUlNtVQAAAAAAAAAAAAcAAAAAAAAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAAAAADR19nY6cTB4tbJ1cnj2OTixdlAQEBAQPjw8PD08NjD1MTF58PxQEBc1tTJ4+PFxEBAXNbUyePjxcRAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQOPF4uPk4sXZQEAAAAAAAAAAAAAA8OPF4uNAQEBA8PAAQEBAQEBAQEBAQAAAAAAAAADY4tjR2dXw8PDzxMPVw/D58vRAQFzi6OLCweJAQEAAAQAAAADw8PDy8AAAAAAAAAAAAAAA2OLY0dnV8PDw8sTD1cPw+fL0QEA="
+    },
+    "dca4017beb3b4320606ad58cd8ccf140279fa519188ec2bd98db5c65d4b6a0ca": {
+      "position": {
+        "library": "DCNC0924",
+        "receiver": "QSQJRN0003",
+        "sequence": "105"
+      },
+      "type": "J/PR",
+      "cycle": "0",
+      "base64": "AAAAAAAAAQwAAAEQAAAAAAAAAAAAAADsAAAAAAAAAGmwLUlNtVQAAAAAAAAAAAAcAAAAAAAAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAAAAADR19nY6cTB4tbJ1cnj2OTixdlAQEBAQPjw8PD08NjD1MTF58PxQEBc1tTJ4+PFxEBAXNbUyePjxcRAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQOPF4uPk4sXZQEAAAAAAAAAAAAAA8OPF4uNAQEBA8PAAQEBAQEBAQEBAQAAAAAAAAADY4tjR2dXw8PDzxMPVw/D58vRAQFzi6OLCweJAQEAAAQAAAADw8PDy8AAAAAAAAAAAAAAA2OLY0dnV8PDw8sTD1cPw+fL0QEAAAAAAAAAAAAAAAAA="
+    },
+    "0b171733d762a62a4c17dfb4301a3b814a2ee06499d717fa432114ea9b33918f": {
+      "position": {
+        "library": "DCNC0924",
+        "receiver": "QSQJRN0003",
+        "sequence": "162"
+      },
+      "type": "C/BC",
+      "cycle": "0",
+      "base64": "AAAAAAAAAOwAAADwAAAAAAAAAAAAAAAAAAAAAAAAAKKwLUlpqswAAAAAAAAAAACfAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAgAAAAAAAAAAAAAAAAAAAAAAADDwsPY6cTB4tbJ1cnj2OTixdlAQEBAQPjw8PDz9tjpxMHi1snVyeNc1tTJ4+PFxEBAXNbUyePjxcRAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQOPF4uPk4sXZQEAAAAAAAAAAAAAA8OPF4uNAQEBA8PAAQEBAQEBAQEBAQAAAAAAAAAAAAAAA8PDw8PAAAAAAAAAAAAAAAA=="
+    },
+    "15e30b57117e8b03a2b24e196751490507fe683b928b1fa9807f31dd99f19121": {
+      "position": {
+        "library": "DCNC0924",
+        "receiver": "QSQJRN0003",
+        "sequence": "163"
+      },
+      "type": "C/SC",
+      "cycle": "163",
+      "base64": "AAAAAAAAAOwAAADwAAAAAAAAAAAAAAAAAAAAAAAAAKOwLUlpq3IAAAAAAAAAAACfAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACjAAAAAAAAAAkAAAAAAAAAAAAAAAAAAAAAAADD4sPY6cTB4tbJ1cnj2OTixdlAQEBAQPjw8PDz9tjpxMHi1snVyeNc1tTJ4+PFxEBAXNbUyePjxcRAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQOPF4uPk4sXZQEAAAAAAAAAAAAAA8OPF4uNAQEBA8PAAQEBAQEBAQEBAQAAAAAAAAAAAAAAA8PDw8PAAAAAAAAAAAAAAAA=="
+    },
+    "1b35a552fbcfeb381e2b2ea3c4d5ffdc83efb9c66d7c0aae46c383c78de75b6b": {
+      "position": {
+        "library": "DCNC0924",
+        "receiver": "QSQJRN0003",
+        "sequence": "164"
+      },
+      "type": "C/SB",
+      "cycle": "163",
+      "base64": "AAAAAAAAAOwAAADwAAAAAAAAAAAAAAAAAAAAAAAAAKSwLUlpq3MAAAAAAAAAAACfAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACjAAAAAAAAAAkAAAAAAAAAAAAAAAAAAAAAAADD4sLY6cTB4tbJ1cnj2OTixdlAQEBAQPjw8PDz9tjpxMHi1snVyeNc1tTJ4+PFxEBAXNbUyePjxcRAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQOPF4uPk4sXZQEAAAAAAAAAAAAAA8OPF4uNAQEBA8PAAQEBAQEBAQEBAQAAAAAAAAAIAAAAA8PDw8PEAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAAA="
+    },
+    "f75c9e07e3be841bc5c37167c878ed04dd49eb307c13ded912bebe58080cb2fe": {
+      "position": {
+        "library": "DCNC0924",
+        "receiver": "QSQJRN0003",
+        "sequence": "168"
+      },
+      "type": "C/SU",
+      "cycle": "163",
+      "base64": "AAAAAAAAAOwAAADwAAAAAAAAAAAAAAAAAAAAAAAAAKiwLUlptYwAAAAAAAAAAACfAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACjAAAAAAAAAAoAAAAAAAAAAAAAAAAAAAAAAADD4uTY6cTB4tbJ1cnj2OTixdlAQEBAQPjw8PDz9tjpxMHi1snVyeNc1tTJ4+PFxEBAXNbUyePjxcRAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQOPF4uPk4sXZQEAAAAAAAAAAAAAA8OPF4uNAQEBA8PAAQEBAQEBAQEBAQAAAAAAAAAIAAAAA8PDw8vAAAAAAAAAAAAAAAPDw8PDw8PDw8PDw8PDw8PDw8fb0AAAAAAAAAAAAAAAA"
+    },
+    "5242c8ab535f761accc954f148cd531ccb74f5254a077703504309e9f53c7abb": {
+      "position": {
+        "library": "DCNC0924",
+        "receiver": "QSQJRN0003",
+        "sequence": "169"
+      },
+      "type": "C/SB",
+      "cycle": "163",
+      "base64": "AAAAAAAAAOwAAADwAAAAAAAAAAAAAAAAAAAAAAAAAKmwLUlptY8AAAAAAAAAAACfAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACjAAAAAAAAAAoAAAAAAAAAAAAAAAAAAAAAAADD4sLY6cTB4tbJ1cnj2OTixdlAQEBAQPjw8PDz9tjpxMHi1snVyeNc1tTJ4+PFxEBAXNbUyePjxcRAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQOPF4uPk4sXZQEAAAAAAAAAAAAAA8OPF4uNAQEBA8PAAQEBAQEBAQEBAQAAAAAAAAAIAAAAA8PDw8PEAAAAAAAAAAAAAAEA="
+    },
+    "95d40b5017a9c9ca0530fa669fa78b4a09e60622e2a6f6cc3140e295ddecd515": {
+      "position": {
+        "sequence": "100",
+        "receiver": "QSQJRN0002",
+        "library": "DCNC0924"
+      },
+      "type": "C/SC",
+      "cycle": "100",
+      "base64": "AAAAAAAAAQwAAAEQAAAAAAAAAAAAAADsAAAAAAAAAGSwLUlMza8AAAAAAAAAAAAyAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABkAAAAAAAAAAkAAAAAAAAAAAAAAAAAAAAAAADD4sPY6cTB4tbJ1cnj2OTixdlAQEBAQPjw8PDz+NjpxMHi1snVyeNc1tTJ4+PFxEBAXNbUyePjxcRAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQOPF4uPk4sXZQEAAAAAAAAAAAAAA8OPF4uNAQEBA8PAAQEBAQEBAQEBAQAAAAAAAAADY4tjR2dXw8PDyxMPVw/D58vRAQFzi6OLCweJAQEAAAQAAAADw8PDw8AAAAAAAAAAAAAAA"
+    },
+    "092e3796cac2eb7f755b8e3da511d282a80353e5427f1fb4f71f8f90be96b9b1": {
+      "position": {
+        "library": "DCNC0924",
+        "receiver": "QSQJRN0003",
+        "sequence": "169"
+      },
+      "type": "C/SB",
+      "cycle": "163",
+      "base64": "AAAAAAAAAOwAAADwAAAAAAAAAAAAAAAAAAAAAAAAAKmwLUlptY8AAAAAAAAAAACfAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACjAAAAAAAAAAoAAAAAAAAAAAAAAAAAAAAAAADD4sLY6cTB4tbJ1cnj2OTixdlAQEBAQPjw8PDz9tjpxMHi1snVyeNc1tTJ4+PFxEBAXNbUyePjxcRAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQOPF4uPk4sXZQEAAAAAAAAAAAAAA8OPF4uNAQEBA8PAAQEBAQEBAQEBAQAAAAAAAAAIAAAAA8PDw8PEAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAAA="
+    },
+    "e7c9072c66983b341c7b77b8ce12dddf6914b5aeb28cc7f7cdd3158d06662e4f": {
+      "position": {
+        "library": "DCNC0924",
+        "receiver": "QSQJRN0003",
+        "sequence": "224"
+      },
+      "type": "C/SU",
+      "cycle": "163",
+      "base64": "AAAAAAAAAOwAAADwAAAAAAAAAAAAAAAAAAAAAAAAAOCwLUmE2yUAAAAAAAAAAACfAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACjAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAADD4uTY6cTB4tbJ1cnj2OTixdlAQEBAQPjw8PDz9tjpxMHi1snVyeNc1tTJ4+PFxEBAXNbUyePjxcRAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQOPF4uPk4sXZQEAAAAAAAAAAAAAA8OPF4uNAQEBA8PAAQEBAQEBAQEBAQAAAAAAAAAIAAAAA8PDw8vAAAAAAAAAAAAAAAPDw8PDw8PDw8PDw8PDw8PDw8fb5AAAAAAAAAAAAAAAA"
+    },
+    "9b2ed8e62db19e703c85d4f10b21b0b914a38266f345cdc9c257edaaaef1929d": {
+      "position": {
+        "library": "DCNC0924",
+        "receiver": "QSQJRN0003",
+        "sequence": "225"
+      },
+      "type": "C/RB",
+      "cycle": "163",
+      "base64": "AAAAAAAAAOwAAADwAAAAAAAAAAAAAAAAAAAAAAAAAOGwLUmE2yUAAAAAAAAAAACfAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACjAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAADD2cLY6cTB4tbJ1cnj2OTixdlAQEBAQPjw8PDz9tjpxMHi1snVyeNc1tTJ4+PFxEBAXNbUyePjxcRAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQOPF4uPk4sXZQEAAAAAAAAAAAAAA8OPF4uNAQEBA8PAAQEBAQEBAQEBAQAAAAAAAAAAAAAAA8PDw8PAAAAAAAAAAAAAAAA=="
+    },
+    "57cb35e6f0603c4df7da44fb5835d8410eded6d55064e2611719909fdbb127ff": {
+      "position": {
+        "library": "DCNC0924",
+        "receiver": "QSQJRN0003",
+        "sequence": "240"
+      },
+      "type": "C/CM",
+      "cycle": "100",
+      "base64": "AAAAAAAAAOwAAADwAAAAAAAAAAAAAAAAAAAAAAAAAPCwLUmLzcUAAAAAAAAAAAAyAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABkAAAAAAAAAAkAAAAAAAAAAAAAAAAAAAAAAADDw9TY6cTB4tbJ1cnj2OTixdlAQEBAQPjw8PDz+NjpxMHi1snVyeNc1tTJ4+PFxEBAXNbUyePjxcRAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQOPF4uPk4sXZQEAAAAAAAAAAAAAA8OPF4uNAQEBA8PAAQEBAQEBAQEBAQAAAAAAAAAAAAAAA8PDw8PAAAAAAAAAAAAAAAA=="
+    },
+    "d81c80fc6c1f3f9f6400e77b2975493815447b66780ec7707b455fe85ac1d490": {
+      "position": {
+        "library": "DCNC0924",
+        "receiver": "QSQJRN0003",
+        "sequence": "282"
+      },
+      "type": "C/SC",
+      "cycle": "282",
+      "base64": "AAAAAAAAAOwAAADwAAAAAAAAAAAAAAAAAAAAAAAAARqwLUmgZOEAAAAAAAAAAACfAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAEaAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAAAAADD4sPY6cTB4tbJ1cnj2OTixdlAQEBAQPjw8PDz9tjpxMHi1snVyeNc1tTJ4+PFxEBAXNbUyePjxcRAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQOPF4uPk4sXZQEAAAAAAAAAAAAAA8OPF4uNAQEBA8PAAQEBAQEBAQEBAQAAAAAAAAAAAAAAA8PDw8PAAAAAAAAAAAAAAAA=="
+    },
+    "26b838192bf4065bd13568277b2955ed0a203f111614f591c7d11e038138470b": {
+      "position": {
+        "library": "DCNC0924",
+        "receiver": "QSQJRN0003",
+        "sequence": "283"
+      },
+      "type": "C/SB",
+      "cycle": "282",
+      "base64": "AAAAAAAAAOwAAADwAAAAAAAAAAAAAAAAAAAAAAAAARuwLUmgZOEAAAAAAAAAAACfAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAEaAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAAAAADD4sLY6cTB4tbJ1cnj2OTixdlAQEBAQPjw8PDz9tjpxMHi1snVyeNc1tTJ4+PFxEBAXNbUyePjxcRAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQOPF4uPk4sXZQEAAAAAAAAAAAAAA8OPF4uNAQEBA8PAAQEBAQEBAQEBAQAAAAAAAAAIAAAAA8PDw8PEAAAAAAAAAAAAAAIAAAAAAAAAAAAAAAAAAAAA="
+    },
+    "33b746e4d1ae66c0601ee545b14e57653ad235e7e648f339dbbd52ae91c6529d": {
+      "position": {
+        "library": "DCNC0924",
+        "receiver": "QSQJRN0003",
+        "sequence": "290"
+      },
+      "type": "C/SQ",
+      "cycle": "282",
+      "base64": "AAAAAAAAAOwAAADwAAAAAAAAAAAAAAAAAAAAAAAAASKwLUmgyzEAAAAAAAAAAACfAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAEaAAAAAAAAAAYAAAAAAAAAAAAAAAAAAAAAAADD4tjY6cTB4tbJ1cnj2OTixdlAQEBAQPjw8PDz9tjpxMHi1snVyeNc1tTJ4+PFxEBAXNbUyePjxcRAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQOPF4uPk4sXZQEAAAAAAAAAAAAAA8OPF4uNAQEBA8PAAQEBAQEBAQEBAQAAAAAAAAAIAAAAA8PDw8vAAAAAAAAAAAAAAAPDw8PDw8PDw8PDw8PDw8PDw8vjz"
+    },
+    "f2028ee0b906a42c28397b00ae5ab1d4afafba442605c7e41cc287525daee33b": {
+      "position": {
+        "library": "DCNC0924",
+        "receiver": "QSQJRN0003",
+        "sequence": "282"
+      },
+      "type": "C/SC",
+      "cycle": "282",
+      "base64": "AAAAAAAAAQwAAAEQAAAAAAAAAAAAAADsAAAAAAAAARqwLUmgZOEAAAAAAAAAAACfAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAEaAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAAAAADD4sPY6cTB4tbJ1cnj2OTixdlAQEBAQPjw8PDz9tjpxMHi1snVyeNc1tTJ4+PFxEBAXNbUyePjxcRAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQOPF4uPk4sXZQEAAAAAAAAAAAAAA8OPF4uNAQEBA8PAAQEBAQEBAQEBAQAAAAAAAAADY4tjR2dXw8PDzxMPVw/D58vRAQFzi6OLCweJAQEAAAQAAAADw8PDw8AAAAAAAAAAAAAAA"
+    },
+    "e4a9ace7adeacc92e299ab8799ba1148098e10d8641914f9a8c53df4c4f0afba": {
+      "position": {
+        "library": "DCNC0924",
+        "receiver": "QSQJRN0003",
+        "sequence": "290"
+      },
+      "type": "C/SQ",
+      "cycle": "282",
+      "base64": "AAAAAAAAAOwAAADwAAAAAAAAAAAAAAAAAAAAAAAAASKwLUmgyzEAAAAAAAAAAACfAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAEaAAAAAAAAAAYAAAAAAAAAAAAAAAAAAAAAAADD4tjY6cTB4tbJ1cnj2OTixdlAQEBAQPjw8PDz9tjpxMHi1snVyeNc1tTJ4+PFxEBAXNbUyePjxcRAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQOPF4uPk4sXZQEAAAAAAAAAAAAAA8OPF4uNAQEBA8PAAQEBAQEBAQEBAQAAAAAAAAAIAAAAA8PDw8vAAAAAAAAAAAAAAAPDw8PDw8PDw8PDw8PDw8PDw8vjzAAAAAAAAAAAAAAAA"
+    },
+    "e65005326c2a32f1e8ebdc6d6f48cd8697134b587d812f009f5418995caec873": {
+      "position": {
+        "library": "DCNC0924",
+        "receiver": "QSQJRN0003",
+        "sequence": "358"
+      },
+      "type": "C/RB",
+      "cycle": "282",
+      "base64": "AAAAAAAAAOwAAADwAAAAAAAAAAAAAAAAAAAAAAAAAWawLUnCgIUAAAAAAAAAAACfAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAEaAAAAAAAAAAMAAAAAAAAAAAAAAAAAAAAAAADD2cLY6cTB4tbJ1cnj2OTixdlAQEBAQPjw8PDz9tjpxMHi1snVyeNc1tTJ4+PFxEBAXNbUyePjxcRAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQOPF4uPk4sXZQEAAAAAAAAAAAAAA8OPF4uNAQEBA8PAAQEBAQEBAQEBAQAAAAAAAAAAAAAAA8PDw8PAAAAAAAAAAAAAAAA=="
+    },
+    "03eebd5ce65d8c9a662fe3df69db0b337c038156b0968b866763a792b43e758e": {
+      "position": {
+        "library": "DCNC0924",
+        "receiver": "QSQJRN0003",
+        "sequence": "403"
+      },
+      "type": "C/SC",
+      "cycle": "403",
+      "base64": "AAAAAAAAAQwAAAEQAAAAAAAAAAAAAADsAAAAAAAAAZOwLUnW394AAAAAAAAAAACfAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAGTAAAAAAAAAAgAAAAAAAAAAAAAAAAAAAAAAADD4sPY6cTB4tbJ1cnj2OTixdlAQEBAQPjw8PDz9tjpxMHi1snVyeNc1tTJ4+PFxEBAXNbUyePjxcRAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQOPF4uPk4sXZQEAAAAAAAAAAAAAA8OPF4uNAQEBA8PAAQEBAQEBAQEBAQAAAAAAAAADY4tjR2dXw8PDzxMPVw/D58vRAQFzi6OLCweJAQEAAAQAAAADw8PDw8AAAAAAAAAAAAAAA"
+    },
+    "894f4358547692ffef8365477c7f3dcd82d7ecf6e311b961fc66471761235b65": {
+      "position": {
+        "library": "DCNC0924",
+        "receiver": "QSQJRN0003",
+        "sequence": "404"
+      },
+      "type": "C/SB",
+      "cycle": "403",
+      "base64": "AAAAAAAAAOwAAADwAAAAAAAAAAAAAAAAAAAAAAAAAZSwLUnW394AAAAAAAAAAACfAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAGTAAAAAAAAAAgAAAAAAAAAAAAAAAAAAAAAAADD4sLY6cTB4tbJ1cnj2OTixdlAQEBAQPjw8PDz9tjpxMHi1snVyeNc1tTJ4+PFxEBAXNbUyePjxcRAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQOPF4uPk4sXZQEAAAAAAAAAAAAAA8OPF4uNAQEBA8PAAQEBAQEBAQEBAQAAAAAAAAAIAAAAA8PDw8PEAAAAAAAAAAAAAAIAAAAAAAAAAAAAAAAAAAAA="
+    },
+    "3d609bf724ec882da6de2ff7bc00625012f3c97086dad715a2e5a32ae7a2c67c": {
+      "position": {
+        "library": "DCNC0924",
+        "receiver": "QSQJRN0003",
+        "sequence": "412"
+      },
+      "type": "C/SQ",
+      "cycle": "403",
+      "base64": "AAAAAAAAAOwAAADwAAAAAAAAAAAAAAAAAAAAAAAAAZywLUnXRt8AAAAAAAAAAACfAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAGTAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAADD4tjY6cTB4tbJ1cnj2OTixdlAQEBAQPjw8PDz9tjpxMHi1snVyeNc1tTJ4+PFxEBAXNbUyePjxcRAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQOPF4uPk4sXZQEAAAAAAAAAAAAAA8OPF4uNAQEBA8PAAQEBAQEBAQEBAQAAAAAAAAAIAAAAA8PDw8vAAAAAAAAAAAAAAAPDw8PDw8PDw8PDw8PDw8PDw9PD0AAAAAAAAAAAAAAAA"
+    },
+    "a4396872a1cbe5cf4a55dc775d3b6a9fa14a441da5714290540e31f3952e0c46": {
+      "position": {
+        "library": "DCNC0924",
+        "receiver": "QSQJRN0003",
+        "sequence": "427"
+      },
+      "type": "C/CM",
+      "cycle": "403",
+      "base64": "AAAAAAAAAOwAAADwAAAAAAAAAAAAAAAAAAAAAAAAAauwLUnePrwAAAAAAAAAAACfAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAGTAAAAAAAAAAgAAAAAAAAAAAAAAAAAAAAAAADDw9TY6cTB4tbJ1cnj2OTixdlAQEBAQPjw8PDz9tjpxMHi1snVyeNc1tTJ4+PFxEBAXNbUyePjxcRAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQOPF4uPk4sXZQEAAAAAAAAAAAAAA8OPF4uNAQEBA8PAAQEBAQEBAQEBAQAAAAAAAAAAAAAAA8PDw8PAAAAAAAAAAAAAAAA=="
+    },
+    "225b6a98437882fcc092ae90f9dc687c5085c514509f12c448d5bf7b12269f01": {
+      "position": {
+        "library": "DCNC0924",
+        "receiver": "QSQJRN0003",
+        "sequence": "403"
+      },
+      "type": "C/SC",
+      "cycle": "403",
+      "base64": "AAAAAAAAAOwAAADwAAAAAAAAAAAAAAAAAAAAAAAAAZOwLUnW394AAAAAAAAAAACfAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAGTAAAAAAAAAAgAAAAAAAAAAAAAAAAAAAAAAADD4sPY6cTB4tbJ1cnj2OTixdlAQEBAQPjw8PDz9tjpxMHi1snVyeNc1tTJ4+PFxEBAXNbUyePjxcRAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQOPF4uPk4sXZQEAAAAAAAAAAAAAA8OPF4uNAQEBA8PAAQEBAQEBAQEBAQAAAAAAAAAAAAAAA8PDw8PAAAAAAAAAAAAAAAA=="
+    },
+    "b786fcbf1ae9c3c25cbb2a1f43800eb334ed0ef8f331e67c8dacec96dbdbe17f": {
+      "position": {
+        "library": "DCNC0924",
+        "receiver": "QSQJRN0003",
+        "sequence": "404"
+      },
+      "type": "C/SB",
+      "cycle": "403",
+      "base64": "AAAAAAAAAQwAAAEQAAAAAAAAAAAAAADsAAAAAAAAAZSwLUnW394AAAAAAAAAAACfAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAGTAAAAAAAAAAgAAAAAAAAAAAAAAAAAAAAAAADD4sLY6cTB4tbJ1cnj2OTixdlAQEBAQPjw8PDz9tjpxMHi1snVyeNc1tTJ4+PFxEBAXNbUyePjxcRAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQOPF4uPk4sXZQEAAAAAAAAAAAAAA8OPF4uNAQEBA8PAAQEBAQEBAQEBAQAAAAAAAAALY4tjR2dXw8PDzxMPVw/D58vRAQFzi6OLCweJAQEAAAQAAAADw8PDw8QAAAAAAAAAAAAAAgAAAAAAAAAAAAAAAAAAAAA=="
+    },
+    "0ae2c782089d50c3401fea1eac8b45465114f18fe99618c8b6dff013a9873f45": {
+      "position": {
+        "library": "DCNC0924",
+        "receiver": "QSQJRN0003",
+        "sequence": "467"
+      },
+      "type": "C/SC",
+      "cycle": "467",
+      "base64": "AAAAAAAAAOwAAADwAAAAAAAAAAAAAAAAAAAAAAAAAdOwLUnx5xUAAAAAAAAAAACfAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHTAAAAAAAAAAgAAAAAAAAAAAAAAAAAAAAAAADD4sPY6cTB4tbJ1cnj2OTixdlAQEBAQPjw8PDz9tjpxMHi1snVyeNc1tTJ4+PFxEBAXNbUyePjxcRAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQOPF4uPk4sXZQEAAAAAAAAAAAAAA8OPF4uNAQEBA8PAAQEBAQEBAQEBAQAAAAAAAAAAAAAAA8PDw8PAAAAAAAAAAAAAAAA=="
+    },
+    "2ab73828d04dc25dc73b44701c2f0ad787135aadb6fac2b04dacb44288ef13e0": {
+      "position": {
+        "library": "DCNC0924",
+        "receiver": "QSQJRN0003",
+        "sequence": "485"
+      },
+      "type": "C/CM",
+      "cycle": "467",
+      "base64": "AAAAAAAAAOwAAADwAAAAAAAAAAAAAAAAAAAAAAAAAeWwLUn5hd4AAAAAAAAAAACfAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHTAAAAAAAAAAMAAAAAAAAAAAAAAAAAAAAAAADDw9TY6cTB4tbJ1cnj2OTixdlAQEBAQPjw8PDz9tjpxMHi1snVyeNc1tTJ4+PFxEBAXNbUyePjxcRAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQOPF4uPk4sXZQEAAAAAAAAAAAAAA8OPF4uNAQEBA8PAAQEBAQEBAQEBAQAAAAAAAAAAAAAAA8PDw8PAAAAAAAAAAAAAAAA=="
+    },
+    "e69c0826f81f9c8d02baaec4e6d94e68aaa0edaaaee02bd26a11f71ec68a67df": {
+      "position": {
+        "library": "DCNC0924",
+        "receiver": "QSQJRN0003",
+        "sequence": "486"
+      },
+      "type": "C/SC",
+      "cycle": "486",
+      "base64": "AAAAAAAAAOwAAADwAAAAAAAAAAAAAAAAAAAAAAAAAeawLUn5lK8AAAAAAAAAAACfAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHmAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAADD4sPY6cTB4tbJ1cnj2OTixdlAQEBAQPjw8PDz9tjpxMHi1snVyeNc1tTJ4+PFxEBAXNbUyePjxcRAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQOPF4uPk4sXZQEAAAAAAAAAAAAAA8OPF4uNAQEBA8PAAQEBAQEBAQEBAQAAAAAAAAAAAAAAA8PDw8PAAAAAAAAAAAAAAAA=="
+    }
+  },
+  "cases": [
+    {
+      "name": "initial",
+      "lower": {
+        "sequence": "52",
+        "receiver": "QSQJRN0002",
+        "library": "DCNC0924"
+      },
+      "native_identity_evidence": {
+        "through": {
+          "sequence": "62",
+          "receiver": "QSQJRN0002",
+          "library": "DCNC0924"
+        },
+        "visibility_proof": false,
+        "profile": "online-native-observation-v1",
+        "from": {
+          "sequence": "52",
+          "receiver": "QSQJRN0002",
+          "library": "DCNC0924"
+        },
+        "historical_schema_proof": false,
+        "after": {
+          "attached": {
+            "name": "QSQJRN0002",
+            "library": "DCNC0924"
+          },
+          "receivers": [
+            {
+              "next": {},
+              "last": "95",
+              "profile": [
+                "NO",
+                "YES",
+                "YES",
+                "NO",
+                "NO"
+              ],
+              "status": "ATTACHED",
+              "first": "4",
+              "name": {
+                "name": "QSQJRN0002",
+                "library": "DCNC0924"
+              },
+              "previous": {
+                "name": "QSQJRN0001",
+                "library": "DCNC0924"
+              }
+            }
+          ],
+          "objects": [
+            {
+              "kind": "JOURNAL",
+              "generation": "2829710379",
+              "file": "419968",
+              "path": "/QSYS.LIB/DCNC0924.LIB/QSQJRN.JRN",
+              "filesystem": "141016661229569"
+            },
+            {
+              "kind": "RECEIVER",
+              "generation": "2829710342",
+              "file": "420078",
+              "path": "/QSYS.LIB/DCNC0924.LIB/QSQJRN0002.JRNRCV",
+              "filesystem": "141016661229569"
+            }
+          ],
+          "journal": {
+            "name": "QSQJRN",
+            "library": "DCNC0924"
+          }
+        },
+        "before": {
+          "attached": {
+            "name": "QSQJRN0002",
+            "library": "DCNC0924"
+          },
+          "receivers": [
+            {
+              "next": {},
+              "last": "91",
+              "profile": [
+                "NO",
+                "YES",
+                "YES",
+                "NO",
+                "NO"
+              ],
+              "status": "ATTACHED",
+              "first": "4",
+              "name": {
+                "name": "QSQJRN0002",
+                "library": "DCNC0924"
+              },
+              "previous": {
+                "name": "QSQJRN0001",
+                "library": "DCNC0924"
+              }
+            }
+          ],
+          "objects": [
+            {
+              "kind": "JOURNAL",
+              "generation": "2829710379",
+              "file": "419968",
+              "path": "/QSYS.LIB/DCNC0924.LIB/QSQJRN.JRN",
+              "filesystem": "141016661229569"
+            },
+            {
+              "kind": "RECEIVER",
+              "generation": "2829710342",
+              "file": "420078",
+              "path": "/QSYS.LIB/DCNC0924.LIB/QSQJRN0002.JRNRCV",
+              "filesystem": "141016661229569"
+            }
+          ],
+          "journal": {
+            "name": "QSQJRN",
+            "library": "DCNC0924"
+          }
+        },
+        "startup_proof": false
+      },
+      "entries": [],
+      "open_at_lower": [],
+      "open_through": []
+    },
+    {
+      "name": "silent-in-detached-receiver",
+      "lower": {
+        "receiver": "QSQJRN0003",
+        "library": "DCNC0924",
+        "sequence": "114"
+      },
+      "native_identity_evidence": {
+        "through": {
+          "library": "DCNC0924",
+          "receiver": "QSQJRN0003",
+          "sequence": "124"
+        },
+        "startup_proof": false,
+        "before": {
+          "journal": {
+            "library": "DCNC0924",
+            "name": "QSQJRN"
+          },
+          "objects": [
+            {
+              "generation": "2829710379",
+              "kind": "JOURNAL",
+              "filesystem": "141016661229569",
+              "path": "/QSYS.LIB/DCNC0924.LIB/QSQJRN.JRN",
+              "file": "419968"
+            },
+            {
+              "generation": "2829710342",
+              "kind": "RECEIVER",
+              "filesystem": "141016661229569",
+              "path": "/QSYS.LIB/DCNC0924.LIB/QSQJRN0002.JRNRCV",
+              "file": "420078"
+            },
+            {
+              "generation": "2829710257",
+              "kind": "RECEIVER",
+              "filesystem": "141016661229569",
+              "path": "/QSYS.LIB/DCNC0924.LIB/QSQJRN0003.JRNRCV",
+              "file": "420109"
+            }
+          ],
+          "receivers": [
+            {
+              "next": {
+                "library": "DCNC0924",
+                "name": "QSQJRN0003"
+              },
+              "previous": {
+                "library": "DCNC0924",
+                "name": "QSQJRN0001"
+              },
+              "name": {
+                "library": "DCNC0924",
+                "name": "QSQJRN0002"
+              },
+              "first": "4",
+              "status": "ONLINE",
+              "profile": [
+                "NO",
+                "YES",
+                "YES",
+                "NO",
+                "NO"
+              ],
+              "last": "104"
+            },
+            {
+              "next": {},
+              "previous": {
+                "library": "DCNC0924",
+                "name": "QSQJRN0002"
+              },
+              "name": {
+                "library": "DCNC0924",
+                "name": "QSQJRN0003"
+              },
+              "first": "105",
+              "status": "ATTACHED",
+              "profile": [
+                "NO",
+                "YES",
+                "YES",
+                "NO",
+                "NO"
+              ],
+              "last": "154"
+            }
+          ],
+          "attached": {
+            "library": "DCNC0924",
+            "name": "QSQJRN0003"
+          }
+        },
+        "after": {
+          "journal": {
+            "library": "DCNC0924",
+            "name": "QSQJRN"
+          },
+          "objects": [
+            {
+              "generation": "2829710379",
+              "kind": "JOURNAL",
+              "filesystem": "141016661229569",
+              "path": "/QSYS.LIB/DCNC0924.LIB/QSQJRN.JRN",
+              "file": "419968"
+            },
+            {
+              "generation": "2829710342",
+              "kind": "RECEIVER",
+              "filesystem": "141016661229569",
+              "path": "/QSYS.LIB/DCNC0924.LIB/QSQJRN0002.JRNRCV",
+              "file": "420078"
+            },
+            {
+              "generation": "2829710257",
+              "kind": "RECEIVER",
+              "filesystem": "141016661229569",
+              "path": "/QSYS.LIB/DCNC0924.LIB/QSQJRN0003.JRNRCV",
+              "file": "420109"
+            }
+          ],
+          "receivers": [
+            {
+              "next": {
+                "library": "DCNC0924",
+                "name": "QSQJRN0003"
+              },
+              "previous": {
+                "library": "DCNC0924",
+                "name": "QSQJRN0001"
+              },
+              "name": {
+                "library": "DCNC0924",
+                "name": "QSQJRN0002"
+              },
+              "first": "4",
+              "status": "ONLINE",
+              "profile": [
+                "NO",
+                "YES",
+                "YES",
+                "NO",
+                "NO"
+              ],
+              "last": "104"
+            },
+            {
+              "next": {},
+              "previous": {
+                "library": "DCNC0924",
+                "name": "QSQJRN0002"
+              },
+              "name": {
+                "library": "DCNC0924",
+                "name": "QSQJRN0003"
+              },
+              "first": "105",
+              "status": "ATTACHED",
+              "profile": [
+                "NO",
+                "YES",
+                "YES",
+                "NO",
+                "NO"
+              ],
+              "last": "158"
+            }
+          ],
+          "attached": {
+            "library": "DCNC0924",
+            "name": "QSQJRN0003"
+          }
+        },
+        "historical_schema_proof": false,
+        "from": {
+          "library": "DCNC0924",
+          "receiver": "QSQJRN0002",
+          "sequence": "4"
+        },
+        "profile": "online-native-observation-v1",
+        "visibility_proof": false
+      },
+      "entries": [
+        "dd3809a546aa4e0a0dfaa89d241559e394d9c4457d33fca9a504ff63f69bc0e3",
+        "e1fb8708b517d0b7700b6d0e9826eab57b8508b5ec522550703ca74a44155567",
+        "2015874e47e1f3a71f53af79a76d9b40c5fc1870d0c2af58f4e65c25d54cf9cb",
+        "64d21223ba2b8f45b83d3e371b1cf880c9405580cf902833e8bab29bf952e4e6",
+        "087d356567889176c5e6249d87107fd08dc9fc06156ae546487f0f6cbc5e7c3e",
+        "853d44a5046bf625753ea6e84e56109b589e3a6e0329ad6953322ff03b178080",
+        "664f36ba27ac4b68cb197f0ecc7bfb7d8912aada4fb844dcda5e032e5cb07f71",
+        "8b8be7c3bbc6cf7e12cafa376553835a3b4dc424150ec3e757266fc22e7c7e1a",
+        "ca2fa293b3aafb3d626a598a3da914913ba645ca7b6d74c0f727c7101cacf868"
+      ],
+      "open_at_lower": [
+        100
+      ],
+      "open_through": [
+        100
+      ],
+      "receiver_observation": {
+        "started": {
+          "utc": "2026-11-09T15:56:32.234647+00:00",
+          "monotonic_ns": 693785199226233
+        },
+        "startup_proof": false,
+        "queries": [
+          {
+            "name": "directory-before",
+            "sql": "SELECT JOURNAL_LIBRARY, JOURNAL_NAME, JOURNAL_TYPE, JOURNAL_STATE,\n NUMBER_JOURNAL_RECEIVERS, ATTACHED_JOURNAL_RECEIVER_LIBRARY, ATTACHED_JOURNAL_RECEIVER_NAME,\n JOURNAL_CACHE, REMOVE_INTERNAL_ENTRIES, REMOVE_FIXED_LENGTH_DETAIL\n FROM QSYS2.JOURNAL_INFO WHERE JOURNAL_LIBRARY=? AND JOURNAL_NAME=?",
+            "parameters": [
+              "DCNC0924",
+              "QSQJRN"
+            ],
+            "maximum_rows": 1,
+            "started": {
+              "utc": "2026-11-09T15:56:32.234661+00:00",
+              "monotonic_ns": 693785199232214
+            },
+            "rows": [
+              {
+                "JOURNAL_LIBRARY": "DCNC0924",
+                "JOURNAL_NAME": "QSQJRN",
+                "JOURNAL_TYPE": "*LOCAL",
+                "JOURNAL_STATE": "*ACTIVE",
+                "NUMBER_JOURNAL_RECEIVERS": 3,
+                "ATTACHED_JOURNAL_RECEIVER_LIBRARY": "DCNC0924",
+                "ATTACHED_JOURNAL_RECEIVER_NAME": "QSQJRN0003",
+                "JOURNAL_CACHE": "NO",
+                "REMOVE_INTERNAL_ENTRIES": "NO",
+                "REMOVE_FIXED_LENGTH_DETAIL": "NO"
+              }
+            ],
+            "finished": {
+              "utc": "2026-11-09T15:56:32.284065+00:00",
+              "monotonic_ns": 693785248642724
+            }
+          },
+          {
+            "name": "pending-receivers",
+            "sql": "SELECT JOURNAL_LIBRARY, JOURNAL_NAME, JOURNAL_RECEIVER_LIBRARY,\n JOURNAL_RECEIVER_NAME, STATUS, FIRST_SEQUENCE_NUMBER, LAST_SEQUENCE_NUMBER,\n PREVIOUS_JOURNAL_RECEIVER_LIBRARY, PREVIOUS_JOURNAL_RECEIVER,\n NEXT_JOURNAL_RECEIVER_LIBRARY, NEXT_JOURNAL_RECEIVER, PENDING_TRANSACTIONS\n FROM QSYS2.JOURNAL_RECEIVER_INFO WHERE JOURNAL_LIBRARY=? AND JOURNAL_NAME=?\n ORDER BY FIRST_SEQUENCE_NUMBER",
+            "parameters": [
+              "DCNC0924",
+              "QSQJRN"
+            ],
+            "maximum_rows": 16,
+            "started": {
+              "utc": "2026-11-09T15:56:32.284076+00:00",
+              "monotonic_ns": 693785248646972
+            },
+            "rows": [
+              {
+                "JOURNAL_LIBRARY": "DCNC0924",
+                "JOURNAL_NAME": "QSQJRN",
+                "JOURNAL_RECEIVER_LIBRARY": "DCNC0924",
+                "JOURNAL_RECEIVER_NAME": "QSQJRN0001",
+                "STATUS": "ONLINE",
+                "FIRST_SEQUENCE_NUMBER": "1",
+                "LAST_SEQUENCE_NUMBER": "3",
+                "PREVIOUS_JOURNAL_RECEIVER_LIBRARY": null,
+                "PREVIOUS_JOURNAL_RECEIVER": null,
+                "NEXT_JOURNAL_RECEIVER_LIBRARY": "DCNC0924",
+                "NEXT_JOURNAL_RECEIVER": "QSQJRN0002",
+                "PENDING_TRANSACTIONS": "NO"
+              },
+              {
+                "JOURNAL_LIBRARY": "DCNC0924",
+                "JOURNAL_NAME": "QSQJRN",
+                "JOURNAL_RECEIVER_LIBRARY": "DCNC0924",
+                "JOURNAL_RECEIVER_NAME": "QSQJRN0002",
+                "STATUS": "ONLINE",
+                "FIRST_SEQUENCE_NUMBER": "4",
+                "LAST_SEQUENCE_NUMBER": "104",
+                "PREVIOUS_JOURNAL_RECEIVER_LIBRARY": "DCNC0924",
+                "PREVIOUS_JOURNAL_RECEIVER": "QSQJRN0001",
+                "NEXT_JOURNAL_RECEIVER_LIBRARY": "DCNC0924",
+                "NEXT_JOURNAL_RECEIVER": "QSQJRN0003",
+                "PENDING_TRANSACTIONS": "YES"
+              },
+              {
+                "JOURNAL_LIBRARY": "DCNC0924",
+                "JOURNAL_NAME": "QSQJRN",
+                "JOURNAL_RECEIVER_LIBRARY": "DCNC0924",
+                "JOURNAL_RECEIVER_NAME": "QSQJRN0003",
+                "STATUS": "ATTACHED",
+                "FIRST_SEQUENCE_NUMBER": "105",
+                "LAST_SEQUENCE_NUMBER": "121",
+                "PREVIOUS_JOURNAL_RECEIVER_LIBRARY": "DCNC0924",
+                "PREVIOUS_JOURNAL_RECEIVER": "QSQJRN0002",
+                "NEXT_JOURNAL_RECEIVER_LIBRARY": null,
+                "NEXT_JOURNAL_RECEIVER": null,
+                "PENDING_TRANSACTIONS": "YES"
+              }
+            ],
+            "finished": {
+              "utc": "2026-11-09T15:56:32.893154+00:00",
+              "monotonic_ns": 693785857733332
+            }
+          },
+          {
+            "name": "directory-after",
+            "sql": "SELECT JOURNAL_LIBRARY, JOURNAL_NAME, JOURNAL_TYPE, JOURNAL_STATE,\n NUMBER_JOURNAL_RECEIVERS, ATTACHED_JOURNAL_RECEIVER_LIBRARY, ATTACHED_JOURNAL_RECEIVER_NAME,\n JOURNAL_CACHE, REMOVE_INTERNAL_ENTRIES, REMOVE_FIXED_LENGTH_DETAIL\n FROM QSYS2.JOURNAL_INFO WHERE JOURNAL_LIBRARY=? AND JOURNAL_NAME=?",
+            "parameters": [
+              "DCNC0924",
+              "QSQJRN"
+            ],
+            "maximum_rows": 1,
+            "started": {
+              "utc": "2026-11-09T15:56:32.893166+00:00",
+              "monotonic_ns": 693785857737641
+            },
+            "rows": [
+              {
+                "JOURNAL_LIBRARY": "DCNC0924",
+                "JOURNAL_NAME": "QSQJRN",
+                "JOURNAL_TYPE": "*LOCAL",
+                "JOURNAL_STATE": "*ACTIVE",
+                "NUMBER_JOURNAL_RECEIVERS": 3,
+                "ATTACHED_JOURNAL_RECEIVER_LIBRARY": "DCNC0924",
+                "ATTACHED_JOURNAL_RECEIVER_NAME": "QSQJRN0003",
+                "JOURNAL_CACHE": "NO",
+                "REMOVE_INTERNAL_ENTRIES": "NO",
+                "REMOVE_FIXED_LENGTH_DETAIL": "NO"
+              }
+            ],
+            "finished": {
+              "utc": "2026-11-09T15:56:32.952566+00:00",
+              "monotonic_ns": 693785917145289
+            }
+          }
+        ],
+        "before": [
+          {
+            "JOURNAL_LIBRARY": "DCNC0924",
+            "JOURNAL_NAME": "QSQJRN",
+            "JOURNAL_TYPE": "*LOCAL",
+            "JOURNAL_STATE": "*ACTIVE",
+            "NUMBER_JOURNAL_RECEIVERS": 3,
+            "ATTACHED_JOURNAL_RECEIVER_LIBRARY": "DCNC0924",
+            "ATTACHED_JOURNAL_RECEIVER_NAME": "QSQJRN0003",
+            "JOURNAL_CACHE": "NO",
+            "REMOVE_INTERNAL_ENTRIES": "NO",
+            "REMOVE_FIXED_LENGTH_DETAIL": "NO"
+          }
+        ],
+        "receivers": [
+          {
+            "JOURNAL_LIBRARY": "DCNC0924",
+            "JOURNAL_NAME": "QSQJRN",
+            "JOURNAL_RECEIVER_LIBRARY": "DCNC0924",
+            "JOURNAL_RECEIVER_NAME": "QSQJRN0001",
+            "STATUS": "ONLINE",
+            "FIRST_SEQUENCE_NUMBER": "1",
+            "LAST_SEQUENCE_NUMBER": "3",
+            "PREVIOUS_JOURNAL_RECEIVER_LIBRARY": null,
+            "PREVIOUS_JOURNAL_RECEIVER": null,
+            "NEXT_JOURNAL_RECEIVER_LIBRARY": "DCNC0924",
+            "NEXT_JOURNAL_RECEIVER": "QSQJRN0002",
+            "PENDING_TRANSACTIONS": "NO"
+          },
+          {
+            "JOURNAL_LIBRARY": "DCNC0924",
+            "JOURNAL_NAME": "QSQJRN",
+            "JOURNAL_RECEIVER_LIBRARY": "DCNC0924",
+            "JOURNAL_RECEIVER_NAME": "QSQJRN0002",
+            "STATUS": "ONLINE",
+            "FIRST_SEQUENCE_NUMBER": "4",
+            "LAST_SEQUENCE_NUMBER": "104",
+            "PREVIOUS_JOURNAL_RECEIVER_LIBRARY": "DCNC0924",
+            "PREVIOUS_JOURNAL_RECEIVER": "QSQJRN0001",
+            "NEXT_JOURNAL_RECEIVER_LIBRARY": "DCNC0924",
+            "NEXT_JOURNAL_RECEIVER": "QSQJRN0003",
+            "PENDING_TRANSACTIONS": "YES"
+          },
+          {
+            "JOURNAL_LIBRARY": "DCNC0924",
+            "JOURNAL_NAME": "QSQJRN",
+            "JOURNAL_RECEIVER_LIBRARY": "DCNC0924",
+            "JOURNAL_RECEIVER_NAME": "QSQJRN0003",
+            "STATUS": "ATTACHED",
+            "FIRST_SEQUENCE_NUMBER": "105",
+            "LAST_SEQUENCE_NUMBER": "121",
+            "PREVIOUS_JOURNAL_RECEIVER_LIBRARY": "DCNC0924",
+            "PREVIOUS_JOURNAL_RECEIVER": "QSQJRN0002",
+            "NEXT_JOURNAL_RECEIVER_LIBRARY": null,
+            "NEXT_JOURNAL_RECEIVER": null,
+            "PENDING_TRANSACTIONS": "YES"
+          }
+        ],
+        "after": [
+          {
+            "JOURNAL_LIBRARY": "DCNC0924",
+            "JOURNAL_NAME": "QSQJRN",
+            "JOURNAL_TYPE": "*LOCAL",
+            "JOURNAL_STATE": "*ACTIVE",
+            "NUMBER_JOURNAL_RECEIVERS": 3,
+            "ATTACHED_JOURNAL_RECEIVER_LIBRARY": "DCNC0924",
+            "ATTACHED_JOURNAL_RECEIVER_NAME": "QSQJRN0003",
+            "JOURNAL_CACHE": "NO",
+            "REMOVE_INTERNAL_ENTRIES": "NO",
+            "REMOVE_FIXED_LENGTH_DETAIL": "NO"
+          }
+        ],
+        "status": "observed",
+        "finished": {
+          "utc": "2026-11-09T15:56:32.952579+00:00",
+          "monotonic_ns": 693785917150488
+        }
+      },
+      "directory_before": {
+        "journal": {
+          "library": "DCNC0924",
+          "name": "QSQJRN"
+        },
+        "objects": [
+          {
+            "generation": "2829710379",
+            "kind": "JOURNAL",
+            "filesystem": "141016661229569",
+            "path": "/QSYS.LIB/DCNC0924.LIB/QSQJRN.JRN",
+            "file": "419968"
+          },
+          {
+            "generation": "2829710295",
+            "kind": "RECEIVER",
+            "filesystem": "141016661229569",
+            "path": "/QSYS.LIB/DCNC0924.LIB/QSQJRN0001.JRNRCV",
+            "file": "420088"
+          },
+          {
+            "generation": "2829710342",
+            "kind": "RECEIVER",
+            "filesystem": "141016661229569",
+            "path": "/QSYS.LIB/DCNC0924.LIB/QSQJRN0002.JRNRCV",
+            "file": "420078"
+          },
+          {
+            "generation": "2829710257",
+            "kind": "RECEIVER",
+            "filesystem": "141016661229569",
+            "path": "/QSYS.LIB/DCNC0924.LIB/QSQJRN0003.JRNRCV",
+            "file": "420109"
+          }
+        ],
+        "receivers": [
+          {
+            "next": {
+              "library": "DCNC0924",
+              "name": "QSQJRN0002"
+            },
+            "previous": {},
+            "name": {
+              "library": "DCNC0924",
+              "name": "QSQJRN0001"
+            },
+            "first": "1",
+            "status": "ONLINE",
+            "profile": [
+              "NO",
+              "YES",
+              "NO",
+              "NO",
+              "NO"
+            ],
+            "last": "3"
+          },
+          {
+            "next": {
+              "library": "DCNC0924",
+              "name": "QSQJRN0003"
+            },
+            "previous": {
+              "library": "DCNC0924",
+              "name": "QSQJRN0001"
+            },
+            "name": {
+              "library": "DCNC0924",
+              "name": "QSQJRN0002"
+            },
+            "first": "4",
+            "status": "ONLINE",
+            "profile": [
+              "NO",
+              "YES",
+              "YES",
+              "NO",
+              "NO"
+            ],
+            "last": "104"
+          },
+          {
+            "next": {},
+            "previous": {
+              "library": "DCNC0924",
+              "name": "QSQJRN0002"
+            },
+            "name": {
+              "library": "DCNC0924",
+              "name": "QSQJRN0003"
+            },
+            "first": "105",
+            "status": "ATTACHED",
+            "profile": [
+              "NO",
+              "YES",
+              "YES",
+              "NO",
+              "NO"
+            ],
+            "last": "109"
+          }
+        ],
+        "attached": {
+          "library": "DCNC0924",
+          "name": "QSQJRN0003"
+        }
+      },
+      "directory_after": {
+        "attached": {
+          "name": "QSQJRN0003",
+          "library": "DCNC0924"
+        },
+        "receivers": [
+          {
+            "last": "3",
+            "profile": [
+              "NO",
+              "YES",
+              "NO",
+              "NO",
+              "NO"
+            ],
+            "status": "ONLINE",
+            "first": "1",
+            "name": {
+              "name": "QSQJRN0001",
+              "library": "DCNC0924"
+            },
+            "previous": {},
+            "next": {
+              "name": "QSQJRN0002",
+              "library": "DCNC0924"
+            }
+          },
+          {
+            "last": "104",
+            "profile": [
+              "NO",
+              "YES",
+              "YES",
+              "NO",
+              "NO"
+            ],
+            "status": "ONLINE",
+            "first": "4",
+            "name": {
+              "name": "QSQJRN0002",
+              "library": "DCNC0924"
+            },
+            "previous": {
+              "name": "QSQJRN0001",
+              "library": "DCNC0924"
+            },
+            "next": {
+              "name": "QSQJRN0003",
+              "library": "DCNC0924"
+            }
+          },
+          {
+            "last": "132",
+            "profile": [
+              "NO",
+              "YES",
+              "YES",
+              "NO",
+              "NO"
+            ],
+            "status": "ATTACHED",
+            "first": "105",
+            "name": {
+              "name": "QSQJRN0003",
+              "library": "DCNC0924"
+            },
+            "previous": {
+              "name": "QSQJRN0002",
+              "library": "DCNC0924"
+            },
+            "next": {}
+          }
+        ],
+        "objects": [
+          {
+            "generation": "2829710379",
+            "file": "419968",
+            "path": "/QSYS.LIB/DCNC0924.LIB/QSQJRN.JRN",
+            "filesystem": "141016661229569",
+            "kind": "JOURNAL"
+          },
+          {
+            "generation": "2829710295",
+            "file": "420088",
+            "path": "/QSYS.LIB/DCNC0924.LIB/QSQJRN0001.JRNRCV",
+            "filesystem": "141016661229569",
+            "kind": "RECEIVER"
+          },
+          {
+            "generation": "2829710342",
+            "file": "420078",
+            "path": "/QSYS.LIB/DCNC0924.LIB/QSQJRN0002.JRNRCV",
+            "filesystem": "141016661229569",
+            "kind": "RECEIVER"
+          },
+          {
+            "generation": "2829710257",
+            "file": "420109",
+            "path": "/QSYS.LIB/DCNC0924.LIB/QSQJRN0003.JRNRCV",
+            "filesystem": "141016661229569",
+            "kind": "RECEIVER"
+          }
+        ],
+        "journal": {
+          "name": "QSQJRN",
+          "library": "DCNC0924"
+        }
+      }
+    },
+    {
+      "name": "zero-pending-savepoint",
+      "lower": {
+        "library": "DCNC0924",
+        "receiver": "QSQJRN0003",
+        "sequence": "176"
+      },
+      "native_identity_evidence": {
+        "startup_proof": false,
+        "before": {
+          "journal": {
+            "name": "QSQJRN",
+            "library": "DCNC0924"
+          },
+          "objects": [
+            {
+              "filesystem": "141016661229569",
+              "path": "/QSYS.LIB/DCNC0924.LIB/QSQJRN.JRN",
+              "file": "419968",
+              "generation": "2829710379",
+              "kind": "JOURNAL"
+            },
+            {
+              "filesystem": "141016661229569",
+              "path": "/QSYS.LIB/DCNC0924.LIB/QSQJRN0002.JRNRCV",
+              "file": "420078",
+              "generation": "2829710342",
+              "kind": "RECEIVER"
+            },
+            {
+              "filesystem": "141016661229569",
+              "path": "/QSYS.LIB/DCNC0924.LIB/QSQJRN0003.JRNRCV",
+              "file": "420109",
+              "generation": "2829710257",
+              "kind": "RECEIVER"
+            }
+          ],
+          "receivers": [
+            {
+              "previous": {
+                "name": "QSQJRN0001",
+                "library": "DCNC0924"
+              },
+              "name": {
+                "name": "QSQJRN0002",
+                "library": "DCNC0924"
+              },
+              "first": "4",
+              "status": "ONLINE",
+              "profile": [
+                "NO",
+                "YES",
+                "YES",
+                "NO",
+                "NO"
+              ],
+              "last": "104",
+              "next": {
+                "name": "QSQJRN0003",
+                "library": "DCNC0924"
+              }
+            },
+            {
+              "previous": {
+                "name": "QSQJRN0002",
+                "library": "DCNC0924"
+              },
+              "name": {
+                "name": "QSQJRN0003",
+                "library": "DCNC0924"
+              },
+              "first": "105",
+              "status": "ATTACHED",
+              "profile": [
+                "NO",
+                "YES",
+                "YES",
+                "NO",
+                "NO"
+              ],
+              "last": "216",
+              "next": {}
+            }
+          ],
+          "attached": {
+            "name": "QSQJRN0003",
+            "library": "DCNC0924"
+          }
+        },
+        "after": {
+          "journal": {
+            "name": "QSQJRN",
+            "library": "DCNC0924"
+          },
+          "objects": [
+            {
+              "filesystem": "141016661229569",
+              "path": "/QSYS.LIB/DCNC0924.LIB/QSQJRN.JRN",
+              "file": "419968",
+              "generation": "2829710379",
+              "kind": "JOURNAL"
+            },
+            {
+              "filesystem": "141016661229569",
+              "path": "/QSYS.LIB/DCNC0924.LIB/QSQJRN0002.JRNRCV",
+              "file": "420078",
+              "generation": "2829710342",
+              "kind": "RECEIVER"
+            },
+            {
+              "filesystem": "141016661229569",
+              "path": "/QSYS.LIB/DCNC0924.LIB/QSQJRN0003.JRNRCV",
+              "file": "420109",
+              "generation": "2829710257",
+              "kind": "RECEIVER"
+            }
+          ],
+          "receivers": [
+            {
+              "previous": {
+                "name": "QSQJRN0001",
+                "library": "DCNC0924"
+              },
+              "name": {
+                "name": "QSQJRN0002",
+                "library": "DCNC0924"
+              },
+              "first": "4",
+              "status": "ONLINE",
+              "profile": [
+                "NO",
+                "YES",
+                "YES",
+                "NO",
+                "NO"
+              ],
+              "last": "104",
+              "next": {
+                "name": "QSQJRN0003",
+                "library": "DCNC0924"
+              }
+            },
+            {
+              "previous": {
+                "name": "QSQJRN0002",
+                "library": "DCNC0924"
+              },
+              "name": {
+                "name": "QSQJRN0003",
+                "library": "DCNC0924"
+              },
+              "first": "105",
+              "status": "ATTACHED",
+              "profile": [
+                "NO",
+                "YES",
+                "YES",
+                "NO",
+                "NO"
+              ],
+              "last": "221",
+              "next": {}
+            }
+          ],
+          "attached": {
+            "name": "QSQJRN0003",
+            "library": "DCNC0924"
+          }
+        },
+        "historical_schema_proof": false,
+        "from": {
+          "library": "DCNC0924",
+          "receiver": "QSQJRN0002",
+          "sequence": "4"
+        },
+        "profile": "online-native-observation-v1",
+        "visibility_proof": false,
+        "through": {
+          "library": "DCNC0924",
+          "receiver": "QSQJRN0003",
+          "sequence": "186"
+        }
+      },
+      "entries": [
+        "dd3809a546aa4e0a0dfaa89d241559e394d9c4457d33fca9a504ff63f69bc0e3",
+        "e1fb8708b517d0b7700b6d0e9826eab57b8508b5ec522550703ca74a44155567",
+        "2015874e47e1f3a71f53af79a76d9b40c5fc1870d0c2af58f4e65c25d54cf9cb",
+        "64d21223ba2b8f45b83d3e371b1cf880c9405580cf902833e8bab29bf952e4e6",
+        "087d356567889176c5e6249d87107fd08dc9fc06156ae546487f0f6cbc5e7c3e",
+        "853d44a5046bf625753ea6e84e56109b589e3a6e0329ad6953322ff03b178080",
+        "664f36ba27ac4b68cb197f0ecc7bfb7d8912aada4fb844dcda5e032e5cb07f71",
+        "8b8be7c3bbc6cf7e12cafa376553835a3b4dc424150ec3e757266fc22e7c7e1a",
+        "dca4017beb3b4320606ad58cd8ccf140279fa519188ec2bd98db5c65d4b6a0ca",
+        "0b171733d762a62a4c17dfb4301a3b814a2ee06499d717fa432114ea9b33918f",
+        "15e30b57117e8b03a2b24e196751490507fe683b928b1fa9807f31dd99f19121",
+        "1b35a552fbcfeb381e2b2ea3c4d5ffdc83efb9c66d7c0aae46c383c78de75b6b",
+        "f75c9e07e3be841bc5c37167c878ed04dd49eb307c13ded912bebe58080cb2fe",
+        "5242c8ab535f761accc954f148cd531ccb74f5254a077703504309e9f53c7abb"
+      ],
+      "open_at_lower": [
+        100,
+        163
+      ],
+      "open_through": [
+        100,
+        163
+      ]
+    },
+    {
+      "name": "silent-commit-during-observation",
+      "lower": {
+        "library": "DCNC0924",
+        "receiver": "QSQJRN0003",
+        "sequence": "232"
+      },
+      "native_identity_evidence": {
+        "profile": "online-native-observation-v1",
+        "from": {
+          "sequence": "100",
+          "receiver": "QSQJRN0002",
+          "library": "DCNC0924"
+        },
+        "historical_schema_proof": false,
+        "after": {
+          "attached": {
+            "name": "QSQJRN0003",
+            "library": "DCNC0924"
+          },
+          "receivers": [
+            {
+              "last": "104",
+              "profile": [
+                "NO",
+                "YES",
+                "YES",
+                "NO",
+                "NO"
+              ],
+              "status": "ONLINE",
+              "first": "4",
+              "name": {
+                "name": "QSQJRN0002",
+                "library": "DCNC0924"
+              },
+              "previous": {
+                "name": "QSQJRN0001",
+                "library": "DCNC0924"
+              },
+              "next": {
+                "name": "QSQJRN0003",
+                "library": "DCNC0924"
+              }
+            },
+            {
+              "last": "278",
+              "profile": [
+                "NO",
+                "YES",
+                "YES",
+                "NO",
+                "NO"
+              ],
+              "status": "ATTACHED",
+              "first": "105",
+              "name": {
+                "name": "QSQJRN0003",
+                "library": "DCNC0924"
+              },
+              "previous": {
+                "name": "QSQJRN0002",
+                "library": "DCNC0924"
+              },
+              "next": {}
+            }
+          ],
+          "objects": [
+            {
+              "file": "419968",
+              "path": "/QSYS.LIB/DCNC0924.LIB/QSQJRN.JRN",
+              "filesystem": "141016661229569",
+              "kind": "JOURNAL",
+              "generation": "2829710379"
+            },
+            {
+              "file": "420078",
+              "path": "/QSYS.LIB/DCNC0924.LIB/QSQJRN0002.JRNRCV",
+              "filesystem": "141016661229569",
+              "kind": "RECEIVER",
+              "generation": "2829710342"
+            },
+            {
+              "file": "420109",
+              "path": "/QSYS.LIB/DCNC0924.LIB/QSQJRN0003.JRNRCV",
+              "filesystem": "141016661229569",
+              "kind": "RECEIVER",
+              "generation": "2829710257"
+            }
+          ],
+          "journal": {
+            "name": "QSQJRN",
+            "library": "DCNC0924"
+          }
+        },
+        "before": {
+          "attached": {
+            "name": "QSQJRN0003",
+            "library": "DCNC0924"
+          },
+          "receivers": [
+            {
+              "last": "104",
+              "profile": [
+                "NO",
+                "YES",
+                "YES",
+                "NO",
+                "NO"
+              ],
+              "status": "ONLINE",
+              "first": "4",
+              "name": {
+                "name": "QSQJRN0002",
+                "library": "DCNC0924"
+              },
+              "previous": {
+                "name": "QSQJRN0001",
+                "library": "DCNC0924"
+              },
+              "next": {
+                "name": "QSQJRN0003",
+                "library": "DCNC0924"
+              }
+            },
+            {
+              "last": "274",
+              "profile": [
+                "NO",
+                "YES",
+                "YES",
+                "NO",
+                "NO"
+              ],
+              "status": "ATTACHED",
+              "first": "105",
+              "name": {
+                "name": "QSQJRN0003",
+                "library": "DCNC0924"
+              },
+              "previous": {
+                "name": "QSQJRN0002",
+                "library": "DCNC0924"
+              },
+              "next": {}
+            }
+          ],
+          "objects": [
+            {
+              "file": "419968",
+              "path": "/QSYS.LIB/DCNC0924.LIB/QSQJRN.JRN",
+              "filesystem": "141016661229569",
+              "kind": "JOURNAL",
+              "generation": "2829710379"
+            },
+            {
+              "file": "420078",
+              "path": "/QSYS.LIB/DCNC0924.LIB/QSQJRN0002.JRNRCV",
+              "filesystem": "141016661229569",
+              "kind": "RECEIVER",
+              "generation": "2829710342"
+            },
+            {
+              "file": "420109",
+              "path": "/QSYS.LIB/DCNC0924.LIB/QSQJRN0003.JRNRCV",
+              "filesystem": "141016661229569",
+              "kind": "RECEIVER",
+              "generation": "2829710257"
+            }
+          ],
+          "journal": {
+            "name": "QSQJRN",
+            "library": "DCNC0924"
+          }
+        },
+        "startup_proof": false,
+        "through": {
+          "sequence": "243",
+          "receiver": "QSQJRN0003",
+          "library": "DCNC0924"
+        },
+        "visibility_proof": false
+      },
+      "entries": [
+        "95d40b5017a9c9ca0530fa669fa78b4a09e60622e2a6f6cc3140e295ddecd515",
+        "8b8be7c3bbc6cf7e12cafa376553835a3b4dc424150ec3e757266fc22e7c7e1a",
+        "dca4017beb3b4320606ad58cd8ccf140279fa519188ec2bd98db5c65d4b6a0ca",
+        "0b171733d762a62a4c17dfb4301a3b814a2ee06499d717fa432114ea9b33918f",
+        "15e30b57117e8b03a2b24e196751490507fe683b928b1fa9807f31dd99f19121",
+        "1b35a552fbcfeb381e2b2ea3c4d5ffdc83efb9c66d7c0aae46c383c78de75b6b",
+        "f75c9e07e3be841bc5c37167c878ed04dd49eb307c13ded912bebe58080cb2fe",
+        "092e3796cac2eb7f755b8e3da511d282a80353e5427f1fb4f71f8f90be96b9b1",
+        "e7c9072c66983b341c7b77b8ce12dddf6914b5aeb28cc7f7cdd3158d06662e4f",
+        "9b2ed8e62db19e703c85d4f10b21b0b914a38266f345cdc9c257edaaaef1929d",
+        "57cb35e6f0603c4df7da44fb5835d8410eded6d55064e2611719909fdbb127ff"
+      ],
+      "open_at_lower": [
+        100
+      ],
+      "open_through": []
+    },
+    {
+      "name": "clear-only-open",
+      "lower": {
+        "sequence": "298",
+        "receiver": "QSQJRN0003",
+        "library": "DCNC0924"
+      },
+      "native_identity_evidence": {
+        "through": {
+          "library": "DCNC0924",
+          "receiver": "QSQJRN0003",
+          "sequence": "307"
+        },
+        "startup_proof": false,
+        "before": {
+          "journal": {
+            "library": "DCNC0924",
+            "name": "QSQJRN"
+          },
+          "objects": [
+            {
+              "generation": "2829710379",
+              "kind": "JOURNAL",
+              "filesystem": "141016661229569",
+              "path": "/QSYS.LIB/DCNC0924.LIB/QSQJRN.JRN",
+              "file": "419968"
+            },
+            {
+              "generation": "2829710257",
+              "kind": "RECEIVER",
+              "filesystem": "141016661229569",
+              "path": "/QSYS.LIB/DCNC0924.LIB/QSQJRN0003.JRNRCV",
+              "file": "420109"
+            }
+          ],
+          "receivers": [
+            {
+              "next": {},
+              "previous": {
+                "library": "DCNC0924",
+                "name": "QSQJRN0002"
+              },
+              "name": {
+                "library": "DCNC0924",
+                "name": "QSQJRN0003"
+              },
+              "first": "105",
+              "status": "ATTACHED",
+              "profile": [
+                "NO",
+                "YES",
+                "YES",
+                "NO",
+                "NO"
+              ],
+              "last": "338"
+            }
+          ],
+          "attached": {
+            "library": "DCNC0924",
+            "name": "QSQJRN0003"
+          }
+        },
+        "after": {
+          "journal": {
+            "library": "DCNC0924",
+            "name": "QSQJRN"
+          },
+          "objects": [
+            {
+              "generation": "2829710379",
+              "kind": "JOURNAL",
+              "filesystem": "141016661229569",
+              "path": "/QSYS.LIB/DCNC0924.LIB/QSQJRN.JRN",
+              "file": "419968"
+            },
+            {
+              "generation": "2829710257",
+              "kind": "RECEIVER",
+              "filesystem": "141016661229569",
+              "path": "/QSYS.LIB/DCNC0924.LIB/QSQJRN0003.JRNRCV",
+              "file": "420109"
+            }
+          ],
+          "receivers": [
+            {
+              "next": {},
+              "previous": {
+                "library": "DCNC0924",
+                "name": "QSQJRN0002"
+              },
+              "name": {
+                "library": "DCNC0924",
+                "name": "QSQJRN0003"
+              },
+              "first": "105",
+              "status": "ATTACHED",
+              "profile": [
+                "NO",
+                "YES",
+                "YES",
+                "NO",
+                "NO"
+              ],
+              "last": "342"
+            }
+          ],
+          "attached": {
+            "library": "DCNC0924",
+            "name": "QSQJRN0003"
+          }
+        },
+        "historical_schema_proof": false,
+        "from": {
+          "library": "DCNC0924",
+          "receiver": "QSQJRN0003",
+          "sequence": "105"
+        },
+        "profile": "online-native-observation-v1",
+        "visibility_proof": false
+      },
+      "entries": [
+        "dca4017beb3b4320606ad58cd8ccf140279fa519188ec2bd98db5c65d4b6a0ca",
+        "0b171733d762a62a4c17dfb4301a3b814a2ee06499d717fa432114ea9b33918f",
+        "15e30b57117e8b03a2b24e196751490507fe683b928b1fa9807f31dd99f19121",
+        "1b35a552fbcfeb381e2b2ea3c4d5ffdc83efb9c66d7c0aae46c383c78de75b6b",
+        "f75c9e07e3be841bc5c37167c878ed04dd49eb307c13ded912bebe58080cb2fe",
+        "092e3796cac2eb7f755b8e3da511d282a80353e5427f1fb4f71f8f90be96b9b1",
+        "e7c9072c66983b341c7b77b8ce12dddf6914b5aeb28cc7f7cdd3158d06662e4f",
+        "9b2ed8e62db19e703c85d4f10b21b0b914a38266f345cdc9c257edaaaef1929d",
+        "57cb35e6f0603c4df7da44fb5835d8410eded6d55064e2611719909fdbb127ff",
+        "d81c80fc6c1f3f9f6400e77b2975493815447b66780ec7707b455fe85ac1d490",
+        "26b838192bf4065bd13568277b2955ed0a203f111614f591c7d11e038138470b",
+        "33b746e4d1ae66c0601ee545b14e57653ad235e7e648f339dbbd52ae91c6529d"
+      ],
+      "open_at_lower": [
+        282
+      ],
+      "open_through": [
+        282
+      ]
+    },
+    {
+      "name": "clear-only-rollback-during-observation",
+      "lower": {
+        "receiver": "QSQJRN0003",
+        "library": "DCNC0924",
+        "sequence": "351"
+      },
+      "native_identity_evidence": {
+        "visibility_proof": false,
+        "through": {
+          "library": "DCNC0924",
+          "receiver": "QSQJRN0003",
+          "sequence": "365"
+        },
+        "startup_proof": false,
+        "before": {
+          "journal": {
+            "library": "DCNC0924",
+            "name": "QSQJRN"
+          },
+          "objects": [
+            {
+              "generation": "2829710379",
+              "kind": "JOURNAL",
+              "filesystem": "141016661229569",
+              "path": "/QSYS.LIB/DCNC0924.LIB/QSQJRN.JRN",
+              "file": "419968"
+            },
+            {
+              "generation": "2829710257",
+              "kind": "RECEIVER",
+              "filesystem": "141016661229569",
+              "path": "/QSYS.LIB/DCNC0924.LIB/QSQJRN0003.JRNRCV",
+              "file": "420109"
+            }
+          ],
+          "receivers": [
+            {
+              "next": {},
+              "previous": {
+                "library": "DCNC0924",
+                "name": "QSQJRN0002"
+              },
+              "name": {
+                "library": "DCNC0924",
+                "name": "QSQJRN0003"
+              },
+              "first": "105",
+              "status": "ATTACHED",
+              "profile": [
+                "NO",
+                "YES",
+                "YES",
+                "NO",
+                "NO"
+              ],
+              "last": "397"
+            }
+          ],
+          "attached": {
+            "library": "DCNC0924",
+            "name": "QSQJRN0003"
+          }
+        },
+        "after": {
+          "journal": {
+            "library": "DCNC0924",
+            "name": "QSQJRN"
+          },
+          "objects": [
+            {
+              "generation": "2829710379",
+              "kind": "JOURNAL",
+              "filesystem": "141016661229569",
+              "path": "/QSYS.LIB/DCNC0924.LIB/QSQJRN.JRN",
+              "file": "419968"
+            },
+            {
+              "generation": "2829710257",
+              "kind": "RECEIVER",
+              "filesystem": "141016661229569",
+              "path": "/QSYS.LIB/DCNC0924.LIB/QSQJRN0003.JRNRCV",
+              "file": "420109"
+            }
+          ],
+          "receivers": [
+            {
+              "next": {},
+              "previous": {
+                "library": "DCNC0924",
+                "name": "QSQJRN0002"
+              },
+              "name": {
+                "library": "DCNC0924",
+                "name": "QSQJRN0003"
+              },
+              "first": "105",
+              "status": "ATTACHED",
+              "profile": [
+                "NO",
+                "YES",
+                "YES",
+                "NO",
+                "NO"
+              ],
+              "last": "401"
+            }
+          ],
+          "attached": {
+            "library": "DCNC0924",
+            "name": "QSQJRN0003"
+          }
+        },
+        "historical_schema_proof": false,
+        "from": {
+          "library": "DCNC0924",
+          "receiver": "QSQJRN0003",
+          "sequence": "282"
+        },
+        "profile": "online-native-observation-v1"
+      },
+      "entries": [
+        "f2028ee0b906a42c28397b00ae5ab1d4afafba442605c7e41cc287525daee33b",
+        "26b838192bf4065bd13568277b2955ed0a203f111614f591c7d11e038138470b",
+        "e4a9ace7adeacc92e299ab8799ba1148098e10d8641914f9a8c53df4c4f0afba",
+        "e65005326c2a32f1e8ebdc6d6f48cd8697134b587d812f009f5418995caec873"
+      ],
+      "open_at_lower": [
+        282
+      ],
+      "open_through": []
+    },
+    {
+      "name": "delete-only-commit-during-observation",
+      "lower": {
+        "sequence": "420",
+        "receiver": "QSQJRN0003",
+        "library": "DCNC0924"
+      },
+      "native_identity_evidence": {
+        "through": {
+          "library": "DCNC0924",
+          "receiver": "QSQJRN0003",
+          "sequence": "430"
+        },
+        "startup_proof": false,
+        "before": {
+          "journal": {
+            "library": "DCNC0924",
+            "name": "QSQJRN"
+          },
+          "objects": [
+            {
+              "generation": "2829710379",
+              "kind": "JOURNAL",
+              "filesystem": "141016661229569",
+              "path": "/QSYS.LIB/DCNC0924.LIB/QSQJRN.JRN",
+              "file": "419968"
+            },
+            {
+              "generation": "2829710257",
+              "kind": "RECEIVER",
+              "filesystem": "141016661229569",
+              "path": "/QSYS.LIB/DCNC0924.LIB/QSQJRN0003.JRNRCV",
+              "file": "420109"
+            }
+          ],
+          "receivers": [
+            {
+              "next": {},
+              "previous": {
+                "library": "DCNC0924",
+                "name": "QSQJRN0002"
+              },
+              "name": {
+                "library": "DCNC0924",
+                "name": "QSQJRN0003"
+              },
+              "first": "105",
+              "status": "ATTACHED",
+              "profile": [
+                "NO",
+                "YES",
+                "YES",
+                "NO",
+                "NO"
+              ],
+              "last": "461"
+            }
+          ],
+          "attached": {
+            "library": "DCNC0924",
+            "name": "QSQJRN0003"
+          }
+        },
+        "after": {
+          "journal": {
+            "library": "DCNC0924",
+            "name": "QSQJRN"
+          },
+          "objects": [
+            {
+              "generation": "2829710379",
+              "kind": "JOURNAL",
+              "filesystem": "141016661229569",
+              "path": "/QSYS.LIB/DCNC0924.LIB/QSQJRN.JRN",
+              "file": "419968"
+            },
+            {
+              "generation": "2829710257",
+              "kind": "RECEIVER",
+              "filesystem": "141016661229569",
+              "path": "/QSYS.LIB/DCNC0924.LIB/QSQJRN0003.JRNRCV",
+              "file": "420109"
+            }
+          ],
+          "receivers": [
+            {
+              "next": {},
+              "previous": {
+                "library": "DCNC0924",
+                "name": "QSQJRN0002"
+              },
+              "name": {
+                "library": "DCNC0924",
+                "name": "QSQJRN0003"
+              },
+              "first": "105",
+              "status": "ATTACHED",
+              "profile": [
+                "NO",
+                "YES",
+                "YES",
+                "NO",
+                "NO"
+              ],
+              "last": "465"
+            }
+          ],
+          "attached": {
+            "library": "DCNC0924",
+            "name": "QSQJRN0003"
+          }
+        },
+        "historical_schema_proof": false,
+        "from": {
+          "library": "DCNC0924",
+          "receiver": "QSQJRN0003",
+          "sequence": "403"
+        },
+        "profile": "online-native-observation-v1",
+        "visibility_proof": false
+      },
+      "entries": [
+        "03eebd5ce65d8c9a662fe3df69db0b337c038156b0968b866763a792b43e758e",
+        "894f4358547692ffef8365477c7f3dcd82d7ecf6e311b961fc66471761235b65",
+        "3d609bf724ec882da6de2ff7bc00625012f3c97086dad715a2e5a32ae7a2c67c",
+        "a4396872a1cbe5cf4a55dc775d3b6a9fa14a441da5714290540e31f3952e0c46"
+      ],
+      "open_at_lower": [
+        403
+      ],
+      "open_through": []
+    },
+    {
+      "name": "cycle-reuse",
+      "lower": {
+        "library": "DCNC0924",
+        "sequence": "478",
+        "receiver": "QSQJRN0003"
+      },
+      "native_identity_evidence": {
+        "visibility_proof": false,
+        "through": {
+          "library": "DCNC0924",
+          "receiver": "QSQJRN0003",
+          "sequence": "493"
+        },
+        "startup_proof": false,
+        "before": {
+          "journal": {
+            "library": "DCNC0924",
+            "name": "QSQJRN"
+          },
+          "objects": [
+            {
+              "generation": "2829710379",
+              "kind": "JOURNAL",
+              "filesystem": "141016661229569",
+              "path": "/QSYS.LIB/DCNC0924.LIB/QSQJRN.JRN",
+              "file": "419968"
+            },
+            {
+              "generation": "2829710257",
+              "kind": "RECEIVER",
+              "filesystem": "141016661229569",
+              "path": "/QSYS.LIB/DCNC0924.LIB/QSQJRN0003.JRNRCV",
+              "file": "420109"
+            }
+          ],
+          "receivers": [
+            {
+              "next": {},
+              "previous": {
+                "library": "DCNC0924",
+                "name": "QSQJRN0002"
+              },
+              "name": {
+                "library": "DCNC0924",
+                "name": "QSQJRN0003"
+              },
+              "first": "105",
+              "status": "ATTACHED",
+              "profile": [
+                "NO",
+                "YES",
+                "YES",
+                "NO",
+                "NO"
+              ],
+              "last": "536"
+            }
+          ],
+          "attached": {
+            "library": "DCNC0924",
+            "name": "QSQJRN0003"
+          }
+        },
+        "after": {
+          "journal": {
+            "library": "DCNC0924",
+            "name": "QSQJRN"
+          },
+          "objects": [
+            {
+              "generation": "2829710379",
+              "kind": "JOURNAL",
+              "filesystem": "141016661229569",
+              "path": "/QSYS.LIB/DCNC0924.LIB/QSQJRN.JRN",
+              "file": "419968"
+            },
+            {
+              "generation": "2829710257",
+              "kind": "RECEIVER",
+              "filesystem": "141016661229569",
+              "path": "/QSYS.LIB/DCNC0924.LIB/QSQJRN0003.JRNRCV",
+              "file": "420109"
+            }
+          ],
+          "receivers": [
+            {
+              "next": {},
+              "previous": {
+                "library": "DCNC0924",
+                "name": "QSQJRN0002"
+              },
+              "name": {
+                "library": "DCNC0924",
+                "name": "QSQJRN0003"
+              },
+              "first": "105",
+              "status": "ATTACHED",
+              "profile": [
+                "NO",
+                "YES",
+                "YES",
+                "NO",
+                "NO"
+              ],
+              "last": "539"
+            }
+          ],
+          "attached": {
+            "library": "DCNC0924",
+            "name": "QSQJRN0003"
+          }
+        },
+        "historical_schema_proof": false,
+        "from": {
+          "library": "DCNC0924",
+          "receiver": "QSQJRN0003",
+          "sequence": "105"
+        },
+        "profile": "online-native-observation-v1"
+      },
+      "entries": [
+        "dca4017beb3b4320606ad58cd8ccf140279fa519188ec2bd98db5c65d4b6a0ca",
+        "0b171733d762a62a4c17dfb4301a3b814a2ee06499d717fa432114ea9b33918f",
+        "15e30b57117e8b03a2b24e196751490507fe683b928b1fa9807f31dd99f19121",
+        "1b35a552fbcfeb381e2b2ea3c4d5ffdc83efb9c66d7c0aae46c383c78de75b6b",
+        "f75c9e07e3be841bc5c37167c878ed04dd49eb307c13ded912bebe58080cb2fe",
+        "092e3796cac2eb7f755b8e3da511d282a80353e5427f1fb4f71f8f90be96b9b1",
+        "e7c9072c66983b341c7b77b8ce12dddf6914b5aeb28cc7f7cdd3158d06662e4f",
+        "9b2ed8e62db19e703c85d4f10b21b0b914a38266f345cdc9c257edaaaef1929d",
+        "57cb35e6f0603c4df7da44fb5835d8410eded6d55064e2611719909fdbb127ff",
+        "d81c80fc6c1f3f9f6400e77b2975493815447b66780ec7707b455fe85ac1d490",
+        "26b838192bf4065bd13568277b2955ed0a203f111614f591c7d11e038138470b",
+        "e4a9ace7adeacc92e299ab8799ba1148098e10d8641914f9a8c53df4c4f0afba",
+        "e65005326c2a32f1e8ebdc6d6f48cd8697134b587d812f009f5418995caec873",
+        "225b6a98437882fcc092ae90f9dc687c5085c514509f12c448d5bf7b12269f01",
+        "b786fcbf1ae9c3c25cbb2a1f43800eb334ed0ef8f331e67c8dacec96dbdbe17f",
+        "3d609bf724ec882da6de2ff7bc00625012f3c97086dad715a2e5a32ae7a2c67c",
+        "a4396872a1cbe5cf4a55dc775d3b6a9fa14a441da5714290540e31f3952e0c46",
+        "0ae2c782089d50c3401fea1eac8b45465114f18fe99618c8b6dff013a9873f45",
+        "2ab73828d04dc25dc73b44701c2f0ad787135aadb6fac2b04dacb44288ef13e0",
+        "e69c0826f81f9c8d02baaec4e6d94e68aaa0edaaaee02bd26a11f71ec68a67df"
+      ],
+      "open_at_lower": [
+        467
+      ],
+      "open_through": [
+        486
+      ]
+    },
+    {
+      "name": "final-idle",
+      "lower": {
+        "library": "DCNC0924",
+        "receiver": "QSQJRN0004",
+        "sequence": "607"
+      },
+      "native_identity_evidence": {
+        "startup_proof": false,
+        "before": {
+          "journal": {
+            "name": "QSQJRN",
+            "library": "DCNC0924"
+          },
+          "objects": [
+            {
+              "filesystem": "141016661229569",
+              "path": "/QSYS.LIB/DCNC0924.LIB/QSQJRN.JRN",
+              "file": "419968",
+              "generation": "2829710379",
+              "kind": "JOURNAL"
+            },
+            {
+              "filesystem": "141016661229569",
+              "path": "/QSYS.LIB/DCNC0924.LIB/QSQJRN0004.JRNRCV",
+              "file": "420259",
+              "generation": "2829710206",
+              "kind": "RECEIVER"
+            }
+          ],
+          "receivers": [
+            {
+              "name": {
+                "name": "QSQJRN0004",
+                "library": "DCNC0924"
+              },
+              "first": "560",
+              "status": "ATTACHED",
+              "profile": [
+                "NO",
+                "YES",
+                "YES",
+                "NO",
+                "NO"
+              ],
+              "last": "647",
+              "next": {},
+              "previous": {
+                "name": "QSQJRN0003",
+                "library": "DCNC0924"
+              }
+            }
+          ],
+          "attached": {
+            "name": "QSQJRN0004",
+            "library": "DCNC0924"
+          }
+        },
+        "after": {
+          "journal": {
+            "name": "QSQJRN",
+            "library": "DCNC0924"
+          },
+          "objects": [
+            {
+              "filesystem": "141016661229569",
+              "path": "/QSYS.LIB/DCNC0924.LIB/QSQJRN.JRN",
+              "file": "419968",
+              "generation": "2829710379",
+              "kind": "JOURNAL"
+            },
+            {
+              "filesystem": "141016661229569",
+              "path": "/QSYS.LIB/DCNC0924.LIB/QSQJRN0004.JRNRCV",
+              "file": "420259",
+              "generation": "2829710206",
+              "kind": "RECEIVER"
+            }
+          ],
+          "receivers": [
+            {
+              "name": {
+                "name": "QSQJRN0004",
+                "library": "DCNC0924"
+              },
+              "first": "560",
+              "status": "ATTACHED",
+              "profile": [
+                "NO",
+                "YES",
+                "YES",
+                "NO",
+                "NO"
+              ],
+              "last": "651",
+              "next": {},
+              "previous": {
+                "name": "QSQJRN0003",
+                "library": "DCNC0924"
+              }
+            }
+          ],
+          "attached": {
+            "name": "QSQJRN0004",
+            "library": "DCNC0924"
+          }
+        },
+        "historical_schema_proof": false,
+        "from": {
+          "library": "DCNC0924",
+          "receiver": "QSQJRN0004",
+          "sequence": "607"
+        },
+        "profile": "online-native-observation-v1",
+        "visibility_proof": false,
+        "through": {
+          "library": "DCNC0924",
+          "receiver": "QSQJRN0004",
+          "sequence": "617"
+        }
+      },
+      "entries": [],
+      "open_at_lower": [],
+      "open_through": []
+    }
+  ]
+}

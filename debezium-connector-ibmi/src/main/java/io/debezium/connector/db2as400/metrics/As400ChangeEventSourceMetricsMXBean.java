@@ -13,4 +13,16 @@ public interface As400ChangeEventSourceMetricsMXBean extends StreamingChangeEven
     long getJournalOffset();
 
     long getLastProcessedMs();
+
+    String getScanPosition();
+
+    String getDurableReplayFloor();
+
+    String getDurableCompletedPosition();
+
+    long getBufferedTransactions();
+
+    long getBufferedBytes();
+
+    long getOldestTransactionAgeInMilliseconds();
 }

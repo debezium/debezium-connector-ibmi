@@ -27,16 +27,24 @@ public class ReceiverPagination {
     private final BigInteger maxServerSideEntriesBI;
     private DetailedJournalReceiver cachedEndPosition;
     private List<DetailedJournalReceiver> cachedReceivers = null;
+    private final JournalReadLifecycle lifecycle;
 
     ReceiverPagination(JournalInfoRetrieval journalInfoRetrieval, int maxServerSideEntries, JournalInfo journalInfo) {
+        this(journalInfoRetrieval, maxServerSideEntries, journalInfo, new JournalReadLifecycle());
+    }
+
+    ReceiverPagination(JournalInfoRetrieval journalInfoRetrieval, int maxServerSideEntries, JournalInfo journalInfo, JournalReadLifecycle lifecycle) {
+        this.lifecycle = lifecycle;
         this.journalInfoRetrieval = journalInfoRetrieval;
         maxServerSideEntriesBI = BigInteger.valueOf(maxServerSideEntries);
         this.journalInfo = journalInfo;
     }
 
     Optional<PositionRange> findRange(AS400 as400, JournalProcessedPosition startPosition) throws Exception {
+        lifecycle.checkOpen();
         final Optional<DetailedJournalReceiver> endPositionOpt = journalInfoRetrieval.getDelayedDetailedJournalReceiver(as400, journalInfo);
 
+        lifecycle.checkOpen();
         return endPositionOpt.map(endPosition -> {
             try {
                 return _findRange(as400, startPosition, endPosition);
@@ -56,9 +64,11 @@ public class ReceiverPagination {
         }
 
         if (cachedReceivers == null) {
+            lifecycle.checkOpen();
             cachedReceivers = journalInfoRetrieval.getReceivers(as400, journalInfo);
         }
 
+        lifecycle.checkOpen();
         if (fromBeginning) {
             DetailedJournalReceiver first = cachedReceivers.get(0);
             startPosition = new JournalProcessedPosition(first.start(), first.info().receiver(), Instant.EPOCH, false);
@@ -75,6 +85,7 @@ public class ReceiverPagination {
         }
         else {
             // last call to current position won't include the correct end offset so we need to refresh the list
+            lifecycle.checkOpen();
             cachedReceivers = journalInfoRetrieval.getReceivers(as400, journalInfo);
             cachedEndPosition = endPosition;
         }
@@ -82,6 +93,7 @@ public class ReceiverPagination {
         Optional<PositionRange> endOpt = findPosition(startPosition, maxServerSideEntriesBI, cachedReceivers);
         if (endOpt.isEmpty()) {
             log.warn("retrying to find end offset");
+            lifecycle.checkOpen();
             cachedReceivers = journalInfoRetrieval.getReceivers(as400, journalInfo);
             endOpt = findPosition(startPosition, maxServerSideEntriesBI, cachedReceivers);
             if (endOpt.isEmpty()) {
@@ -89,6 +101,7 @@ public class ReceiverPagination {
             }
         }
 
+        lifecycle.checkOpen();
         log.debug("end {} journals {}", endPosition, cachedReceivers);
 
         final JournalProcessedPosition startf = new JournalProcessedPosition(startPosition);

@@ -15,8 +15,8 @@ import java.text.SimpleDateFormat;
 import java.time.Instant;
 import java.util.Arrays;
 import java.util.Date;
+import java.util.List;
 import java.util.Optional;
-import java.util.concurrent.atomic.AtomicReference;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -50,10 +50,11 @@ public class RetrieveJournal {
     private static final Logger log = LoggerFactory.getLogger(RetrieveJournal.class);
 
     private static final JournalCode[] REQUIRED_JOURNAL_CODES = new JournalCode[]{ JournalCode.D, JournalCode.R,
-            JournalCode.C };
+            JournalCode.C, JournalCode.F };
+    private static final JournalCode[] HISTORY_CONTROL_CODES = new JournalCode[]{ JournalCode.C, JournalCode.J };
     private static final JournalEntryType[] REQURED_ENTRY_TYPES = new JournalEntryType[]{ JournalEntryType.PT,
             JournalEntryType.PX, JournalEntryType.UP, JournalEntryType.UB, JournalEntryType.DL, JournalEntryType.DR,
-            JournalEntryType.CT, JournalEntryType.CG, JournalEntryType.SC, JournalEntryType.CM };
+            JournalEntryType.CT, JournalEntryType.CG, JournalEntryType.CR, JournalEntryType.SC, JournalEntryType.CM };
     private final FirstHeaderDecoder firstHeaderDecoder = new FirstHeaderDecoder();
     private final EntryHeaderDecoder entryHeaderDecoder = new EntryHeaderDecoder();
     private final SimpleDateFormat dateFormatter = new SimpleDateFormat("yyMMdd-hhmm");
@@ -67,11 +68,32 @@ public class RetrieveJournal {
     private int offset = -1;
     private JournalProcessedPosition position;
     private long totalTransferred = 0;
-    private AtomicReference<Job> ibmiJob = new AtomicReference<>();
+    // One reader, with asynchronous cancellation. Never hold this monitor while
+    // obtaining the RPC connection: close() acquires its connection lock first.
+    private final Object activeReadLock = new Object();
+    private ActiveRead activeRead;
+    private final JournalReadLifecycle lifecycle;
+    private RawJournalPage rawPage;
+
+    private static final class ActiveRead {
+        private final AS400 connection;
+        private final Job job;
+        private boolean cancellationRequested;
+
+        private ActiveRead(AS400 connection, Job job) {
+            this.connection = connection;
+            this.job = job;
+        }
+    }
 
     public RetrieveJournal(RetrieveConfig config, JournalInfoRetrieval journalRetrieval) {
+        this(config, journalRetrieval, new JournalReadLifecycle());
+    }
+
+    public RetrieveJournal(RetrieveConfig config, JournalInfoRetrieval journalRetrieval, JournalReadLifecycle lifecycle) {
         this.config = config;
-        journalReceivers = new ReceiverPagination(journalRetrieval, config.maxServerSideEntries(), config.journalInfo());
+        this.lifecycle = lifecycle;
+        journalReceivers = new ReceiverPagination(journalRetrieval, config.maxServerSideEntries(), config.journalInfo(), lifecycle);
 
         builder.withJournal(config.journalInfo().journalName(), config.journalInfo().journalLibrary());
     }
@@ -91,44 +113,156 @@ public class RetrieveJournal {
      */
     public RetrievalState retrieveJournal(JournalProcessedPosition previousPosition) throws Exception {
 
-        final Optional<PositionRange> rangeOpt = journalReceivers.findRange(config.as400().connection(), previousPosition);
-        return rangeOpt.map(range -> {
+        try (var ignored = lifecycle.enter()) {
+            final AS400 connection = config.as400().connection();
             try {
-                return retrieveJournal(previousPosition, range);
+                final Optional<PositionRange> rangeOpt = journalReceivers.findRange(connection, previousPosition);
+                lifecycle.checkOpen();
+                return rangeOpt.map(range -> {
+                    try {
+                        return retrieveJournal(previousPosition, range);
+                    }
+                    catch (Exception e) {
+                        throw new RuntimeException(e);
+                    }
+                }).orElse(RetrievalState.NotCalled);
             }
-            catch (Exception e) {
-                throw new RuntimeException(e);
+            finally {
+                disconnectIfStopped(connection);
             }
-        }).orElse(RetrievalState.NotCalled);
+        }
+    }
+
+    /** Diagnostic snapshot only: it does not grant admission or certify drain. */
+    public record ReadState(boolean registered, boolean cancellationRequested, String job) {
+    }
+
+    public ReadState readState() {
+        synchronized (activeReadLock) {
+            return activeRead == null ? new ReadState(false, false, "")
+                    : new ReadState(true, activeRead.cancellationRequested, activeRead.job.getQualifiedJobName());
+        }
     }
 
     public void cancelJob() {
-        Job job = ibmiJob.get();
-        if (job == null) {
-            log.debug("No job to cancel");
-            return;
-        }
-        try {
-            AS400 as400 = config.as400().connection();
-            if (job != null) {
-                Job killer; // create a new instance with a new connection as current connection is tied up with this job
-                if (as400 instanceof SecureAS400) {
-                    killer = new Job(new SecureAS400(as400), job.getName(), job.getUser(), job.getNumber());
-                }
-                else {
-                    killer = new Job(new AS400(as400), job.getName(), job.getUser(), job.getNumber());
-                }
+        synchronized (activeReadLock) {
+            ActiveRead read = activeRead;
+            if (read == null || read.cancellationRequested) {
+                return;
+            }
+            read.cancellationRequested = true;
+            AS400 cancellationConnection = null;
+            try {
+                // Use the read's captured connection. Calling config.as400().connection()
+                // here would re-enter close/reconnect when that transport is down.
+                cancellationConnection = read.connection instanceof SecureAS400
+                        ? new SecureAS400(read.connection)
+                        : new AS400(read.connection);
+                Job job = read.job;
+                Job killer = new Job(cancellationConnection, job.getName(), job.getUser(), job.getNumber());
                 log.info("Killing job {}/{}/{}", job.getName(), job.getUser(), job.getNumber());
                 killer.end(0);
             }
-        }
-        catch (Exception e) {
-            log.error("Failed to cancel job name {} user {} number {}", job.getName(), job.getUser(), job.getNumber(), e);
+            catch (Exception e) {
+                log.error("Failed to cancel active journal read", e);
+            }
+            finally {
+                if (cancellationConnection != null) {
+                    try {
+                        cancellationConnection.disconnectAllServices();
+                    }
+                    catch (Exception e) {
+                        log.warn("Failed to disconnect journal cancellation connection", e);
+                    }
+                }
+            }
+            // Keep the read registered until its finally block. A repeated stop
+            // cannot retry an old job handle, and completion/new registration cannot
+            // race cancellation's use of that handle or its temporary connection.
         }
     }
 
     public RetrievalState retrieveJournal(JournalProcessedPosition previousPosition, final PositionRange range)
             throws Exception {
+        try (var ignored = lifecycle.enter()) {
+            return retrieveAdmitted(previousPosition, range);
+        }
+    }
+
+    /**
+     * Explicit single-receiver read for the operator-managed recovery path. Selects
+     * every C/D/F/R type without object/file selection; never uses receiver
+     * pagination caches, file filters, suffix reset, empty-response advancement or
+     * oversized-entry skipping. The caller supplies and verifies receiver identity.
+     */
+    public RawJournalPage readRawPage(JournalPosition from, JournalPosition through, int maximumEntries) throws Exception {
+        return readRawPage(from, through, maximumEntries, RawSelection.CDC);
+    }
+
+    /**
+     * Bounded discovery of commitment and journal-maintenance controls only.
+     * This selection cannot establish row/lifecycle completeness or a publication
+     * checkpoint. It has a distinct result type and never advances the legacy
+     * position. All C/J types are returned without file, job or entry-count filters.
+     */
+    public ControlPage readControlHistoryPage(JournalPosition from, JournalPosition through, int maximumEntries) throws Exception {
+        RawJournalPage page = readRawPage(from, through, maximumEntries, RawSelection.CONTROLS);
+        return new ControlPage(page.entries(), page.continuation(), page.bytesReturned());
+    }
+
+    /**
+     * All-code audit for an explicitly bounded native startup interval. Unlike
+     * CDC and control discovery this omits code selection entirely, including
+     * codes not represented by the local enum. It preserves the same owned
+     * response, structured error, pointer, continuation and cancellation checks.
+     * Completion is not an incarnation, schema or transaction-history proof.
+     */
+    public AuditPage readAuditHistoryPage(JournalPosition from, JournalPosition through, int maximumEntries) throws Exception {
+        RawJournalPage page = readRawPage(from, through, maximumEntries, RawSelection.AUDIT);
+        return new AuditPage(page.entries(), page.continuation(), page.bytesReturned());
+    }
+
+    public record AuditPage(List<RawJournalPage.Entry> entries, Optional<JournalPosition> continuation, int bytesReturned) {
+        public AuditPage {
+            entries = List.copyOf(entries);
+        }
+    }
+
+    private enum RawSelection {
+        CDC,
+        CONTROLS,
+        AUDIT
+    }
+
+    public record ControlPage(List<RawJournalPage.Entry> entries, Optional<JournalPosition> continuation, int bytesReturned) {
+        public ControlPage {
+            entries = List.copyOf(entries);
+        }
+    }
+
+    private RawJournalPage readRawPage(JournalPosition from, JournalPosition through, int maximumEntries, RawSelection selection) throws Exception {
+        RawJournalPage.validateRange(from, through, maximumEntries);
+        if (config.journalBufferSize() < 512 || config.journalBufferSize() > 16 * 1024 * 1024) {
+            throw new IllegalArgumentException("Bounded raw response buffer required");
+        }
+        try (var ignored = lifecycle.enter()) {
+            rawPage = null;
+            JournalProcessedPosition start = new JournalProcessedPosition(from, Instant.EPOCH, false);
+            AS400 connection = config.as400().connection();
+            try {
+                callAdmitted(start, new PositionRange(false, start, through),
+                        new JournalProcessedPosition(through, Instant.EPOCH, true), connection, maximumEntries, selection);
+                lifecycle.checkOpen();
+                return rawPage;
+            }
+            finally {
+                rawPage = null;
+                disconnectIfStopped(connection);
+            }
+        }
+    }
+
+    private RetrievalState retrieveAdmitted(JournalProcessedPosition previousPosition, PositionRange range) throws Exception {
         this.offset = -1;
         this.entryHeader = null;
         this.position = new JournalProcessedPosition(previousPosition);
@@ -147,27 +281,138 @@ public class RetrieveJournal {
         // filtering?
         final JournalProcessedPosition end = new JournalProcessedPosition(range.end(), Instant.EPOCH, true);
 
-        final ServiceProgramCall spc = new ServiceProgramCall(config.as400().connection());
-        spc.getServerJob().setLoggingLevel(0);
+        final AS400 connection = config.as400().connection();
+        try {
+            return callAdmitted(previousPosition, range, end, connection);
+        }
+        finally {
+            disconnectIfStopped(connection);
+        }
+    }
+
+    private void disconnectIfStopped(AS400 connection) {
+        if (lifecycle.isStopped()) {
+            try {
+                connection.disconnectAllServices();
+            }
+            catch (Exception e) {
+                log.warn("Failed to disconnect stopped journal operation", e);
+            }
+        }
+    }
+
+    private RetrievalState callAdmitted(JournalProcessedPosition previousPosition, PositionRange range,
+                                        JournalProcessedPosition end, AS400 connection)
+            throws Exception {
+        return callAdmitted(previousPosition, range, end, connection, 0, RawSelection.CDC);
+    }
+
+    private RetrievalState callAdmitted(JournalProcessedPosition previousPosition, PositionRange range,
+                                        JournalProcessedPosition end, AS400 connection, int rawEntryLimit, RawSelection selection)
+            throws Exception {
+        lifecycle.checkOpen();
+        final ServiceProgramCall spc = new ServiceProgramCall(connection);
+        lifecycle.checkOpen();
+        final Job job = spc.getServerJob();
+        lifecycle.checkOpen();
+        if (rawEntryLimit > 0) {
+            // The owned native profile must not inherit the worker locale.
+            // Qualify the actual API job before encoding names or retrieving bytes.
+            // Each call observes the job again, including after reconnect.
+            if (job.getCodedCharacterSetID() != RawJournalPage.METADATA_CCSID) {
+                throw new IllegalArgumentException("Native journal retrieval requires an API job with CCSID " + RawJournalPage.METADATA_CCSID);
+            }
+            lifecycle.checkOpen();
+        }
+        else {
+            job.setLoggingLevel(0);
+        }
+        final ParameterListBuilder builder = rawEntryLimit == 0 ? this.builder
+                : new ParameterListBuilder(RawJournalPage.METADATA_CCSID)
+                        .withJournal(config.journalInfo().journalName(), config.journalInfo().journalLibrary());
         builder.init();
         builder.withBufferLenth(config.journalBufferSize());
-        builder.filterJournalEntryType(REQURED_ENTRY_TYPES);
-        builder.filterJournalCodes(REQUIRED_JOURNAL_CODES);
-        if (config.filtering() && !config.includeFiles().isEmpty()) {
-            builder.withFileFilters(config.includeFiles());
+        // An allowlist must not hide rollback/savepoint or unknown C controls from
+        // a transaction-aware consumer. Legacy consumers retain their existing filter.
+        if (rawEntryLimit == 0) {
+            builder.filterJournalEntryType(config.transactionControls() ? new JournalEntryType[]{ JournalEntryType.ALL } : REQURED_ENTRY_TYPES);
+            builder.filterJournalCodes(REQUIRED_JOURNAL_CODES, config.transactionControls() && config.filtering() && !config.includeFiles().isEmpty());
+            if (config.filtering() && !config.includeFiles().isEmpty()) {
+                builder.withFileFilters(config.includeFiles());
+            }
+        }
+        else {
+            // NBRENT is deliberately omitted: IBM i treats the count limit as a
+            // completed selection and may return continuation=0 before the cut ends.
+            builder.withVariableNullIndicators();
+            if (selection != RawSelection.AUDIT) {
+                builder.filterJournalCodes(selection == RawSelection.CONTROLS ? HISTORY_CONTROL_CODES : REQUIRED_JOURNAL_CODES);
+            }
         }
         builder.withRange(range);
         final ProgramParameter[] parameters = builder.build();
+        if (rawEntryLimit > 0) {
+            // With escape-message errors JT400 withholds the output buffer. An
+            // explicit by-reference QUS error structure preserves it for strict
+            // classification; successful transport does not imply API success.
+            byte[] error = new byte[RawJournalPage.ERROR_BYTES];
+            java.nio.ByteBuffer.wrap(error).putInt(error.length);
+            parameters[5] = new ProgramParameter(ProgramParameter.PASS_BY_REFERENCE, error, error.length);
+        }
 
+        lifecycle.checkOpen();
         spc.setProgram(JournalInfoRetrieval.JOURNAL_SERVICE_LIB, parameters);
         spc.setProcedureName("QjoRetrieveJournalEntries");
         spc.setAlignOn16Bytes(true);
         spc.setReturnValueFormat(ServiceProgramCall.RETURN_INTEGER);
-        ibmiJob.set(spc.getServerJob()); // capture so we can asynchronously cancel it
-        final boolean success = spc.run();
-        ibmiJob.set(null); // job finished
+        final ActiveRead read = new ActiveRead(connection, job);
+        synchronized (activeReadLock) {
+            lifecycle.checkOpen();
+            if (activeRead != null) {
+                throw new IllegalStateException("A journal read is already active");
+            }
+            activeRead = read;
+        }
+        final boolean success;
+        try (var ignored = lifecycle.enter()) {
+            // Registration precedes admission to run. Stop either rejects this
+            // lease, or cancels and drains it before reporting completion.
+            success = spc.run();
+            if (rawEntryLimit > 0) {
+                if (!success || spc.getMessageList().length != 0) {
+                    throw new RetrieveJournalException("Bounded raw journal retrieval failed; no entries or continuation accepted: "
+                            + Arrays.stream(spc.getMessageList()).map(AS400Message::getID).toList());
+                }
+                rawPage = RawJournalPage.decodeResult(parameters[0].getOutputData(), parameters[5].getOutputData(),
+                        range.start().asJournalPosition(), range.end(), rawEntryLimit, handle -> releasePointer(spc, job, handle));
+                if (selection == RawSelection.CONTROLS
+                        && rawPage.entries().stream().anyMatch(e -> e.header().getJournalCode() != 'C' && e.header().getJournalCode() != 'J')) {
+                    throw new RetrieveJournalException("Control-history response contains an unrequested journal code");
+                }
+            }
+        }
+        catch (Exception e) {
+            if (rawEntryLimit > 0) {
+                // A partial/unsupported response may have allocated native pointer
+                // handles. End only this captured read job; never reuse its handles
+                // on another connection or advance past the failed response.
+                cancelJob();
+            }
+            throw e;
+        }
+        finally {
+            synchronized (activeReadLock) {
+                if (activeRead == read) {
+                    activeRead = null;
+                }
+            }
+        }
+        lifecycle.checkOpen();
         if (success) {
             outputData = parameters[0].getOutputData();
+            if (rawEntryLimit > 0) {
+                return rawPage.continuation().isPresent() ? RetrievalState.MoreDataAvailable : RetrievalState.Success;
+            }
             header = firstHeaderDecoder.decode(outputData, end);
             totalTransferred += header.totalBytes();
             log.debug("retrieve from {} to {} header {}", range.start(), range.end(), header);
@@ -188,6 +433,37 @@ public class RetrieveJournal {
             return RetrievalState.MoreDataAvailable;
         }
         return RetrievalState.Success;
+    }
+
+    private void releasePointer(ServiceProgramCall call, Job expectedJob, long handle) {
+        try {
+            lifecycle.checkOpen();
+            Job current = call.getServerJob();
+            if (!current.getName().equals(expectedJob.getName()) || !current.getUser().equals(expectedJob.getUser())
+                    || !current.getNumber().equals(expectedJob.getNumber())) {
+                throw new IllegalStateException("Pointer cleanup cannot move to another API job");
+            }
+            byte[] error = new byte[RawJournalPage.ERROR_BYTES];
+            java.nio.ByteBuffer.wrap(error).putInt(error.length);
+            var parameters = new ProgramParameter[]{
+                    new ProgramParameter(ProgramParameter.PASS_BY_REFERENCE, new com.ibm.as400.access.AS400UnsignedBin4().toBytes(handle)),
+                    new ProgramParameter(ProgramParameter.PASS_BY_REFERENCE, error, error.length)
+            };
+            call.setProgram(JournalInfoRetrieval.JOURNAL_SERVICE_LIB, parameters);
+            call.setProcedureName("QjoDeletePointerHandle");
+            call.setReturnValueFormat(ServiceProgramCall.NO_RETURN_VALUE);
+            lifecycle.checkOpen();
+            if (!call.run() || call.getMessageList().length != 0
+                    || java.nio.ByteBuffer.wrap(parameters[1].getOutputData()).getInt(4) != 0) {
+                throw new IllegalStateException("Creation metadata pointer cleanup failed");
+            }
+            lifecycle.checkOpen();
+        }
+        catch (Exception failure) {
+            // The caller ends this captured API job on every failed response;
+            // incomplete cleanup never permits publication or continuation.
+            throw new IllegalStateException("Cannot release native creation pointer", failure);
+        }
     }
 
     private RetrievalState reThrowIfFatal(JournalProcessedPosition retrievePosition, final ServiceProgramCall spc,
@@ -258,6 +534,8 @@ public class RetrieveJournal {
 
     public void setOutputData(byte[] b, FirstHeader header, JournalProcessedPosition position) {
         outputData = b;
+        this.offset = -1;
+        this.entryHeader = null;
         this.header = header;
         this.position = position;
     }

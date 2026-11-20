@@ -1,0 +1,179 @@
+{
+  "startup_proof": false,
+  "sanitization": "Owned native ADDPFM capture. Library, system, user, job and JIDs replaced consistently; opaque apply bytes and trailing response buffer removed. Native documented metadata and row layout retained. The before definition is derived from the acquired after definition by removing the newly added member; it is not a native before-catalog observation.",
+  "cleanup": {
+    "status": "passed"
+  },
+  "before": {
+    "tables": [
+      {
+        "type": "CREATE",
+        "id": "\"DCNC0002\".\"K\"",
+        "table": {
+          "defaultCharsetName": null,
+          "comment": null,
+          "primaryKeyColumnNames": [
+            "ID"
+          ],
+          "columns": [
+            {
+              "name": "ID",
+              "jdbcType": 4,
+              "typeName": "INTEGER",
+              "typeExpression": "INTEGER",
+              "charsetName": null,
+              "length": 10,
+              "scale": 0,
+              "position": 1,
+              "optional": true,
+              "autoIncremented": false,
+              "generated": false,
+              "comment": null,
+              "hasDefaultValue": true,
+              "enumValues": []
+            }
+          ],
+          "attributes": [
+            {
+              "name": "ibmi.binding.codec.0",
+              "value": "BIN4:4:0:0"
+            },
+            {
+              "name": "ibmi.binding.file",
+              "value": "K"
+            },
+            {
+              "name": "ibmi.binding.file.jid",
+              "value": "00000000000000000001"
+            },
+            {
+              "name": "ibmi.binding.format",
+              "value": "KREC:2A2215B968DDA:4:1:false"
+            },
+            {
+              "name": "ibmi.binding.member",
+              "value": "K"
+            },
+            {
+              "name": "ibmi.binding.member.jid",
+              "value": "00000000000000000002"
+            },
+            {
+              "name": "ibmi.binding.version",
+              "value": "1"
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "after": {
+    "tables": [
+      {
+        "type": "CREATE",
+        "id": "\"DCNC0002\".\"K\"",
+        "table": {
+          "defaultCharsetName": null,
+          "comment": null,
+          "primaryKeyColumnNames": [
+            "ID"
+          ],
+          "columns": [
+            {
+              "name": "ID",
+              "jdbcType": 4,
+              "typeName": "INTEGER",
+              "typeExpression": "INTEGER",
+              "charsetName": null,
+              "length": 10,
+              "scale": 0,
+              "position": 1,
+              "optional": true,
+              "autoIncremented": false,
+              "generated": false,
+              "comment": null,
+              "hasDefaultValue": true,
+              "enumValues": []
+            }
+          ],
+          "attributes": [
+            {
+              "name": "ibmi.binding.codec.0",
+              "value": "BIN4:4:0:0"
+            },
+            {
+              "name": "ibmi.binding.file",
+              "value": "K"
+            },
+            {
+              "name": "ibmi.binding.file.jid",
+              "value": "00000000000000000001"
+            },
+            {
+              "name": "ibmi.binding.format",
+              "value": "KREC:2A2215B968DDA:4:1:false"
+            },
+            {
+              "name": "ibmi.binding.member",
+              "value": "K"
+            },
+            {
+              "name": "ibmi.binding.member.jid",
+              "value": "00000000000000000002"
+            },
+            {
+              "name": "ibmi.binding.members.K",
+              "value": "00000000000000000002"
+            },
+            {
+              "name": "ibmi.binding.members.SECOND",
+              "value": "00000000000000000003"
+            },
+            {
+              "name": "ibmi.binding.version",
+              "value": "2"
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "entries": [
+    {
+      "type": "F/JM",
+      "position": {
+        "library": "DCNC0002",
+        "receiver": "QSQJRN0002",
+        "sequence": "54"
+      },
+      "raw": "AAABAwAAAOwAAADwAAAAAAAAAAAAAAAAAAAAAAAAADawMUHTilIAAAAAAAAAAAG6AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAoAAAAAAAAAAAAAAAAAAAAAAADG0dTjxeLj0dbCQEBA48Xi4+TixdlAQPDw8PDw8djD1MTF58PxQEBc1tTJ4+PFxEBAXNbUyePjxcRAQNJAQEBAQEBAQEDEw9XD8PDw8kBA4sXD1tXEQEBAQOPF4uPk4sXZQEAAAAAAAAAAAAAD8OPF4uNAQEBA8fEAXNjExOJAQEBAQAAAAAAAAAAAAAAA8PDw8PMAAAAAAAAAAAAAAPHw8A=="
+    },
+    {
+      "type": "D/MA",
+      "position": {
+        "library": "DCNC0002",
+        "receiver": "QSQJRN0002",
+        "sequence": "55"
+      },
+      "raw": "AAABKAAAAOwAAADwAAAAAAAAAAAAAAAAAAAAAAAAADewMUHTi2EAAAAAAAAAAAG6AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAAAAADE1MHjxeLj0dbCQEBA48Xi4+TixdlAQPDw8PDw8djD1MTF58PxQEBc1tTJ4+PFxEBAXNbUyePjxcRAQNJAQEBAQEBAQEDEw9XD8PDw8kBAQEBAQEBAQEBAQOPF4uPk4sXZQEAAAAAAAAAAAAAB8OPF4uNAQEBA8PEAXMbJ08VAQEBAQAAAAAAAAAAAAAAA8PDw9PAAAAAAAAAAAAAAAAAAAAAAAAAAAAPSQEBAQEBAQEBAxMPVw/Dw8PJAQOLFw9bVxEBAQEA="
+    },
+    {
+      "type": "F/MC",
+      "position": {
+        "library": "DCNC0002",
+        "receiver": "QSQJRN0002",
+        "sequence": "56"
+      },
+      "raw": "AAAEVAAAAOwAAADwAAAAAAAAAAAAAAAAAAAAAAAAADiwMUHTi2gAAAAAAAAAAAG6AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAAAAADG1MPjxeLj0dbCQEBA48Xi4+TixdlAQPDw8PDw8djD1MTF58PxQEBc1tTJ4+PFxEBAXNbUyePjxcRAQNJAQEBAQEBAQEDEw9XD8PDw8kBA4sXD1tXEQEBAQOPF4uPk4sXZQEAAAAAAAAAAAAAD8OPF4uNAQEBA8PEAXNjExOJAQEBAQAAAAAAAAAAAAAAA8PD49fIAAAAAAAAAAAAAANJAQEBAQEBAQEDEw9XD8PDw8kBA4sXD1tXEQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAPkAAAAAAAAAAAAAAAAAAADXxkBAQEBAQEBAAAAAAAAAAAAA8AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="
+    },
+    {
+      "type": "R/PT",
+      "position": {
+        "library": "DCNC0002",
+        "receiver": "QSQJRN0002",
+        "sequence": "58"
+      },
+      "raw": "AAABFAAAAOwAAAEAAAAAAAAAAAAAAAAAAAAAAAAAADqwMUHZQ2sAAAAAAAAAAAG6AAAAAAAAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAIAAAAAAAAAAAAAAAAAAAAAAADZ1+PjxeLj0dbCQEBA48Xi4+TixdlAQPDw8PDw8djpxMHi1snVyeNc1tTJ4+PFxEBAXNbUyePjxcRAQNJAQEBAQEBAQEDEw9XD8PDw8kBA4sXD1tXEQEBAQOPF4uPk4sXZQEAAAAAAAAAAAAAD8OPF4uNAQEBA8PEAXNjExOJAQEBAQAAAAAAAAAAAAAAB8AAAAAAAAAAAAAAAAAAAAPDw8PD0AAAAAAAAAAAAAAAAAAK8"
+    }
+  ]
+}

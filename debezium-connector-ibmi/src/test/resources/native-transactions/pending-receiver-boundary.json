@@ -1,0 +1,1022 @@
+{
+  "busy": {
+    "pending": {
+      "startup_proof": false,
+      "library": "DCNC0976",
+      "mode": "pending",
+      "directory_evidence": {
+        "attached": {
+          "name": "QSQJRN0002",
+          "library": "DCNC0976"
+        },
+        "receivers": [
+          {
+            "next": {
+              "name": "QSQJRN0002",
+              "library": "DCNC0976"
+            },
+            "last": "3",
+            "profile": [
+              "NO",
+              "YES",
+              "NO",
+              "NO",
+              "NO"
+            ],
+            "status": "ONLINE",
+            "first": "1",
+            "name": {
+              "name": "QSQJRN0001",
+              "library": "DCNC0976"
+            },
+            "previous": {}
+          },
+          {
+            "next": {},
+            "last": "53",
+            "profile": [
+              "NO",
+              "YES",
+              "YES",
+              "NO",
+              "NO"
+            ],
+            "status": "ATTACHED",
+            "first": "4",
+            "name": {
+              "name": "QSQJRN0002",
+              "library": "DCNC0976"
+            },
+            "previous": {
+              "name": "QSQJRN0001",
+              "library": "DCNC0976"
+            }
+          }
+        ],
+        "objects": [
+          {
+            "kind": "JOURNAL",
+            "generation": "2829710033",
+            "file": "494179",
+            "path": "/QSYS.LIB/DCNC0976.LIB/QSQJRN.JRN",
+            "filesystem": "141016661229569"
+          },
+          {
+            "kind": "RECEIVER",
+            "generation": "2829710025",
+            "file": "494180",
+            "path": "/QSYS.LIB/DCNC0976.LIB/QSQJRN0001.JRNRCV",
+            "filesystem": "141016661229569"
+          },
+          {
+            "kind": "RECEIVER",
+            "generation": "2829710030",
+            "file": "494181",
+            "path": "/QSYS.LIB/DCNC0976.LIB/QSQJRN0002.JRNRCV",
+            "filesystem": "141016661229569"
+          }
+        ],
+        "journal": {
+          "name": "QSQJRN",
+          "library": "DCNC0976"
+        }
+      },
+      "pending_receivers": {
+        "attached": {
+          "name": "QSQJRN0002",
+          "library": "DCNC0976"
+        },
+        "journal": {
+          "name": "QSQJRN",
+          "library": "DCNC0976"
+        },
+        "receivers": [
+          {
+            "next": [
+              "DCNC0976",
+              "QSQJRN0002"
+            ],
+            "last": "3",
+            "status": "ONLINE",
+            "first": "1",
+            "pending": false,
+            "name": {
+              "name": "QSQJRN0001",
+              "library": "DCNC0976"
+            },
+            "previous": []
+          },
+          {
+            "next": [],
+            "last": "53",
+            "status": "ATTACHED",
+            "first": "4",
+            "pending": true,
+            "name": {
+              "name": "QSQJRN0002",
+              "library": "DCNC0976"
+            },
+            "previous": [
+              "DCNC0976",
+              "QSQJRN0001"
+            ]
+          }
+        ]
+      },
+      "directory_after": {
+        "attached": {
+          "name": "QSQJRN0002",
+          "library": "DCNC0976"
+        },
+        "receivers": [
+          {
+            "next": {
+              "name": "QSQJRN0002",
+              "library": "DCNC0976"
+            },
+            "last": "3",
+            "profile": [
+              "NO",
+              "YES",
+              "NO",
+              "NO",
+              "NO"
+            ],
+            "status": "ONLINE",
+            "first": "1",
+            "name": {
+              "name": "QSQJRN0001",
+              "library": "DCNC0976"
+            },
+            "previous": {}
+          },
+          {
+            "next": {},
+            "last": "53",
+            "profile": [
+              "NO",
+              "YES",
+              "YES",
+              "NO",
+              "NO"
+            ],
+            "status": "ATTACHED",
+            "first": "4",
+            "name": {
+              "name": "QSQJRN0002",
+              "library": "DCNC0976"
+            },
+            "previous": {
+              "name": "QSQJRN0001",
+              "library": "DCNC0976"
+            }
+          }
+        ],
+        "objects": [
+          {
+            "kind": "JOURNAL",
+            "generation": "2829710033",
+            "file": "494179",
+            "path": "/QSYS.LIB/DCNC0976.LIB/QSQJRN.JRN",
+            "filesystem": "141016661229569"
+          },
+          {
+            "kind": "RECEIVER",
+            "generation": "2829710025",
+            "file": "494180",
+            "path": "/QSYS.LIB/DCNC0976.LIB/QSQJRN0001.JRNRCV",
+            "filesystem": "141016661229569"
+          },
+          {
+            "kind": "RECEIVER",
+            "generation": "2829710030",
+            "file": "494181",
+            "path": "/QSYS.LIB/DCNC0976.LIB/QSQJRN0002.JRNRCV",
+            "filesystem": "141016661229569"
+          }
+        ],
+        "journal": {
+          "name": "QSQJRN",
+          "library": "DCNC0976"
+        }
+      },
+      "status": "captured",
+      "transport_disconnected": true
+    },
+    "audit": {
+      "startup_proof": false,
+      "library": "DCNC0976",
+      "mode": "audit",
+      "selection": "Native default all codes/types, no object selection; test-only audit, never startup proof",
+      "response_buffer_bytes": 1048576,
+      "receiver_observation": [
+        {
+          "name": "QSQJRN0002",
+          "library": "DCNC0976",
+          "status": "ATTACHED",
+          "first": "4",
+          "last": "54",
+          "previous": "DCNC0976/QSQJRN0001",
+          "next": "",
+          "job": "YES",
+          "thread": "YES",
+          "minimize": "NO",
+          "luw": "NO",
+          "xid": "NO"
+        }
+      ],
+      "from": {
+        "sequence": "52",
+        "receiver": "QSQJRN0002",
+        "library": "DCNC0976"
+      },
+      "through": {
+        "sequence": "54",
+        "receiver": "QSQJRN0002",
+        "library": "DCNC0976"
+      },
+      "pages": [
+        {
+          "from": {
+            "sequence": "52",
+            "receiver": "QSQJRN0002",
+            "library": "DCNC0976"
+          },
+          "through": {
+            "sequence": "54",
+            "receiver": "QSQJRN0002",
+            "library": "DCNC0976"
+          },
+          "continuation": {},
+          "count": 3,
+          "bytes_returned": 1033
+        }
+      ],
+      "entries": [
+        {
+          "file": "entry-0.bin",
+          "position": {
+            "sequence": "52",
+            "receiver": "QSQJRN0002",
+            "library": "DCNC0976"
+          },
+          "type": "C/SB",
+          "cycle": "46",
+          "table": "",
+          "library": "",
+          "member": "",
+          "time": "2026-11-09T20:55:27.775712Z",
+          "record": {
+            "recordNumber": 0,
+            "threadId": 67,
+            "jobName": "QZDASOINIT",
+            "jobUser": "QUSER",
+            "jobNumber": "800062",
+            "objectJournalId": "00000000000000000000",
+            "objectNameIndicator": "0",
+            "objectType": "",
+            "systemName": "TEST",
+            "programName": "QZDASOINIT",
+            "programLibrary": "*OMITTED",
+            "userProfile": "TESTUSER"
+          },
+          "entry_specific_data_offset": 272,
+          "entry_end_offset": 304,
+          "sha256": "85a120f7ceaad43ad1136aa1c7bd4f200112c1385494b48a85cc80f930bb7628",
+          "raw": "AAAAAAAAAQwAAAEQAAAAAAAAAAAAAADsAAAAAAAAADSwLc80gD4AAAAAAAAAAABDAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAuAAAAAAAAAAYAAAAAAAAAAAAAAAAAAAAAAADD4sLY6cTB4tbJ1cnj2OTixdlAQEBAQPjw8PD28tjpxMHi1snVyeNc1tTJ4+PFxEBAXNbUyePjxcRAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQOPF4uPk4sXZQEAAAAAAAAAAAAAA8OPF4uNAQEBA8PAAQEBAQEBAQEBAQAAAAAAAAALY4tjR2dXw8PDyxMPVw/D59/ZAQFzi6OLCweJAQEAAAQAAAADw8PDw8QAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAA=="
+        },
+        {
+          "file": "entry-1.bin",
+          "position": {
+            "sequence": "53",
+            "receiver": "QSQJRN0002",
+            "library": "DCNC0976"
+          },
+          "type": "U/DN",
+          "cycle": "0",
+          "table": "",
+          "library": "",
+          "member": "",
+          "time": "2026-11-09T20:55:28.199472Z",
+          "record": {
+            "recordNumber": 0,
+            "threadId": 263,
+            "jobName": "QZDASOINIT",
+            "jobUser": "QUSER",
+            "jobNumber": "800060",
+            "objectJournalId": "00000000000000000000",
+            "objectNameIndicator": "0",
+            "objectType": "",
+            "systemName": "TEST",
+            "programName": "QCMDEXC1",
+            "programLibrary": "*OMITTED",
+            "userProfile": "TESTUSER"
+          },
+          "entry_specific_data_offset": 240,
+          "entry_end_offset": 304,
+          "sha256": "7ad83cae01800989b0603a94e813e7f19198b70f5c604feeba71788d802ac69b",
+          "raw": "AAAAAAAAAOwAAADwAAAAAAAAAAAAAAAAAAAAAAAAADWwLc8057MAAAAAAAAAAAEHAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAYAAAAAAAAAAAAAAAAAAAAAAADkxNXY6cTB4tbJ1cnj2OTixdlAQEBAQPjw8PD28NjD1MTF58PxQEBc1tTJ4+PFxEBAXNbUyePjxcRAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQOPF4uPk4sXZQEAAAAAAAAAAAAAA8OPF4uNAQEBA8PAAQEBAQEBAQEBAQAAAAAAAAAAAAAAA8PDw9PAAAAAAAAAAAAAAAMTDx8LxQPnGxfDx8vTExPfD8/Tw9Pj59vb18vb2w/DD98PywfX2QMEAAAAAAAAAAA=="
+        },
+        {
+          "file": "entry-2.bin",
+          "position": {
+            "sequence": "54",
+            "receiver": "QSQJRN0002",
+            "library": "DCNC0976"
+          },
+          "type": "U/DN",
+          "cycle": "0",
+          "table": "",
+          "library": "",
+          "member": "",
+          "time": "2026-11-09T20:55:48.498976Z",
+          "record": {
+            "recordNumber": 0,
+            "threadId": 263,
+            "jobName": "QZDASOINIT",
+            "jobUser": "QUSER",
+            "jobNumber": "800060",
+            "objectJournalId": "00000000000000000000",
+            "objectNameIndicator": "0",
+            "objectType": "",
+            "systemName": "TEST",
+            "programName": "QCMDEXC1",
+            "programLibrary": "*OMITTED",
+            "userProfile": "TESTUSER"
+          },
+          "entry_specific_data_offset": 240,
+          "entry_end_offset": 361,
+          "sha256": "7f0766a245e5a334299d157c23d18ccc49b465f673e179fc1e6a788e2b6a7af2",
+          "raw": "AAAAAAAAAOwAAADwAAAAAAAAAAAAAAAAAAAAAAAAADawLc9IQ6IAAAAAAAAAAAEHAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAYAAAAAAAAAAAAAAAAAAAAAAADkxNXY6cTB4tbJ1cnj2OTixdlAQEBAQPjw8PD28NjD1MTF58PxQEBc1tTJ4+PFxEBAXNbUyePjxcRAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQOPF4uPk4sXZQEAAAAAAAAAAAAAA8OPF4uNAQEBA8PAAQEBAQEBAQEBAQAAAAAAAAAAAAAAA8PDx8PUAAAAAAAAAAAAAAMTDx8LxQPnGxfDx8vTExPfD8/Tw9Pj59vb18vb2w/DD98PywfX2QOlA+MPG9Pj08PnGxfT5wcb0w/HD9MLB9PHy9/jDxPT2xvjFxMX0+fj1wfD0wcLF+Pj58MT38/L09sXExfHx+PT09A=="
+        }
+      ],
+      "receiver_recheck": [
+        {
+          "name": "QSQJRN0002",
+          "library": "DCNC0976",
+          "status": "ATTACHED",
+          "first": "4",
+          "last": "54",
+          "previous": "DCNC0976/QSQJRN0001",
+          "next": "",
+          "job": "YES",
+          "thread": "YES",
+          "minimize": "NO",
+          "luw": "NO",
+          "xid": "NO"
+        }
+      ],
+      "native_identity_evidence": {
+        "profile": "online-native-observation-v1",
+        "from": {
+          "sequence": "52",
+          "receiver": "QSQJRN0002",
+          "library": "DCNC0976"
+        },
+        "historical_schema_proof": false,
+        "after": {
+          "attached": {
+            "name": "QSQJRN0002",
+            "library": "DCNC0976"
+          },
+          "receivers": [
+            {
+              "last": "54",
+              "profile": [
+                "NO",
+                "YES",
+                "YES",
+                "NO",
+                "NO"
+              ],
+              "status": "ATTACHED",
+              "first": "4",
+              "name": {
+                "name": "QSQJRN0002",
+                "library": "DCNC0976"
+              },
+              "previous": {
+                "name": "QSQJRN0001",
+                "library": "DCNC0976"
+              },
+              "next": {}
+            }
+          ],
+          "objects": [
+            {
+              "file": "494179",
+              "path": "/QSYS.LIB/DCNC0976.LIB/QSQJRN.JRN",
+              "filesystem": "141016661229569",
+              "kind": "JOURNAL",
+              "generation": "2829710033"
+            },
+            {
+              "file": "494181",
+              "path": "/QSYS.LIB/DCNC0976.LIB/QSQJRN0002.JRNRCV",
+              "filesystem": "141016661229569",
+              "kind": "RECEIVER",
+              "generation": "2829710030"
+            }
+          ],
+          "journal": {
+            "name": "QSQJRN",
+            "library": "DCNC0976"
+          }
+        },
+        "before": {
+          "attached": {
+            "name": "QSQJRN0002",
+            "library": "DCNC0976"
+          },
+          "receivers": [
+            {
+              "last": "54",
+              "profile": [
+                "NO",
+                "YES",
+                "YES",
+                "NO",
+                "NO"
+              ],
+              "status": "ATTACHED",
+              "first": "4",
+              "name": {
+                "name": "QSQJRN0002",
+                "library": "DCNC0976"
+              },
+              "previous": {
+                "name": "QSQJRN0001",
+                "library": "DCNC0976"
+              },
+              "next": {}
+            }
+          ],
+          "objects": [
+            {
+              "file": "494179",
+              "path": "/QSYS.LIB/DCNC0976.LIB/QSQJRN.JRN",
+              "filesystem": "141016661229569",
+              "kind": "JOURNAL",
+              "generation": "2829710033"
+            },
+            {
+              "file": "494181",
+              "path": "/QSYS.LIB/DCNC0976.LIB/QSQJRN0002.JRNRCV",
+              "filesystem": "141016661229569",
+              "kind": "RECEIVER",
+              "generation": "2829710030"
+            }
+          ],
+          "journal": {
+            "name": "QSQJRN",
+            "library": "DCNC0976"
+          }
+        },
+        "startup_proof": false,
+        "through": {
+          "sequence": "54",
+          "receiver": "QSQJRN0002",
+          "library": "DCNC0976"
+        },
+        "visibility_proof": false
+      },
+      "status": "audit-captured-unqualified",
+      "transport_disconnected": true
+    },
+    "expected": {
+      "floor": {
+        "sequence": "4",
+        "receiver": "QSQJRN0002",
+        "library": "DCNC0976"
+      },
+      "startup_proof": false,
+      "status": "native-history-floor-discovered"
+    }
+  },
+  "candidate": {
+    "pending": {
+      "startup_proof": false,
+      "library": "DCNC0976",
+      "mode": "pending",
+      "directory_evidence": {
+        "journal": {
+          "name": "QSQJRN",
+          "library": "DCNC0976"
+        },
+        "objects": [
+          {
+            "path": "/QSYS.LIB/DCNC0976.LIB/QSQJRN.JRN",
+            "file": "494179",
+            "generation": "2829710033",
+            "kind": "JOURNAL",
+            "filesystem": "141016661229569"
+          },
+          {
+            "path": "/QSYS.LIB/DCNC0976.LIB/QSQJRN0001.JRNRCV",
+            "file": "494180",
+            "generation": "2829710025",
+            "kind": "RECEIVER",
+            "filesystem": "141016661229569"
+          },
+          {
+            "path": "/QSYS.LIB/DCNC0976.LIB/QSQJRN0002.JRNRCV",
+            "file": "494181",
+            "generation": "2829710030",
+            "kind": "RECEIVER",
+            "filesystem": "141016661229569"
+          }
+        ],
+        "receivers": [
+          {
+            "name": {
+              "name": "QSQJRN0001",
+              "library": "DCNC0976"
+            },
+            "first": "1",
+            "status": "ONLINE",
+            "profile": [
+              "NO",
+              "YES",
+              "NO",
+              "NO",
+              "NO"
+            ],
+            "last": "3",
+            "next": {
+              "name": "QSQJRN0002",
+              "library": "DCNC0976"
+            },
+            "previous": {}
+          },
+          {
+            "name": {
+              "name": "QSQJRN0002",
+              "library": "DCNC0976"
+            },
+            "first": "4",
+            "status": "ATTACHED",
+            "profile": [
+              "NO",
+              "YES",
+              "YES",
+              "NO",
+              "NO"
+            ],
+            "last": "58",
+            "next": {},
+            "previous": {
+              "name": "QSQJRN0001",
+              "library": "DCNC0976"
+            }
+          }
+        ],
+        "attached": {
+          "name": "QSQJRN0002",
+          "library": "DCNC0976"
+        }
+      },
+      "pending_receivers": {
+        "journal": {
+          "name": "QSQJRN",
+          "library": "DCNC0976"
+        },
+        "attached": {
+          "name": "QSQJRN0002",
+          "library": "DCNC0976"
+        },
+        "receivers": [
+          {
+            "name": {
+              "name": "QSQJRN0001",
+              "library": "DCNC0976"
+            },
+            "pending": false,
+            "first": "1",
+            "status": "ONLINE",
+            "last": "3",
+            "next": [
+              "DCNC0976",
+              "QSQJRN0002"
+            ],
+            "previous": []
+          },
+          {
+            "name": {
+              "name": "QSQJRN0002",
+              "library": "DCNC0976"
+            },
+            "pending": false,
+            "first": "4",
+            "status": "ATTACHED",
+            "last": "58",
+            "next": [],
+            "previous": [
+              "DCNC0976",
+              "QSQJRN0001"
+            ]
+          }
+        ]
+      },
+      "directory_after": {
+        "journal": {
+          "name": "QSQJRN",
+          "library": "DCNC0976"
+        },
+        "objects": [
+          {
+            "path": "/QSYS.LIB/DCNC0976.LIB/QSQJRN.JRN",
+            "file": "494179",
+            "generation": "2829710033",
+            "kind": "JOURNAL",
+            "filesystem": "141016661229569"
+          },
+          {
+            "path": "/QSYS.LIB/DCNC0976.LIB/QSQJRN0001.JRNRCV",
+            "file": "494180",
+            "generation": "2829710025",
+            "kind": "RECEIVER",
+            "filesystem": "141016661229569"
+          },
+          {
+            "path": "/QSYS.LIB/DCNC0976.LIB/QSQJRN0002.JRNRCV",
+            "file": "494181",
+            "generation": "2829710030",
+            "kind": "RECEIVER",
+            "filesystem": "141016661229569"
+          }
+        ],
+        "receivers": [
+          {
+            "name": {
+              "name": "QSQJRN0001",
+              "library": "DCNC0976"
+            },
+            "first": "1",
+            "status": "ONLINE",
+            "profile": [
+              "NO",
+              "YES",
+              "NO",
+              "NO",
+              "NO"
+            ],
+            "last": "3",
+            "next": {
+              "name": "QSQJRN0002",
+              "library": "DCNC0976"
+            },
+            "previous": {}
+          },
+          {
+            "name": {
+              "name": "QSQJRN0002",
+              "library": "DCNC0976"
+            },
+            "first": "4",
+            "status": "ATTACHED",
+            "profile": [
+              "NO",
+              "YES",
+              "YES",
+              "NO",
+              "NO"
+            ],
+            "last": "58",
+            "next": {},
+            "previous": {
+              "name": "QSQJRN0001",
+              "library": "DCNC0976"
+            }
+          }
+        ],
+        "attached": {
+          "name": "QSQJRN0002",
+          "library": "DCNC0976"
+        }
+      },
+      "status": "captured",
+      "transport_disconnected": true
+    },
+    "audit": {
+      "startup_proof": false,
+      "library": "DCNC0976",
+      "mode": "audit",
+      "selection": "Native default all codes/types, no object selection; test-only audit, never startup proof",
+      "response_buffer_bytes": 1048576,
+      "receiver_observation": [
+        {
+          "name": "QSQJRN0002",
+          "library": "DCNC0976",
+          "status": "ATTACHED",
+          "first": "4",
+          "last": "60",
+          "previous": "DCNC0976/QSQJRN0001",
+          "next": "",
+          "job": "YES",
+          "thread": "YES",
+          "minimize": "NO",
+          "luw": "NO",
+          "xid": "NO"
+        }
+      ],
+      "from": {
+        "library": "DCNC0976",
+        "receiver": "QSQJRN0002",
+        "sequence": "57"
+      },
+      "through": {
+        "library": "DCNC0976",
+        "receiver": "QSQJRN0002",
+        "sequence": "60"
+      },
+      "pages": [
+        {
+          "bytes_returned": 1385,
+          "count": 4,
+          "continuation": {},
+          "through": {
+            "library": "DCNC0976",
+            "receiver": "QSQJRN0002",
+            "sequence": "60"
+          },
+          "from": {
+            "library": "DCNC0976",
+            "receiver": "QSQJRN0002",
+            "sequence": "57"
+          }
+        }
+      ],
+      "entries": [
+        {
+          "file": "entry-0.bin",
+          "position": {
+            "library": "DCNC0976",
+            "receiver": "QSQJRN0002",
+            "sequence": "57"
+          },
+          "type": "C/CM",
+          "cycle": "46",
+          "table": "",
+          "library": "",
+          "member": "",
+          "time": "2026-11-09T20:55:57.703776Z",
+          "record": {
+            "recordNumber": 0,
+            "threadId": 67,
+            "jobName": "QZDASOINIT",
+            "jobUser": "QUSER",
+            "jobNumber": "800062",
+            "objectJournalId": "00000000000000000000",
+            "objectNameIndicator": "0",
+            "objectType": "",
+            "systemName": "TEST",
+            "programName": "QZDASOINIT",
+            "programLibrary": "*OMITTED",
+            "userProfile": "TESTUSER"
+          },
+          "entry_specific_data_offset": 272,
+          "entry_end_offset": 288,
+          "sha256": "af3b838ae8c53f52efd5cd95624a46973df6aba4acc22f29c849b6138fc514cd",
+          "raw": "AAAAAAAAAQwAAAEQAAAAAAAAAAAAAADsAAAAAAAAADmwLc9RCuYAAAAAAAAAAABDAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAuAAAAAAAAAAgAAAAAAAAAAAAAAAAAAAAAAADDw9TY6cTB4tbJ1cnj2OTixdlAQEBAQPjw8PD28tjpxMHi1snVyeNc1tTJ4+PFxEBAXNbUyePjxcRAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQOPF4uPk4sXZQEAAAAAAAAAAAAAA8OPF4uNAQEBA8PAAQEBAQEBAQEBAQAAAAAAAAADY4tjR2dXw8PDyxMPVw/D59/ZAQFzi6OLCweJAQEAAAQAAAADw8PDw8AAAAAAAAAAAAAAA"
+        },
+        {
+          "file": "entry-1.bin",
+          "position": {
+            "library": "DCNC0976",
+            "receiver": "QSQJRN0002",
+            "sequence": "58"
+          },
+          "type": "U/DN",
+          "cycle": "0",
+          "table": "",
+          "library": "",
+          "member": "",
+          "time": "2026-11-09T20:55:58.092560Z",
+          "record": {
+            "recordNumber": 0,
+            "threadId": 63,
+            "jobName": "QZDASOINIT",
+            "jobUser": "QUSER",
+            "jobNumber": "800061",
+            "objectJournalId": "00000000000000000000",
+            "objectNameIndicator": "0",
+            "objectType": "",
+            "systemName": "TEST",
+            "programName": "QCMDEXC1",
+            "programLibrary": "*OMITTED",
+            "userProfile": "TESTUSER"
+          },
+          "entry_specific_data_offset": 240,
+          "entry_end_offset": 304,
+          "sha256": "bf21fc12720ede2ca756d101c2f788ba699b9a09f57866aea29c63189a273928",
+          "raw": "AAAAAAAAAOwAAADwAAAAAAAAAAAAAAAAAAAAAAAAADqwLc9RadEAAAAAAAAAAAA/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAkAAAAAAAAAAAAAAAAAAAAAAADkxNXY6cTB4tbJ1cnj2OTixdlAQEBAQPjw8PD28djD1MTF58PxQEBc1tTJ4+PFxEBAXNbUyePjxcRAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQOPF4uPk4sXZQEAAAAAAAAAAAAAA8OPF4uNAQEBA8PAAQEBAQEBAQEBAQAAAAAAAAAAAAAAA8PDw9PAAAAAAAAAAAAAAAMTDx8LxQPT58Pb4xvHzxvf5+fT4+PT59MP4xfHD+ffyxsbC9vPwQMEAAAAAAAAAAA=="
+        },
+        {
+          "file": "entry-2.bin",
+          "position": {
+            "library": "DCNC0976",
+            "receiver": "QSQJRN0002",
+            "sequence": "59"
+          },
+          "type": "U/DN",
+          "cycle": "0",
+          "table": "",
+          "library": "",
+          "member": "",
+          "time": "2026-11-09T20:56:12.101824Z",
+          "record": {
+            "recordNumber": 0,
+            "threadId": 63,
+            "jobName": "QZDASOINIT",
+            "jobUser": "QUSER",
+            "jobNumber": "800061",
+            "objectJournalId": "00000000000000000000",
+            "objectNameIndicator": "0",
+            "objectType": "",
+            "systemName": "TEST",
+            "programName": "QCMDEXC1",
+            "programLibrary": "*OMITTED",
+            "userProfile": "TESTUSER"
+          },
+          "entry_specific_data_offset": 240,
+          "entry_end_offset": 368,
+          "sha256": "e18a69a9b4b09fa0d02c51d43ceddf899441bca36c88415ff7e1b8d858c7c4f0",
+          "raw": "AAAAAAAAAOwAAADwAAAAAAAAAAAAAAAAAAAAAAAAADuwLc9exgwAAAAAAAAAAAA/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAkAAAAAAAAAAAAAAAAAAAAAAADkxNXY6cTB4tbJ1cnj2OTixdlAQEBAQPjw8PD28djD1MTF58PxQEBc1tTJ4+PFxEBAXNbUyePjxcRAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQOPF4uPk4sXZQEAAAAAAAAAAAAAA8OPF4uNAQEBA8PAAQEBAQEBAQEBAQAAAAAAAAAAAAAAA8PDx8PUAAAAAAAAAAAAAAMTDx8LxQPT58Pb4xvHzxvf5+fT4+PT59MP4xfHD+ffyxsbC9vPwQNVAwfDExvXzxPLz8Pfy8PP58/PzwvX48MLD+fT5w/XF9MHDxcLGwcPz+PHBw/fyxsLGw/DxwvHFxMHG+MbCxPLG9wAAAAAAAAA="
+        },
+        {
+          "file": "entry-3.bin",
+          "position": {
+            "library": "DCNC0976",
+            "receiver": "QSQJRN0002",
+            "sequence": "60"
+          },
+          "type": "U/DN",
+          "cycle": "0",
+          "table": "",
+          "library": "",
+          "member": "",
+          "time": "2026-11-09T20:56:17.598Z",
+          "record": {
+            "recordNumber": 0,
+            "threadId": 63,
+            "jobName": "QZDASOINIT",
+            "jobUser": "QUSER",
+            "jobNumber": "800061",
+            "objectJournalId": "00000000000000000000",
+            "objectNameIndicator": "0",
+            "objectType": "",
+            "systemName": "TEST",
+            "programName": "QCMDEXC1",
+            "programLibrary": "*OMITTED",
+            "userProfile": "TESTUSER"
+          },
+          "entry_specific_data_offset": 240,
+          "entry_end_offset": 361,
+          "sha256": "695b9a4c75bbe781967d7f4df29d7819f03ce12ddf9f414de1540bd6eab18d87",
+          "raw": "AAAAAAAAAOwAAADwAAAAAAAAAAAAAAAAAAAAAAAAADywLc9kA+MAAAAAAAAAAAA/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAkAAAAAAAAAAAAAAAAAAAAAAADkxNXY6cTB4tbJ1cnj2OTixdlAQEBAQPjw8PD28djD1MTF58PxQEBc1tTJ4+PFxEBAXNbUyePjxcRAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQOPF4uPk4sXZQEAAAAAAAAAAAAAA8OPF4uNAQEBA8PAAQEBAQEBAQEBAQAAAAAAAAAAAAAAA8PDx8PUAAAAAAAAAAAAAAMTDx8LxQPT58Pb4xvHzxvf5+fT4+PT59MP4xfHD+ffyxsbC9vPwQOlAwfDExvXzxPLz8Pfy8PP58/PzwvX48MLD+fT5w/XF9MHDxcLGwcPz+PHBw/fyxsLGw/DxwvHFxMHG+MbCxPLG9w=="
+        }
+      ],
+      "receiver_recheck": [
+        {
+          "name": "QSQJRN0002",
+          "library": "DCNC0976",
+          "status": "ATTACHED",
+          "first": "4",
+          "last": "60",
+          "previous": "DCNC0976/QSQJRN0001",
+          "next": "",
+          "job": "YES",
+          "thread": "YES",
+          "minimize": "NO",
+          "luw": "NO",
+          "xid": "NO"
+        }
+      ],
+      "native_identity_evidence": {
+        "profile": "online-native-observation-v1",
+        "visibility_proof": false,
+        "through": {
+          "library": "DCNC0976",
+          "receiver": "QSQJRN0002",
+          "sequence": "60"
+        },
+        "startup_proof": false,
+        "before": {
+          "attached": {
+            "library": "DCNC0976",
+            "name": "QSQJRN0002"
+          },
+          "journal": {
+            "library": "DCNC0976",
+            "name": "QSQJRN"
+          },
+          "objects": [
+            {
+              "generation": "2829710033",
+              "kind": "JOURNAL",
+              "filesystem": "141016661229569",
+              "path": "/QSYS.LIB/DCNC0976.LIB/QSQJRN.JRN",
+              "file": "494179"
+            },
+            {
+              "generation": "2829710030",
+              "kind": "RECEIVER",
+              "filesystem": "141016661229569",
+              "path": "/QSYS.LIB/DCNC0976.LIB/QSQJRN0002.JRNRCV",
+              "file": "494181"
+            }
+          ],
+          "receivers": [
+            {
+              "last": "60",
+              "next": {},
+              "previous": {
+                "library": "DCNC0976",
+                "name": "QSQJRN0001"
+              },
+              "name": {
+                "library": "DCNC0976",
+                "name": "QSQJRN0002"
+              },
+              "first": "4",
+              "status": "ATTACHED",
+              "profile": [
+                "NO",
+                "YES",
+                "YES",
+                "NO",
+                "NO"
+              ]
+            }
+          ]
+        },
+        "after": {
+          "attached": {
+            "library": "DCNC0976",
+            "name": "QSQJRN0002"
+          },
+          "journal": {
+            "library": "DCNC0976",
+            "name": "QSQJRN"
+          },
+          "objects": [
+            {
+              "generation": "2829710033",
+              "kind": "JOURNAL",
+              "filesystem": "141016661229569",
+              "path": "/QSYS.LIB/DCNC0976.LIB/QSQJRN.JRN",
+              "file": "494179"
+            },
+            {
+              "generation": "2829710030",
+              "kind": "RECEIVER",
+              "filesystem": "141016661229569",
+              "path": "/QSYS.LIB/DCNC0976.LIB/QSQJRN0002.JRNRCV",
+              "file": "494181"
+            }
+          ],
+          "receivers": [
+            {
+              "last": "60",
+              "next": {},
+              "previous": {
+                "library": "DCNC0976",
+                "name": "QSQJRN0001"
+              },
+              "name": {
+                "library": "DCNC0976",
+                "name": "QSQJRN0002"
+              },
+              "first": "4",
+              "status": "ATTACHED",
+              "profile": [
+                "NO",
+                "YES",
+                "YES",
+                "NO",
+                "NO"
+              ]
+            }
+          ]
+        },
+        "historical_schema_proof": false,
+        "from": {
+          "library": "DCNC0976",
+          "receiver": "QSQJRN0002",
+          "sequence": "57"
+        }
+      },
+      "status": "audit-captured-unqualified",
+      "transport_disconnected": true
+    },
+    "expected": {
+      "floor": {
+        "library": "DCNC0976",
+        "sequence": "46",
+        "receiver": "QSQJRN0002"
+      },
+      "startup_proof": false,
+      "status": "native-history-floor-discovered"
+    }
+  }
+}

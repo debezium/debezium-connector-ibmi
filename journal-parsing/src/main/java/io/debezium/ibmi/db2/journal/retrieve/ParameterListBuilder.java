@@ -29,14 +29,15 @@ public class ParameterListBuilder {
     public static final int ERROR_CODE = 0;
     private static final byte[] errorCodeData = new AS400Bin4().toBytes(ERROR_CODE);
     public static final String FORMAT_NAME = "RJNE0200";
-    private static final byte[] formatNameData = new AS400Text(8).toBytes(FORMAT_NAME);
+    private final byte[] formatNameData;
+    private final int ccsid;
 
     private int bufferLength = DEFAULT_JOURNAL_BUFFER_SIZE;
     private byte[] bufferLengthData = new AS400Bin4().toBytes(bufferLength);
 
     private String receiver = "";
     private String receiverLibrary = "";
-    private final RetrievalCriteria criteria = new RetrievalCriteria();
+    private final RetrievalCriteria criteria;
     private byte[] journalData;
 
     // for diagnostics
@@ -51,6 +52,13 @@ public class ParameterListBuilder {
     private JournalCode[] journalCode;
 
     public ParameterListBuilder() {
+        this(65535);
+    }
+
+    public ParameterListBuilder(int ccsid) {
+        this.ccsid = ccsid;
+        formatNameData = new AS400Text(8, ccsid).toBytes(FORMAT_NAME);
+        criteria = new RetrievalCriteria(ccsid);
         criteria.withLenNullPointerIndicatorVarLength();
     }
 
@@ -78,13 +86,18 @@ public class ParameterListBuilder {
 
             final String jrnLib = StringHelpers.padRight(receiver, 10)
                     + StringHelpers.padRight(receiverLibrary, 10);
-            journalData = new AS400Text(20).toBytes(jrnLib);
+            journalData = new AS400Text(20, ccsid).toBytes(jrnLib);
         }
         return this;
     }
 
     public void init() {
         criteria.reset();
+    }
+
+    public ParameterListBuilder withVariableNullIndicators() {
+        criteria.withLenNullPointerIndicatorVarLength();
+        return this;
     }
 
     public ParameterListBuilder withJournalEntryType(JournalEntryType type) {
@@ -145,8 +158,12 @@ public class ParameterListBuilder {
     }
 
     public ParameterListBuilder filterJournalCodes(JournalCode[] journalCode) {
+        return filterJournalCodes(journalCode, false);
+    }
+
+    public ParameterListBuilder filterJournalCodes(JournalCode[] journalCode, boolean transactionControls) {
         this.journalCode = journalCode;
-        criteria.withJrnCde(journalCode);
+        criteria.withJrnCde(journalCode, transactionControls);
         return this;
     }
 

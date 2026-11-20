@@ -47,11 +47,13 @@ public class As400OffsetContext extends CommonOffsetContext<SourceInfo> {
     public static final Field PROCESSED_FIELD = Field.create(PROCESSED);
 
     private final Map<String, String> partition;
-    private TransactionContext transactionContext;
+    private final TransactionContext nonTransactionalContext = new TransactionContext();
+    private TransactionContext transactionContext = nonTransactionalContext;
 
     private final As400ConnectorConfig connectorConfig;
     private final SourceInfo sourceInfo;
     private final JournalProcessedPosition position;
+    private JournalProcessedPosition legacyReplayFloor;
     private boolean hasNewTables = false;
     private final IncrementalSnapshotContext<TableId> incrementalSnapshotContext;
 
@@ -100,15 +102,26 @@ public class As400OffsetContext extends CommonOffsetContext<SourceInfo> {
     }
 
     public void setTransaction(TransactionContext transactionContext) {
-        this.transactionContext = transactionContext;
+        if (transactionContext == null) {
+            // Reuse an inactive context without clearing another interleaved cycle.
+            nonTransactionalContext.endTransaction();
+            this.transactionContext = nonTransactionalContext;
+        }
+        else {
+            this.transactionContext = transactionContext;
+        }
     }
 
     public void endTransaction() {
-        transactionContext = null;
+        setTransaction(null);
     }
 
     @Override
     public Map<String, ?> getOffset() {
+        return offsetAt(legacyReplayFloor == null ? position : legacyReplayFloor);
+    }
+
+    private Map<String, ?> offsetAt(JournalProcessedPosition position) {
         if (sourceInfo.isSnapshot()) {
             log.debug("new snapshot offset {}", position);
         }
@@ -130,7 +143,30 @@ public class As400OffsetContext extends CommonOffsetContext<SourceInfo> {
                 As400OffsetContext.RECEIVER_LIBRARY, position.getReceiver().library(),
                 As400OffsetContext.SNAPSHOT_COMPLETED_KEY, Boolean.toString(snapshotCompleted)));
         incrementalSnapshotContext.store(offset);
+        if (offset.get("incremental_snapshot_correlation_id") == null) {
+            offset.remove("incremental_snapshot_correlation_id");
+        }
         return offset;
+    }
+
+    /** Protect an unpaired autocommit before-image without changing the RPC scan cursor. */
+    void legacyReplayFloor(JournalProcessedPosition floor) {
+        legacyReplayFloor = floor == null ? null : new JournalProcessedPosition(floor);
+    }
+
+    JournalProcessedPosition entryPosition(EntryHeader entry) {
+        JournalReceiver receiver = entry.hasReceiver() ? new JournalReceiver(entry.getReceiver(), entry.getReceiverLibrary()) : position.getReceiver();
+        return new JournalProcessedPosition(entry.getSequenceNumber(), receiver, entry.getTime(), true);
+    }
+
+    /** A record owns its coordinates; later reads cannot mutate an enqueued SourceRecord's offset. */
+    As400OffsetContext recordContext(EntryHeader entry, JournalProcessedPosition checkpoint) {
+        var result = new As400OffsetContext(connectorConfig, new JournalProcessedPosition(checkpoint), snapshotCompleted, incrementalSnapshotContext);
+        var source = entryPosition(entry);
+        result.updateSourceInfo(source.getOffset(), source.getReceiver().name(), source.getReceiver().library(), entry.getTime(),
+                rowNumber(entry.getJournalCode(), entry.getRelativeRecordNumber()));
+        result.setTransaction(transactionContext);
+        return result;
     }
 
     @Override
@@ -147,18 +183,32 @@ public class As400OffsetContext extends CommonOffsetContext<SourceInfo> {
      */
     public void updateSourceInfo(EntryHeader entryHeader) {
         if (entryHeader.hasReceiver()) {
-            updateSourceInfo(entryHeader.getSequenceNumber(), entryHeader.getReceiver(), entryHeader.getReceiverLibrary(), entryHeader.getTime());
+            updateSourceInfo(entryHeader.getSequenceNumber(), entryHeader.getReceiver(), entryHeader.getReceiverLibrary(), entryHeader.getTime(),
+                    rowNumber(entryHeader.getJournalCode(), entryHeader.getRelativeRecordNumber()));
         }
         else {
-            updateSourceInfo(entryHeader.getSequenceNumber(), position.getReceiver().name(), position.getReceiver().library(), entryHeader.getTime());
+            updateSourceInfo(entryHeader.getSequenceNumber(), position.getReceiver().name(), position.getReceiver().library(), entryHeader.getTime(),
+                    rowNumber(entryHeader.getJournalCode(), entryHeader.getRelativeRecordNumber()));
         }
     }
 
-    private void updateSourceInfo(BigInteger sequence, String receiver, String receiverLibrary, Instant timestamp) {
+    void updateSourceInfo(As400SourceMetadata metadata) {
+        updateSourceInfo(metadata.position().offset(), metadata.position().receiver().name(), metadata.position().receiver().library(), metadata.timestamp(),
+                rowNumber(metadata.journalCode(), metadata.recordInfo().recordNumber()));
+    }
+
+    private static BigInteger rowNumber(char journalCode, BigInteger number) {
+        // Non-row records reuse the header field for other purposes. A clear
+        // must never inherit the last row's physical number.
+        return journalCode == 'R' && number != null && number.signum() > 0 ? number : null;
+    }
+
+    private void updateSourceInfo(BigInteger sequence, String receiver, String receiverLibrary, Instant timestamp, BigInteger rrn) {
         sourceInfo.setSourceTime(timestamp);
         sourceInfo.setReceiver(receiver);
         sourceInfo.setReceiverLib(receiverLibrary);
         sourceInfo.setSequence(sequence.toString());
+        sourceInfo.setRrn(rrn == null ? null : rrn.toString());
     }
 
     @Override
@@ -170,7 +220,7 @@ public class As400OffsetContext extends CommonOffsetContext<SourceInfo> {
     public void event(DataCollectionId collectionId, Instant timestamp) {
         // snapshot rows are read via SELECT and have no journal entry of their own,
         // so the processed position is the correct source here
-        updateSourceInfo(position.getOffset(), position.getReceiver().name(), position.getReceiver().library(), timestamp);
+        updateSourceInfo(position.getOffset(), position.getReceiver().name(), position.getReceiver().library(), timestamp, null);
         // sourceInfo.tableEvent((TableId) collectionId);
     }
 
@@ -189,6 +239,9 @@ public class As400OffsetContext extends CommonOffsetContext<SourceInfo> {
 
         @Override
         public As400OffsetContext load(Map<String, ?> map) {
+            if (map.containsKey(As400Checkpoint.VERSION)) {
+                throw new IllegalArgumentException("Versioned transaction offsets require buffered recovery; legacy streaming cannot load them");
+            }
             final String offsetStr = (String) map.get(As400OffsetContext.EVENT_SEQUENCE);
             final String timeStr = (String) map.get(As400OffsetContext.EVENT_TIME);
             final String complete = (String) map.get(As400OffsetContext.SNAPSHOT_COMPLETED_KEY);

@@ -1,0 +1,277 @@
+{
+  "provenance": "Native isolated IBM i physical file with OMTJRNE(*NONE): SELECT open/close, GRANT SELECT, and SAVOBJ UPDHST(*YES). Each entry is administrative; no source row changed.",
+  "sanitization": "Same-width system, user and job substitutions in header and embedded payload, with distinct jobs remaining distinct. Native entry offsets, thread IDs (including zero on F/MS), sequence numbers and JIDs preserved.",
+  "startup_proof": false,
+  "library": "DCNC9973",
+  "receiver": "QSQJRN0002",
+  "bindings": [
+    {
+      "type": "CREATE",
+      "id": "\"DCNC9973\".\"A\"",
+      "table": {
+        "defaultCharsetName": null,
+        "comment": null,
+        "primaryKeyColumnNames": [
+          "ID"
+        ],
+        "columns": [
+          {
+            "name": "ID",
+            "jdbcType": 4,
+            "typeName": "INTEGER",
+            "typeExpression": "INTEGER",
+            "charsetName": null,
+            "length": 4,
+            "scale": 0,
+            "position": 1,
+            "optional": false,
+            "autoIncremented": false,
+            "generated": false,
+            "comment": null,
+            "hasDefaultValue": false,
+            "enumValues": []
+          }
+        ],
+        "attributes": [
+          {
+            "name": "ibmi.binding.codec.0",
+            "value": "BIN4:4:0:0"
+          },
+          {
+            "name": "ibmi.binding.file",
+            "value": "A"
+          },
+          {
+            "name": "ibmi.binding.file.jid",
+            "value": "e940001d3c316fbb0003"
+          },
+          {
+            "name": "ibmi.binding.format",
+            "value": "A:29087D5938DDA:4:1:false"
+          },
+          {
+            "name": "ibmi.binding.member",
+            "value": "A"
+          },
+          {
+            "name": "ibmi.binding.member.jid",
+            "value": "e940001d3c316fbb0004"
+          },
+          {
+            "name": "ibmi.binding.version",
+            "value": "1"
+          }
+        ]
+      }
+    },
+    {
+      "type": "CREATE",
+      "id": "\"DCNC9973\".\"B\"",
+      "table": {
+        "defaultCharsetName": null,
+        "comment": null,
+        "primaryKeyColumnNames": [
+          "ID"
+        ],
+        "columns": [
+          {
+            "name": "ID",
+            "jdbcType": 4,
+            "typeName": "INTEGER",
+            "typeExpression": "INTEGER",
+            "charsetName": null,
+            "length": 4,
+            "scale": 0,
+            "position": 1,
+            "optional": false,
+            "autoIncremented": false,
+            "generated": false,
+            "comment": null,
+            "hasDefaultValue": false,
+            "enumValues": []
+          }
+        ],
+        "attributes": [
+          {
+            "name": "ibmi.binding.codec.0",
+            "value": "BIN4:4:0:0"
+          },
+          {
+            "name": "ibmi.binding.file",
+            "value": "B"
+          },
+          {
+            "name": "ibmi.binding.file.jid",
+            "value": "e940001d3c316fbb0005"
+          },
+          {
+            "name": "ibmi.binding.format",
+            "value": "B:29187D5938DDA:4:1:false"
+          },
+          {
+            "name": "ibmi.binding.member",
+            "value": "B"
+          },
+          {
+            "name": "ibmi.binding.member.jid",
+            "value": "e940001d3c316fbb0006"
+          },
+          {
+            "name": "ibmi.binding.version",
+            "value": "1"
+          }
+        ]
+      }
+    },
+    {
+      "type": "CREATE",
+      "id": "\"DCNC9973\".\"M\"",
+      "table": {
+        "defaultCharsetName": null,
+        "comment": null,
+        "primaryKeyColumnNames": [
+          "ID"
+        ],
+        "columns": [
+          {
+            "name": "ID",
+            "jdbcType": 4,
+            "typeName": "INTEGER",
+            "typeExpression": "INTEGER",
+            "charsetName": null,
+            "length": 4,
+            "scale": 0,
+            "position": 1,
+            "optional": false,
+            "autoIncremented": false,
+            "generated": false,
+            "comment": null,
+            "hasDefaultValue": false,
+            "enumValues": []
+          }
+        ],
+        "attributes": [
+          {
+            "name": "ibmi.binding.codec.0",
+            "value": "BIN4:4:0:0"
+          },
+          {
+            "name": "ibmi.binding.file",
+            "value": "M"
+          },
+          {
+            "name": "ibmi.binding.file.jid",
+            "value": "e940001d3c316fbb0007"
+          },
+          {
+            "name": "ibmi.binding.format",
+            "value": "M:2A387D5938DDA:4:1:false"
+          },
+          {
+            "name": "ibmi.binding.member",
+            "value": "M"
+          },
+          {
+            "name": "ibmi.binding.member.jid",
+            "value": "e940001d3c316fbb0008"
+          },
+          {
+            "name": "ibmi.binding.version",
+            "value": "1"
+          }
+        ]
+      }
+    },
+    {
+      "type": "CREATE",
+      "id": "\"DCNC9973\".\"U\"",
+      "table": {
+        "defaultCharsetName": null,
+        "comment": null,
+        "primaryKeyColumnNames": [
+          "ID"
+        ],
+        "columns": [
+          {
+            "name": "ID",
+            "jdbcType": 4,
+            "typeName": "INTEGER",
+            "typeExpression": "INTEGER",
+            "charsetName": null,
+            "length": 4,
+            "scale": 0,
+            "position": 1,
+            "optional": false,
+            "autoIncremented": false,
+            "generated": false,
+            "comment": null,
+            "hasDefaultValue": false,
+            "enumValues": []
+          }
+        ],
+        "attributes": [
+          {
+            "name": "ibmi.binding.codec.0",
+            "value": "BIN4:4:0:0"
+          },
+          {
+            "name": "ibmi.binding.file",
+            "value": "U"
+          },
+          {
+            "name": "ibmi.binding.file.jid",
+            "value": "e940001d3c316fbb0009"
+          },
+          {
+            "name": "ibmi.binding.format",
+            "value": "U:2B387D5938DDA:4:1:false"
+          },
+          {
+            "name": "ibmi.binding.member",
+            "value": "U"
+          },
+          {
+            "name": "ibmi.binding.member.jid",
+            "value": "e940001d3c316fbb000a"
+          },
+          {
+            "name": "ibmi.binding.version",
+            "value": "1"
+          }
+        ]
+      }
+    }
+  ],
+  "entries": [
+    {
+      "sequence": "49",
+      "type": "F/OP",
+      "hex": "00000000000000ec000000f00000000000000000000000000000000000000031b02f409880b5000000000000000000d90000000000000000000000000000000000000000000000000000000000000008000000000000000000000000000000000000c6d6d7d8e9c4c1e2d6c9d5c9e3d8e4e2c5d94040404040f8f0f0f2f0f1d8e9c4c1e2d6c9d5c9e35cd6d4c9e3e3c5c440405cd6d4c9e3e3c5c44040c1404040404040404040c4c3d5c3f9f9f7f34040c1404040404040404040e3c5e2e3e4e2c5d94040e940001d3c316fbb0004f0e3c5e2e340404040f0f1005cd8c4c4e240404040400000000000000000000000f0f0f0f4f10000000000000000000000c1404040404040404040c4c3d5c3f9f9f7f34040c1404040404040404040c9404040d5d6d5c5e6e2e200000000000000",
+      "sha256": "d298cd957a1aafbdc0602ff1469ebe35430e1dc9ef167b96bc4fff472b63a316"
+    },
+    {
+      "sequence": "50",
+      "type": "F/CL",
+      "hex": "00000000000000ec000000f00000000000000000000000000000000000000032b02f40989590000000000000000000d90000000000000000000000000000000000000000000000000000000000000008000000000000000000000000000000000000c6c3d3d8e9c4c1e2d6c9d5c9e3d8e4e2c5d94040404040f8f0f0f2f0f1d8e9c4c1e2d6c9d5c9e35cd6d4c9e3e3c5c440405cd6d4c9e3e3c5c44040c1404040404040404040c4c3d5c3f9f9f7f34040c1404040404040404040e3c5e2e3e4e2c5d94040e940001d3c316fbb0004f0e3c5e2e340404040f0f1005cd8c4c4e240404040400000000000000000000000f0f0f0f3f00000000000000000000000c1404040404040404040c4c3d5c3f9f9f7f34040c1404040404040404040",
+      "sha256": "7cc066ae5c8bc532699767762616ec677e8f4e9efd7a41f437b9269bdadedee9"
+    },
+    {
+      "sequence": "51",
+      "type": "D/GT",
+      "hex": "00000000000000ec000000f00000000000000000000000000000000000000033b02f40acfff1000000000000000000d90000000000000000000000000000000000000000000000000000000000000008000000000000000000000000000000000000c4c7e3d8e9c4c1e2d6c9d5c9e3d8e4e2c5d94040404040f8f0f0f2f0f1d8e9c4c1e2d6c9d5c9e35cd6d4c9e3e3c5c440405cd6d4c9e3e3c5c44040c1404040404040404040c4c3d5c3f9f9f7f3404040404040404040404040e3c5e2e3e4e2c5d94040e940001d3c316fbb0003f0e3c5e2e340404040f0f1005cc6c9d3c540404040400000000000000000000000f0f0f8f7f10000000000000000000000c1404040404040404040c4c3d5c3f9f9f7f34040404040404040404040404040404040404040404040404040404040404040404040404040404040400000000000000000000000d00000004700000117000002500000ffffffff40e9e9f1f2f6f1f1f1f1f0f0f2f7f3f4000040000000000000000000000000000000d7c64040404040404040000000000000000000f0e940001d3c316fbb0003f0f00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000002c1404040404040404040c4c3d5c3f9f9f7f34040404040404040404040405cd7e4c2d3c9c3404040380040404040404040404040f1f2f6f1f1f1f1f0f0f2f7f3f4000000004000000000000000000b38a895a30019100000000000000000393f260b18000400d8c4c2c1e4e3c6d940404b000300000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000e3c5e2e34040404000000000000000d50000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000003800000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000338000000000000000000000000000000000000000000000000000000000000000000000000000000",
+      "sha256": "13c62629ea799e99b4e30e95b69af078e15aeb714dda814d132173e11970c3b6"
+    },
+    {
+      "sequence": "54",
+      "type": "F/MS",
+      "hex": "00000000000000ec000000f00000000000000000000000000000000000000036b02f40d747f700000000000000000000000000000000000000000000000000000000000000000000000000000000000a000000000000000000000000000000000000c6d4e2d8e9c4c1e2d6c9d5c9e3d8e4e2c5d94040404040f8f0f0f2f0f2d8c3d4c4c5e7c3f140405cd6d4c9e3e3c5c440405cd6d4c9e3e3c5c44040c1404040404040404040c4c3d5c3f9f9f7f34040c1404040404040404040e3c5e2e3e4e2c5d94040e940001d3c316fbb0004f0e3c5e2e340404040f0f1005cd8c4c4e240404040400000000000000000000000f0f0f1f6f00000000000000000000000e2c1e5404040404040f1f1f1f1f2f6f0f0f2f9f1f1f1e2c1e5c5404040404040c4c3d5c3f9f9f7f340405cd5d640404040404040f1f1f1f1f2f6f0f0f2f9f1f1d8e2d8d1d9d5f0f0f0f2c4c3d5c3f9f9f7f340404040404040404040404040404040404040404040f0f0f0f0f0f0f0f0f5f400000000000000000000000000000000f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f5f45ce2e8e2c2c1e2404040",
+      "sha256": "1e22a4cccc6268d64bf0b31935d26a8caf5708911d45c892608e2216df1dfdbe"
+    },
+    {
+      "sequence": "55",
+      "type": "D/DH",
+      "hex": "00000000000000ec000000f00000000000000000000000000000000000000037b02f40d751f6000000000000000000080000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000c4c4c8d8e9c4c1e2d6c9d5c9e3d8e4e2c5d94040404040f8f0f0f2f0f2d8c3d4c4c5e7c3f140405cd6d4c9e3e3c5c440405cd6d4c9e3e3c5c44040c1404040404040404040c4c3d5c3f9f9f7f3404040404040404040404040e3c5e2e3e4e2c5d94040e940001d3c316fbb0003f0e3c5e2e340404040f0f1005cc6c9d3c540404040400000000000000000000000f0f0f1f6f00000000000000000000000e2c1e5404040404040f1f1f1f1f2f6f0f0f2f9f1f1f1e2c1e5c5404040404040c4c3d5c3f9f9f7f340405cd5d640404040404040f1f1f1f1f2f6f0f0f2f9f1f1d8e2d8d1d9d5f0f0f0f2c4c3d5c3f9f9f7f340404040404040404040404040404040404040404040f0f0f0f0f0f0f0f0f5f500000000000000000000000000000000f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f5f55ce2e8e2c2c1e2404040",
+      "sha256": "b28d67331f11049ba294346a784c938c7747fb9fa7187b2a36e70b1c3f687cd9"
+    }
+  ]
+}

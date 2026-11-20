@@ -7,43 +7,19 @@ package io.debezium.ibmi.db2.journal.retrieve;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
-import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 
 class StringHelpersTest {
-
-    @Test
-    void testPadRightExactLength() {
-        String unpadded = StringHelpers.padRight("1234567890", 10);
-        assertEquals("1234567890", unpadded);
+    @ParameterizedTest
+    @CsvSource(value = { "1234567890|10|1234567890", "12345|4|1234", "12|4|12  " }, delimiter = '|', ignoreLeadingAndTrailingWhitespace = false)
+    void shouldFitFixedWidthFieldWhenPaddingRight(String input, int width, String expected) {
+        assertEquals(expected, StringHelpers.padRight(input, width));
     }
 
-    @Test
-    void testPadRighTooLong() {
-        String unpadded = StringHelpers.padRight("12345", 4);
-        assertEquals("1234", unpadded);
-    }
-
-    @Test
-    void testPadRightShort() {
-        String unpadded = StringHelpers.padRight("12", 4);
-        assertEquals("12  ", unpadded);
-    }
-
-    @Test
-    void testPadLeftExactLength() {
-        String unpadded = StringHelpers.padLeft("1234567890", 10);
-        assertEquals("1234567890", unpadded);
-    }
-
-    @Test
-    void testPadLeftTooLong() {
-        String unpadded = StringHelpers.padLeft("12345", 4);
-        assertEquals("1234", unpadded);
-    }
-
-    @Test
-    void testPadLeftShort() {
-        String unpadded = StringHelpers.padLeft("12", 4);
-        assertEquals("  12", unpadded);
+    @ParameterizedTest
+    @CsvSource(value = { "1234567890|10|1234567890", "12345|4|1234", "12|4|  12" }, delimiter = '|', ignoreLeadingAndTrailingWhitespace = false)
+    void shouldFitFixedWidthFieldWhenPaddingLeft(String input, int width, String expected) {
+        assertEquals(expected, StringHelpers.padLeft(input, width));
     }
 }

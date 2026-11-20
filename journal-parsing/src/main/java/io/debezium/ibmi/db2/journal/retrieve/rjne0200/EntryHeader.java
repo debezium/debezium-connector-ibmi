@@ -29,11 +29,28 @@ public class EntryHeader {
     private final long pointerHandle;
     private final String receiver;
     private final String receiverLibrary;
+    private final ControlInfo controlInfo;
+    private final RecordInfo recordInfo;
 
     public EntryHeader(int nextEntryOffset, int nullValueOffest, long entrySpecificDataOffset, BigInteger sequenceNumber, BigInteger systemSequenceNumber,
                        Instant timestamp, char journalCode, String entryType, String objectName, BigInteger commitCycle, int endOffset, long pointerHandle,
                        String receiver, String receiverLibrary) {
-        super();
+        this(nextEntryOffset, nullValueOffest, entrySpecificDataOffset, sequenceNumber, systemSequenceNumber,
+                timestamp, journalCode, entryType, objectName, commitCycle, endOffset, pointerHandle, receiver, receiverLibrary,
+                ControlInfo.UNKNOWN);
+    }
+
+    public EntryHeader(int nextEntryOffset, int nullValueOffest, long entrySpecificDataOffset, BigInteger sequenceNumber, BigInteger systemSequenceNumber,
+                       Instant timestamp, char journalCode, String entryType, String objectName, BigInteger commitCycle, int endOffset, long pointerHandle,
+                       String receiver, String receiverLibrary, ControlInfo controlInfo) {
+        this(nextEntryOffset, nullValueOffest, entrySpecificDataOffset, sequenceNumber, systemSequenceNumber, timestamp,
+                journalCode, entryType, objectName, commitCycle, endOffset, pointerHandle, receiver, receiverLibrary,
+                controlInfo, RecordInfo.UNKNOWN);
+    }
+
+    public EntryHeader(int nextEntryOffset, int nullValueOffest, long entrySpecificDataOffset, BigInteger sequenceNumber, BigInteger systemSequenceNumber,
+                       Instant timestamp, char journalCode, String entryType, String objectName, BigInteger commitCycle, int endOffset, long pointerHandle,
+                       String receiver, String receiverLibrary, ControlInfo controlInfo, RecordInfo recordInfo) {
         this.nextEntryOffset = nextEntryOffset;
         this.nullValueOffest = nullValueOffest;
         this.entrySpecificDataOffset = (int) entrySpecificDataOffset;
@@ -48,6 +65,50 @@ public class EntryHeader {
         this.pointerHandle = pointerHandle;
         this.receiver = StringHelpers.safeTrim(receiver);
         this.receiverLibrary = StringHelpers.safeTrim(receiverLibrary);
+        this.controlInfo = controlInfo;
+        this.recordInfo = recordInfo;
+    }
+
+    public RecordInfo getRecordInfo() {
+        return recordInfo;
+    }
+
+    public BigInteger getRelativeRecordNumber() {
+        return recordInfo.recordNumber();
+    }
+
+    /** The opaque ten-byte object JID is hex encoded without text conversion or trimming. */
+    public record RecordInfo(BigInteger recordNumber, BigInteger threadId, String jobName, String jobUser, String jobNumber,
+            String objectJournalId, char objectNameIndicator, String objectType, String systemName,
+            String programName, String programLibrary, String userProfile) {
+        public static final RecordInfo UNKNOWN = new RecordInfo(null, null, "", "", "", "", '\0', "", "", "", "", "");
+    }
+
+    public long getPointerHandle() {
+        return pointerHandle;
+    }
+
+    public Instant getTimestamp() {
+        return timestamp;
+    }
+
+    public ControlInfo getControlInfo() {
+        return controlInfo;
+    }
+
+    /**
+     * RJNE0200 fixed-header attributes. Indicator flag (JOFLAG) is distinct from
+     * the bit flags. Identifier presence does not decode or resolve an XA/LUW outcome.
+     */
+    public record ControlInfo(char indicatorFlag, long nestedCommitLevel, boolean hasTransactionIdentifier,
+            boolean hasLogicalUnitOfWork, byte flags) {
+
+        public static final ControlInfo UNKNOWN = new ControlInfo('\0', -1, false, false, (byte) 0);
+
+        /** RJNE0200 offset 218, bit 5 (MSB first): this entry describes a logical file. */
+        public boolean logicalFile() {
+            return (flags & 0x04) != 0;
+        }
     }
 
     @Override

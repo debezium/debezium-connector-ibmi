@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# Copyright Debezium Authors. Licensed under the Apache License, Version 2.0.
+set -euo pipefail
+probe_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+cd "$probe_root"
+if [[ $# != 2 ]]; then
+    echo 'Usage: tools/dcg-interrupted-publication-probe NEW_EVIDENCE_DIRECTORY DCNCdddd (fresh IBM i fixture writes; local Docker)' >&2
+    exit 2
+fi
+probe_python=${PYTHON:-python3}
+./mvnw -B -ntp package -Passembly -DskipTests -DskipITs -Dformat.formatter.goal=validate -Dformat.imports.goal=check
+./mvnw -B -ntp -pl debezium-connector-ibmi dependency:build-classpath -DincludeScope=test -Dmdep.outputFile=target/connect-probe-classpath.txt
+exec "$probe_python" -B tools/dcg-interrupted-publication-probe.py "$@"
